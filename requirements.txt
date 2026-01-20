@@ -2,10 +2,10 @@
 
 # Core dependencies
 transformers>=4.30.0
-torch>=2.0.0
+#torch>=2.0.0
 sentence-transformers>=2.2.0
 qdrant-client>=1.6.0
-accelerate>=0.20.0
+#accelerate>=0.20.0
 huggingface_hub>=0.20.0
 #runpod>=1.0.0
 
@@ -28,7 +28,7 @@ requests>=2.31.0
 # Note: 설치 시 --no-build-isolation 플래그 필요
 # flash-attn>=2.5.6 --no-build-isolation
 
-# vLLM: LLM 서빙 최적화 (GPU 서버)
+# vLLM: LLM 서빙 최적화 (GPU 서버 환경)
 #vllm>=0.3.3
 
 # GPU Monitoring: GPU 메트릭 수집
