@@ -46,7 +46,7 @@ export VLLM_MAX_BATCH_SIZE=100
 ```bash
 python app.py
 # 또는
-uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --reload
+uvicorn src.api.main:app --host 0.0.0.0 --port 8001 --reload
 ```
 
 ### API 문서
