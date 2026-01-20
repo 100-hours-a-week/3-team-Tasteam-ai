@@ -1,0 +1,84 @@
+{
+  "queries": [
+    {
+      "query": "맛있다 좋다 만족",
+      "restaurant_id": 1,
+      "relevant_review_ids": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ]
+    },
+    {
+      "query": "맛없다 별로 불만",
+      "restaurant_id": 1,
+      "relevant_review_ids": [
+        14,
+        24
+      ]
+    },
+    {
+      "query": "서비스 친절하다",
+      "restaurant_id": 1,
+      "relevant_review_ids": [
+        2,
+        7,
+        13,
+        39,
+        46
+      ]
+    },
+    {
+      "query": "가격 합리적",
+      "restaurant_id": 1,
+      "relevant_review_ids": [
+        20,
+        21,
+        24,
+        35,
+        38
+      ]
+    },
+    {
+      "query": "맛있다 좋다 만족",
+      "restaurant_id": 2,
+      "relevant_review_ids": [
+        51,
+        52,
+        53,
+        54,
+        55
+      ]
+    },
+    {
+      "query": "맛없다 별로 불만",
+      "restaurant_id": 2,
+      "relevant_review_ids": [
+        61,
+        72,
+        76
+      ]
+    },
+    {
+      "query": "서비스 친절하다",
+      "restaurant_id": 2,
+      "relevant_review_ids": [
+        55,
+        90,
+        100
+      ]
+    },
+    {
+      "query": "가격 합리적",
+      "restaurant_id": 2,
+      "relevant_review_ids": [
+        52,
+        65,
+        68,
+        77
+      ]
+    }
+  ]
+}

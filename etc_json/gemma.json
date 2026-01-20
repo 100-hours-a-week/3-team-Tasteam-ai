@@ -1,0 +1,108 @@
+{
+  "timestamp": "2026-01-18T23:57:59.825083",
+  "server_url": "http://213.192.2.68:40110",
+  "benchmark_mode": true,
+  "iterations": 3,
+  "model_info": {
+    "llm_provider": "local",
+    "llm_model": "",
+    "embedding_model": "",
+    "sentiment_model": ""
+  },
+  "test_results": {
+    "감성 분석": {
+      "status": "passed",
+      "success": true,
+      "performance": {
+        "avg_latency_sec": 8.989603541985465,
+        "min_latency_sec": 2.5490770419710316,
+        "max_latency_sec": 21.65625604201341,
+        "p95_latency_sec": 21.65625604201341,
+        "p99_latency_sec": 21.65625604201341,
+        "success_rate": 100.0,
+        "success_count": 3,
+        "total_iterations": 3,
+        "throughput_req_per_sec": 0.11123771215608001,
+        "target_avg_sec": 1.2,
+        "target_p95_sec": 3.2,
+        "target_p99_sec": 6.8,
+        "target_avg_achieved": false,
+        "target_p95_achieved": false,
+        "target_p99_achieved": false
+      },
+      "sqlite_metrics": null,
+      "accuracy": {
+        "mae_positive_ratio": 0,
+        "mae_negative_ratio": 0,
+        "avg_ratio_error": 0.0,
+        "ground_truth_positive_ratio": 0,
+        "ground_truth_negative_ratio": 0
+      }
+    },
+    "배치 감성 분석": {
+      "status": "passed",
+      "success": true,
+      "performance": {
+        "avg_latency_sec": 74.65509347198531,
+        "min_latency_sec": 71.0755762909539,
+        "max_latency_sec": 76.52750437502982,
+        "p95_latency_sec": 76.52750437502982,
+        "p99_latency_sec": 76.52750437502982,
+        "success_rate": 100.0,
+        "success_count": 3,
+        "total_iterations": 3,
+        "throughput_req_per_sec": 0.013394668104020086,
+        "target_min_sec": 5.0,
+        "target_max_sec": 10.0,
+        "target_achieved": false
+      },
+      "sqlite_metrics": null,
+      "accuracy": null
+    },
+    "리뷰 요약": {
+      "status": "passed",
+      "success": true,
+      "performance": {
+        "avg_latency_sec": 31.33771015300105,
+        "min_latency_sec": 0.6121455419925041,
+        "max_latency_sec": 92.78435749997152,
+        "p95_latency_sec": 92.78435749997152,
+        "p99_latency_sec": 92.78435749997152,
+        "success_rate": 100.0,
+        "success_count": 3,
+        "total_iterations": 3,
+        "throughput_req_per_sec": 0.03191000479483732,
+        "target_avg_sec": 2.5,
+        "target_p95_sec": 4.8,
+        "target_p99_sec": 9.5,
+        "target_avg_achieved": false,
+        "target_p95_achieved": false,
+        "target_p99_achieved": false
+      },
+      "sqlite_metrics": null,
+      "accuracy": null
+    },
+    "배치 리뷰 요약": {
+      "status": "failed",
+      "success": false
+    },
+    "강점 추출": {
+      "status": "failed",
+      "success": false
+    },
+    "벡터 검색": {
+      "status": "failed",
+      "success": false
+    },
+    "리뷰 이미지 검색": {
+      "status": "failed",
+      "success": false
+    }
+  },
+  "summary": {
+    "total_tests": 7,
+    "passed_tests": 3,
+    "failed_tests": 4,
+    "success_rate": 42.857142857142854
+  }
+}
