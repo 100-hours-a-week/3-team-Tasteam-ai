@@ -32,7 +32,7 @@ requests>=2.31.0
 #vllm>=0.3.3
 
 # GPU Monitoring: GPU 메트릭 수집
-pynvml>=11.5.0
+# pynvml>=11.5.0
 
 # Redis: 캐싱 시스템 (Phase 2)
 #redis>=5.0.0
