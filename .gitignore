@@ -5,3 +5,7 @@ venv/
 .DS_Store
 .cursor/data/kr3.tsv
 data/kr3.tsv
+metrics.db
+metrics.db-shm
+metrics.db-wal
+logs/
