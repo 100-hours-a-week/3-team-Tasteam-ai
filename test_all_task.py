@@ -245,8 +245,24 @@ def check_server_health():
         return False
 
 
-def generate_test_data():
-    """test_data_sample.json 파일에서 테스트 데이터 로드"""
+def generate_test_data(
+    generate_from_kr3: bool = False,
+    kr3_sample: Optional[int] = None,
+    kr3_restaurants: Optional[int] = None,
+):
+    """
+    테스트 데이터 로드 또는 생성
+    
+    Args:
+        generate_from_kr3: kr3.tsv에서 데이터 생성 여부
+        kr3_sample: kr3.tsv에서 샘플링할 리뷰 수
+        kr3_restaurants: 생성할 레스토랑 수
+    """
+    # kr3.tsv에서 데이터 생성 모드
+    if generate_from_kr3:
+        return generate_test_data_from_kr3(kr3_sample, kr3_restaurants)
+    
+    # 기본: test_data_sample.json 파일에서 테스트 데이터 로드
     print_header("테스트 데이터 로드")
     
     # test_data_sample.json 파일 경로
@@ -254,7 +270,7 @@ def generate_test_data():
     
     if not test_data_path.exists():
         print_warning(f"테스트 데이터 파일이 없습니다: {test_data_path}")
-        print_info("대체 방법: kr3.tsv 파일을 사용하여 데이터를 생성할 수 있습니다.")
+        print_info("대체 방법: --generate-from-kr3 옵션으로 kr3.tsv에서 데이터를 생성할 수 있습니다.")
         return None
     
     try:
@@ -281,6 +297,79 @@ def generate_test_data():
         return None
     except Exception as e:
         print_error(f"테스트 데이터 로드 중 오류: {str(e)}")
+        return None
+
+
+def generate_test_data_from_kr3(
+    sample: Optional[int] = None,
+    restaurants: Optional[int] = None,
+):
+    """kr3.tsv 파일에서 테스트 데이터 생성"""
+    print_header("kr3.tsv에서 테스트 데이터 생성")
+    
+    # kr3.tsv 파일 확인
+    kr3_path = project_root / "data" / "kr3.tsv"
+    if not kr3_path.exists():
+        print_error(f"kr3.tsv 파일이 없습니다: {kr3_path}")
+        return None
+    
+    # 임시 JSON 파일 생성
+    temp_file = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
+    temp_file.close()
+    temp_json_path = temp_file.name
+    
+    try:
+        # convert_kr3_tsv.py 실행
+        print_info("kr3.tsv에서 테스트 데이터 생성 중...")
+        cmd = [
+            sys.executable,
+            str(project_root / "scripts" / "convert_kr3_tsv.py"),
+            "--input", str(kr3_path),
+            "--output", temp_json_path,
+        ]
+        
+        # 샘플링 옵션 추가
+        if sample:
+            cmd.extend(["--sample", str(sample)])
+        
+        # 레스토랑 수 옵션 추가
+        if restaurants:
+            cmd.extend(["--restaurants", str(restaurants)])
+        
+        print_info(f"실행 명령: {' '.join(cmd)}")
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        
+        if result.returncode != 0:
+            print_error(f"데이터 생성 실패: {result.stderr}")
+            if os.path.exists(temp_json_path):
+                os.unlink(temp_json_path)
+            return None
+        
+        # 생성된 JSON 파일 읽기
+        with open(temp_json_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        
+        restaurants_count = len(data.get('restaurants', []))
+        print_success(f"테스트 데이터 생성 완료: {restaurants_count}개 레스토랑")
+        
+        # 총 리뷰 수 계산
+        total_reviews = sum(
+            len(restaurant.get('reviews', []))
+            for restaurant in data.get('restaurants', [])
+        )
+        print_info(f"  - 총 리뷰 수: {total_reviews}개")
+        
+        return data, temp_json_path
+        
+    except subprocess.TimeoutExpired:
+        print_error("데이터 생성 시간 초과 (300초)")
+        if os.path.exists(temp_json_path):
+            os.unlink(temp_json_path)
+        return None
+    except Exception as e:
+        print_error(f"데이터 생성 중 오류: {str(e)}")
+        if os.path.exists(temp_json_path):
+            os.unlink(temp_json_path)
         return None
 
 
@@ -1002,7 +1091,7 @@ def test_sentiment_analysis(enable_benchmark: bool = False, num_iterations: int 
     """감성 분석 테스트"""
     print_header("1. 감성 분석 테스트")
     
-    url = f"{BASE_URL}{API_PREFIX}/sentiment/analyze?debug=true"
+    url = f"{BASE_URL}{API_PREFIX}/sentiment/analyze"
     payload = {
         "restaurant_id": SAMPLE_RESTAURANT_ID,
         "reviews": SAMPLE_REVIEWS
@@ -1153,7 +1242,7 @@ def test_sentiment_analysis_batch(enable_benchmark: bool = False, num_iterations
     for i in range(10):
         restaurants_payload.append({
             "restaurant_id": SAMPLE_RESTAURANT_ID + i,
-            "reviews": SAMPLE_REVIEWS if i == 0 else SAMPLE_REVIEWS[:3]  # 첫 번째는 전체, 나머지는 일부
+            "reviews": SAMPLE_REVIEWS  # 모든 레스토랑에 동일한 리뷰 사용
         })
     
     payload = {
@@ -1241,7 +1330,7 @@ def test_summarize(enable_benchmark: bool = False, num_iterations: int = 5):
     """리뷰 요약 테스트"""
     print_header("3. 리뷰 요약 테스트")
     
-    url = f"{BASE_URL}{API_PREFIX}/llm/summarize?debug=true"
+    url = f"{BASE_URL}{API_PREFIX}/llm/summarize"
     payload = {
         "restaurant_id": str(SAMPLE_RESTAURANT_ID),
         "positive_query": "맛있다 좋다 만족",
@@ -2061,7 +2150,8 @@ def run_tests_for_model(
     model_name: str,
     provider: str,
     enable_benchmark: bool = False,
-    iterations: int = 5
+    iterations: int = 5,
+    tests: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """
     특정 모델에 대한 테스트 실행
@@ -2087,21 +2177,30 @@ def run_tests_for_model(
             os.environ["LLM_MODEL"] = model_name
         
         print_header(f"모델 테스트: {model_name} ({provider})")
-        print_info(f"환경 변수 설정: LLM_PROVIDER={provider}, 모델={model_name}")
-        
-        # 서버 재시작 필요 시 안내
-        print_warning("모델 변경 시 서버를 재시작해야 할 수 있습니다.")
-        print_info("서버 재시작: Ctrl+C로 중지 후 'python app.py'로 재시작")
+        print_info(f"서버 URL: {BASE_URL}")
         
         # 테스트 실행
+        selected_tests = tests or ["summarize", "summarize_batch"]
+        if "all" in selected_tests:
+            selected_tests = ["sentiment", "sentiment_batch", "summarize", "summarize_batch", "strength", "vector", "image_search"]
+
+        test_registry = {
+            "sentiment": ("감성 분석", lambda: test_sentiment_analysis(enable_benchmark=enable_benchmark, num_iterations=iterations)),
+            "sentiment_batch": ("배치 감성 분석", lambda: test_sentiment_analysis_batch(enable_benchmark=enable_benchmark, num_iterations=iterations)),
+            "summarize": ("리뷰 요약", lambda: test_summarize(enable_benchmark=enable_benchmark, num_iterations=iterations)),
+            "summarize_batch": ("배치 리뷰 요약", lambda: test_summarize_batch(enable_benchmark=enable_benchmark, num_iterations=iterations)),
+            "strength": ("강점 추출", lambda: test_extract_strengths(enable_benchmark=enable_benchmark, num_iterations=iterations)),
+            "vector": ("벡터 검색", lambda: test_vector_search(enable_benchmark=enable_benchmark, num_iterations=iterations)),
+            "image_search": ("리뷰 이미지 검색", lambda: test_review_image_search(enable_benchmark=enable_benchmark, num_iterations=iterations)),
+        }
+
         results = []
-        results.append(("감성 분석", test_sentiment_analysis(enable_benchmark=enable_benchmark, num_iterations=iterations)))
-        results.append(("배치 감성 분석", test_sentiment_analysis_batch(enable_benchmark=enable_benchmark, num_iterations=iterations)))
-        results.append(("리뷰 요약", test_summarize(enable_benchmark=enable_benchmark, num_iterations=iterations)))
-        results.append(("배치 리뷰 요약", test_summarize_batch(enable_benchmark=enable_benchmark, num_iterations=iterations)))
-        results.append(("강점 추출", test_extract_strengths(enable_benchmark=enable_benchmark, num_iterations=iterations)))
-        #results.append(("벡터 검색", test_vector_search(enable_benchmark=enable_benchmark, num_iterations=iterations)))
-        results.append(("리뷰 이미지 검색", test_review_image_search(enable_benchmark=enable_benchmark, num_iterations=iterations)))
+        for key in selected_tests:
+            if key not in test_registry:
+                print_warning(f"알 수 없는 테스트 항목: {key} (skip)")
+                continue
+            label, fn = test_registry[key]
+            results.append((label, fn()))
         
         # 결과 집계
         success_count = sum(1 for _, result in results if result)
@@ -2140,7 +2239,10 @@ def compare_models(
     enable_benchmark: bool = False,
     iterations: int = 5,
     save_results: Optional[str] = None,
-    generate_report: bool = False
+    generate_report: bool = False,
+    tests: Optional[List[str]] = None,
+    base_ports: Optional[List[int]] = None,
+    test_data: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     여러 모델 비교 테스트
@@ -2152,33 +2254,88 @@ def compare_models(
         iterations: 성능 측정 반복 횟수
         save_results: 결과를 저장할 JSON 파일 경로
         generate_report: 비교 리포트 생성 여부
+        base_ports: 각 모델별 서버 포트 리스트 (None이면 자동 할당: 8001부터 시작)
+        test_data: 업로드할 테스트 데이터 (각 포트별로 업로드)
         
     Returns:
         비교 결과 딕셔너리
     """
+    global BASE_URL
+    
+    # 포트 자동 할당 (지정되지 않은 경우)
+    if base_ports is None:
+        base_ports = [8001 + i for i in range(len(models))]
+    
+    if len(base_ports) != len(models):
+        print_error(f"포트 개수({len(base_ports)})와 모델 개수({len(models)})가 일치하지 않습니다.")
+        sys.exit(1)
+    
     print_header(f"여러 모델 비교 테스트 ({len(models)}개 모델)")
     print_info(f"제공자: {provider}")
     print_info(f"모델 목록: {', '.join(models)}")
+    print_info("\n각 모델은 별도 포트에서 실행 중이어야 합니다:")
+    for model, port in zip(models, base_ports):
+        print_info(f"  - {model}: http://localhost:{port}")
     
     all_results = {}
+    original_base_url = BASE_URL
     
-    for i, model_name in enumerate(models, 1):
+    for i, (model_name, port) in enumerate(zip(models, base_ports), 1):
         print(f"\n{'='*60}")
-        print(f"모델 {i}/{len(models)}: {model_name}")
+        print(f"모델 {i}/{len(models)}: {model_name} (포트: {port})")
         print(f"{'='*60}\n")
         
-        result = run_tests_for_model(
-            model_name=model_name,
-            provider=provider,
-            enable_benchmark=enable_benchmark,
-            iterations=iterations
-        )
-        all_results[model_name] = result
+        # BASE_URL을 해당 모델의 포트로 임시 변경
+        BASE_URL = f"http://localhost:{port}"
+        
+        try:
+            # 서버 연결 확인
+            try:
+                response = requests.get(f"{BASE_URL}/health", timeout=5)
+                if response.status_code != 200:
+                    print_warning(f"포트 {port}의 서버가 응답하지 않습니다. (상태 코드: {response.status_code})")
+            except Exception as e:
+                print_error(f"포트 {port}의 서버에 연결할 수 없습니다: {e}")
+                print_info(f"다음 명령으로 서버를 시작하세요:")
+                if provider == "openai":
+                    print_info(f"  LLM_PROVIDER={provider} OPENAI_MODEL={model_name} uvicorn app:app --port {port}")
+                else:
+                    print_info(f"  LLM_PROVIDER={provider} LLM_MODEL={model_name} uvicorn app:app --port {port}")
+                all_results[model_name] = {
+                    "model_name": model_name,
+                    "provider": provider,
+                    "success_count": 0,
+                    "total_count": 0,
+                    "success_rate": 0,
+                    "results": [],
+                    "error": f"서버 연결 실패 (포트 {port})"
+                }
+                continue
+            
+            # 각 포트별로 데이터 업로드
+            if test_data:
+                print_info(f"포트 {port}에 테스트 데이터 업로드 중...")
+                if upload_data_to_qdrant(test_data):
+                    print_success(f"포트 {port}에 데이터 업로드 완료")
+                else:
+                    print_warning(f"포트 {port}에 데이터 업로드 실패. 테스트가 실패할 수 있습니다.")
+            
+            result = run_tests_for_model(
+                model_name=model_name,
+                provider=provider,
+                enable_benchmark=enable_benchmark,
+                iterations=iterations,
+                tests=tests,
+            )
+            all_results[model_name] = result
+        finally:
+            # BASE_URL 복원
+            BASE_URL = original_base_url
         
         # 모델 간 간격
         if i < len(models):
-            print_info("다음 모델 테스트를 위해 잠시 대기 중...")
-            time.sleep(2)
+            print_info("다음 모델 테스트로 이동...")
+            time.sleep(2)  # 짧은 대기
     
     # 비교 리포트 생성
     if generate_report:
@@ -2292,6 +2449,13 @@ def main():
         help="부하테스트 모드 활성화 (동시 요청 처리 능력 측정)"
     )
     parser.add_argument(
+        "--tests",
+        nargs="+",
+        default=["summarize", "summarize_batch"],
+        choices=["all", "sentiment", "sentiment_batch", "summarize", "summarize_batch", "strength", "vector", "image_search"],
+        help="실행할 테스트 선택 (기본값: summarize summarize_batch). 예: --tests summarize summarize_batch",
+    )
+    parser.add_argument(
         "--total-requests",
         type=int,
         default=100,
@@ -2309,6 +2473,29 @@ def main():
         default=0,
         help="부하테스트 점진적 부하 증가 시간(초) (기본값: 0, 즉시 시작)"
     )
+    parser.add_argument(
+        "--generate-from-kr3",
+        action="store_true",
+        help="kr3.tsv에서 테스트 데이터 생성 (기본값: test_data_sample.json 사용)"
+    )
+    parser.add_argument(
+        "--kr3-sample",
+        type=int,
+        default=None,
+        help="kr3.tsv에서 샘플링할 리뷰 수 (--generate-from-kr3와 함께 사용)"
+    )
+    parser.add_argument(
+        "--kr3-restaurants",
+        type=int,
+        default=None,
+        help="생성할 레스토랑 수 (--generate-from-kr3와 함께 사용)"
+    )
+    parser.add_argument(
+        "--ports",
+        type=int,
+        nargs="+",
+        help="각 모델별 서버 포트 리스트 (--compare-models와 함께 사용). 예: --ports 8001 8002 8003. 지정하지 않으면 8001부터 자동 할당"
+    )
     args = parser.parse_args()
     
     print_header("RunPod Pod 서버 API 전체 기능 통합 테스트")
@@ -2319,13 +2506,46 @@ def main():
         print_info("성능 측정 모드 활성화 (QUANTITATIVE_METRICS.md 지표 측정)")
         print_info(f"반복 횟수: {args.iterations}")
     
+    # 환경 변수 설정 (--provider 옵션이 있으면 적용)
+    if args.provider:
+        os.environ["LLM_PROVIDER"] = args.provider
+        print_info(f"LLM_PROVIDER 설정: {args.provider}")
+    
     # 환경 변수 확인
     llm_provider = os.getenv("LLM_PROVIDER", "")
     openai_key = os.getenv("OPENAI_API_KEY", "")
     
-    if llm_provider != "openai":
-        print_warning(f"LLM_PROVIDER가 'openai'가 아닙니다: {llm_provider}")
-        print_info("다음 명령으로 설정하세요: export LLM_PROVIDER='openai'")
+    # --model 옵션이 있으면 환경 변수 설정
+    if args.model:
+        if args.provider == "openai" or (not args.provider and llm_provider == "openai"):
+            os.environ["OPENAI_MODEL"] = args.model
+            print_info(f"OPENAI_MODEL 설정: {args.model}")
+        else:
+            os.environ["LLM_MODEL"] = args.model
+            print_info(f"LLM_MODEL 설정: {args.model}")
+    
+    if llm_provider == "local":
+        llm_model = os.getenv("LLM_MODEL", "")
+        if llm_model == "Qwen/Qwen2.5-7B-Instruct":
+            print_info("Qwen/Qwen2.5-7B-Instruct 모델 사용")
+        elif llm_model == "meta-llama/Llama-3.1-8B-Instruct":
+            print_info("meta-llama/Llama-3.1-8B-Instruct 모델 사용")
+        elif llm_model == "google/gemma-2-9b-it":
+            print_info("google/gemma-2-9b-it 모델 사용")
+        elif llm_model == "LGAI-EXAONE/K-EXAONE-236B-A23B-GGUF":
+            print_info("LGAI-EXAONE/K-EXAONE-236B-A23B-GGUF 모델 사용")
+        elif llm_model == "unsloth/DeepSeek-R1-GGUF":
+            print_info("unsloth/DeepSeek-R1-GGUF 모델 사용")
+        elif llm_model:
+            print_info(f"로컬 모델 사용: {llm_model}")
+    
+    # OpenAI 모델 확인
+    openai_model = os.getenv("OPENAI_MODEL", "")
+    if openai_model:
+        print_info(f"OpenAI 모델 사용: {openai_model}")
+    
+    if llm_provider and llm_provider != "openai":
+        print_info(f"LLM_PROVIDER: {llm_provider}")
     
     if not openai_key:
         print_warning("OPENAI_API_KEY가 설정되지 않았습니다.")
@@ -2336,22 +2556,72 @@ def main():
     if not check_server_health():
         sys.exit(1)
     
-    # 테스트 데이터 생성 및 Qdrant에 upload
-    data_result = generate_test_data()
+    # 테스트 데이터 생성
+    data_result = generate_test_data(
+        generate_from_kr3=args.generate_from_kr3,
+        kr3_sample=args.kr3_sample,
+        kr3_restaurants=args.kr3_restaurants,
+    )
     temp_json_path = None
+    test_data = None
     
     if data_result:
         data, temp_json_path = data_result
-        if upload_data_to_qdrant(data):
+        test_data = data  # compare_models에 전달할 데이터 저장
+        
+        # SAMPLE_RESTAURANT_ID와 SAMPLE_REVIEWS를 실제 데이터로 업데이트
+        if data.get("restaurants"):
+            global SAMPLE_RESTAURANT_ID, SAMPLE_REVIEWS
+            first_restaurant = data["restaurants"][0]
+            SAMPLE_RESTAURANT_ID = first_restaurant.get("restaurant_id", 1)
+            SAMPLE_REVIEWS = first_restaurant.get("reviews", [])
+            print_info(f"테스트 레스토랑 ID: {SAMPLE_RESTAURANT_ID}")
+            print_info(f"테스트 리뷰 수: {len(SAMPLE_REVIEWS)}개")
+    
+    # 모델 비교 모드 처리
+    if args.compare_models:
+        if not args.models or not args.provider:
+            print_error("--compare-models 모드에서는 --models와 --provider 옵션이 필요합니다.")
+            print_info("사용 예: python test_all_task.py --compare-models --models 'model1' 'model2' --provider openai --benchmark --save-results results.json")
+            print_info("포트 지정 예: python test_all_task.py --compare-models --models 'model1' 'model2' --provider local --ports 8001 8002")
+            sys.exit(1)
+        
+        # 포트 검증
+        if args.ports and len(args.ports) != len(args.models):
+            print_error(f"포트 개수({len(args.ports)})와 모델 개수({len(args.models)})가 일치하지 않습니다.")
+            sys.exit(1)
+        
+        # compare_models() 함수 호출
+        comparison_results = compare_models(
+            models=args.models,
+            provider=args.provider,
+            enable_benchmark=args.benchmark,
+            iterations=args.iterations,
+            save_results=args.save_results,
+            generate_report=args.generate_report,
+            tests=args.tests,
+            base_ports=args.ports,
+            test_data=test_data,
+        )
+        
+        # 결과 요약 출력
+        print_header("모델 비교 테스트 완료")
+        if args.save_results:
+            print_success(f"결과가 저장되었습니다: {args.save_results}")
+        
+        # 임시 파일 정리
+        if temp_json_path and os.path.exists(temp_json_path):
+            try:
+                os.unlink(temp_json_path)
+            except Exception:
+                pass
+        
+        sys.exit(0)
+    
+    # 일반 모드: 데이터 업로드 (compare_models 모드가 아닐 때만)
+    if test_data:
+        if upload_data_to_qdrant(test_data):
             print_success("테스트 데이터 준비 완료")
-            # SAMPLE_RESTAURANT_ID와 SAMPLE_REVIEWS를 실제 데이터로 업데이트
-            if data.get("restaurants"):
-                global SAMPLE_RESTAURANT_ID, SAMPLE_REVIEWS
-                first_restaurant = data["restaurants"][0]
-                SAMPLE_RESTAURANT_ID = first_restaurant.get("restaurant_id", 1)
-                SAMPLE_REVIEWS = first_restaurant.get("reviews", [])
-                print_info(f"테스트 레스토랑 ID: {SAMPLE_RESTAURANT_ID}")
-                print_info(f"테스트 리뷰 수: {len(SAMPLE_REVIEWS)}개")
         else:
             print_warning("Qdrant upload 실패. 일부 테스트가 실패할 수 있습니다.")
     else:
@@ -2363,29 +2633,6 @@ def main():
             os.unlink(temp_json_path)
         except Exception:
             pass
-    
-    # 모델 비교 모드 처리
-    if args.compare_models:
-        if not args.models or not args.provider:
-            print_error("--compare-models 모드에서는 --models와 --provider 옵션이 필요합니다.")
-            print_info("사용 예: python test_openai_all.py --compare-models --models 'model1' 'model2' --provider openai --benchmark --save-results results.json")
-            sys.exit(1)
-        
-        # compare_models() 함수 호출
-        comparison_results = compare_models(
-            models=args.models,
-            provider=args.provider,
-            enable_benchmark=args.benchmark,
-            iterations=args.iterations,
-            save_results=args.save_results,
-            generate_report=args.generate_report
-        )
-        
-        # 결과 요약 출력
-        print_header("모델 비교 테스트 완료")
-        if args.save_results:
-            print_success(f"결과가 저장되었습니다: {args.save_results}")
-        sys.exit(0)
     
     # 부하테스트 모드 처리
     if args.load_test:
@@ -2406,7 +2653,7 @@ def main():
         for i in range(10):
             restaurants_payload.append({
                 "restaurant_id": SAMPLE_RESTAURANT_ID + i,
-                "reviews": SAMPLE_REVIEWS if i == 0 else SAMPLE_REVIEWS[:3]  # 첫 번째는 전체, 나머지는 일부
+                "reviews": SAMPLE_REVIEWS  # 모든 레스토랑에 동일한 리뷰 사용
             })
         payload = {
             "restaurants": restaurants_payload
@@ -2492,13 +2739,26 @@ def main():
     results_dict = {}  # JSON 저장용
     test_metrics.clear()  # 테스트 메트릭 초기화
     
-    results.append(("감성 분석", test_sentiment_analysis(enable_benchmark=args.benchmark, num_iterations=args.iterations)))
-    results.append(("배치 감성 분석", test_sentiment_analysis_batch(enable_benchmark=args.benchmark, num_iterations=args.iterations)))
-    results.append(("리뷰 요약", test_summarize(enable_benchmark=args.benchmark, num_iterations=args.iterations)))
-    results.append(("배치 리뷰 요약", test_summarize_batch(enable_benchmark=args.benchmark, num_iterations=args.iterations)))
-    results.append(("강점 추출", test_extract_strengths(enable_benchmark=args.benchmark, num_iterations=args.iterations)))
-    #results.append(("벡터 검색", test_vector_search(enable_benchmark=args.benchmark, num_iterations=args.iterations)))
-    results.append(("리뷰 이미지 검색", test_review_image_search(enable_benchmark=args.benchmark, num_iterations=args.iterations)))
+    selected_tests = args.tests or ["summarize", "summarize_batch"]
+    if "all" in selected_tests:
+        selected_tests = ["sentiment", "sentiment_batch", "summarize", "summarize_batch", "strength", "vector", "image_search"]
+
+    test_registry = {
+        "sentiment": ("감성 분석", lambda: test_sentiment_analysis(enable_benchmark=args.benchmark, num_iterations=args.iterations)),
+        "sentiment_batch": ("배치 감성 분석", lambda: test_sentiment_analysis_batch(enable_benchmark=args.benchmark, num_iterations=args.iterations)),
+        "summarize": ("리뷰 요약", lambda: test_summarize(enable_benchmark=args.benchmark, num_iterations=args.iterations)),
+        "summarize_batch": ("배치 리뷰 요약", lambda: test_summarize_batch(enable_benchmark=args.benchmark, num_iterations=args.iterations)),
+        "strength": ("강점 추출", lambda: test_extract_strengths(enable_benchmark=args.benchmark, num_iterations=args.iterations)),
+        "vector": ("벡터 검색", lambda: test_vector_search(enable_benchmark=args.benchmark, num_iterations=args.iterations)),
+        "image_search": ("리뷰 이미지 검색", lambda: test_review_image_search(enable_benchmark=args.benchmark, num_iterations=args.iterations)),
+    }
+
+    for key in selected_tests:
+        if key not in test_registry:
+            print_warning(f"알 수 없는 테스트 항목: {key} (skip)")
+            continue
+        label, fn = test_registry[key]
+        results.append((label, fn()))
     
     # 결과 요약
     print_header("테스트 결과 요약")

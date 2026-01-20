@@ -2,9 +2,8 @@
 감성 분석 모듈 ()
 """
 
-import json
 import logging
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
 
 from .config import Config
 from .llm_utils import LLMUtils
@@ -17,11 +16,6 @@ logger = logging.getLogger(__name__)
 class SentimentAnalyzer:
     """
     감성 분석 클래스 ()
-    
-    대표 벡터 기반 TOP-K 리뷰만 사용하여 감성 분석 수행
-    1. 레스토랑 대표 벡터 계산
-    2. 대표 벡터와 가장 가까운 리뷰 TOP-K 선택
-    3. TOP-K 리뷰만 LLM에 넣어 긍/부정 비율 계산
     """
     
     def __init__(
@@ -31,34 +25,100 @@ class SentimentAnalyzer:
     ):
         """
         Args:
-            llm_utils: LLMUtils 인스턴스 (None이면 자동 생성)
-            vector_search: VectorSearch 인스턴스 (대표 벡터 기반 검색용)
+            llm_utils: LLM sentiment 방식 사용 시 활용 (None이면 필요 시 생성)
+            vector_search: VectorSearch 인스턴스 (reviews 미제공 시 전체 리뷰 조회용)
         """
-        self.llm_utils = llm_utils or LLMUtils()
         self.vector_search = vector_search
+        self.llm_utils = llm_utils
+        self._sentiment_pipeline = None
+    
+    def _get_sentiment_pipeline(self):
+        """HuggingFace sentiment pipeline (lazy init)."""
+        if self._sentiment_pipeline is not None:
+            return self._sentiment_pipeline
+        
+        try:
+            from transformers import pipeline
+        except Exception as e:
+            raise ImportError(
+                "transformers가 설치되어 있지 않거나 pipeline 로딩에 실패했습니다. "
+                "pip install transformers 를 확인하세요."
+            ) from e
+        
+        # 디바이스 선택: GPU가 있으면 사용, 없으면 CPU
+        device = -1
+        try:
+            import torch
+            if Config.USE_GPU and torch.cuda.is_available():
+                device = 0
+        except Exception:
+            device = -1
+        
+        self._sentiment_pipeline = pipeline(
+            task="sentiment-analysis",
+            model=Config.SENTIMENT_MODEL,
+            device=device,
+        )
+        logger.info(f"Sentiment 모델 로딩 완료: {Config.SENTIMENT_MODEL} (device={device})")
+        return self._sentiment_pipeline
+    
+    @staticmethod
+    def _map_label_to_binary(label: str) -> Optional[str]:
+        """
+        모델 label을 binary(positive/negative)로 매핑.
+        - 긍정: POSITIVE / positive / LABEL_1
+        - 부정: NEGATIVE / negative / LABEL_0
+        - 그 외(중립 등): None
+        """
+        if not label:
+            return None
+        normalized = str(label).strip().lower()
+        if normalized in {"positive", "pos", "label_1"}:
+            return "positive"
+        if normalized in {"negative", "neg", "label_0"}:
+            return "negative"
+        return None
+    
+    def _classify_contents(self, content_list: List[str]) -> Tuple[int, int, int]:
+        """
+        sentiment 모델로 전체 리뷰를 분류하여 (positive_count, negative_count, total_count) 반환
+        """
+        if not content_list:
+            return 0, 0, 0
+        
+        pipe = self._get_sentiment_pipeline()
+        
+        positive_count = 0
+        negative_count = 0
+        total_count = len(content_list)
+        
+        batch_size = getattr(Config, "LLM_BATCH_SIZE", 10)  # 기존 설정 재사용 (기본 10)
+        
+        for i in range(0, len(content_list), batch_size):
+            batch = content_list[i : i + batch_size]
+            outputs = pipe(batch, truncation=True)
+            for out in outputs:
+                mapped = self._map_label_to_binary(out.get("label"))
+                if mapped == "positive":
+                    positive_count += 1
+                elif mapped == "negative":
+                    negative_count += 1
+                # neutral/unknown은 total_count에 포함되지만 count는 증가하지 않음
+        
+        return positive_count, negative_count, total_count
     
     def analyze(
         self,
         reviews: Optional[List[Dict]] = None,
         restaurant_id: int = None,
-        top_k: int = 20,
-        months_back: Optional[int] = None,
-        max_retries: int = Config.MAX_RETRIES,
     ) -> Dict:
         """
-        대표 벡터 기반 TOP-K 리뷰를 사용하여 감성 분석 수행
-        
-        프로세스:
-        1. 레스토랑 대표 벡터 계산
-        2. 대표 벡터와 가장 가까운 리뷰 TOP-K 선택
-        3. TOP-K 리뷰만 LLM에 넣어 긍/부정 비율 계산
+        전체 리뷰를 sentiment 모델로 분류하여 긍/부정 개수를 계산하고,
+        코드에서 직접 비율을 산출합니다.
         
         Args:
-            reviews: 리뷰 딕셔너리 리스트 (선택, None이면 vector_search 사용)
+            reviews: 리뷰 딕셔너리 리스트 (선택, None이면 vector_search에서 전체 리뷰 조회)
             restaurant_id: 레스토랑 ID (필수)
-            top_k: 대표 벡터 주위에서 선택할 리뷰 수 (기본값: 20)
-            months_back: 최근 N개월 필터 (선택, None이면 필터링 안함)
-            max_retries: LLM 호출 실패 시 최대 재시도 횟수
             
         Returns:
             최종 통계 결과 딕셔너리:
@@ -80,26 +140,33 @@ class SentimentAnalyzer:
                 "negative_ratio": 0
             }
         
-        # 대표 벡터 기반 TOP-K 리뷰 선택
-        if self.vector_search and reviews is None:
-            logger.info(f"대표 벡터 기반으로 TOP-{top_k} 리뷰를 선택합니다 (restaurant_id: {restaurant_id}).")
-            top_k_results = self.vector_search.query_by_restaurant_vector(
-                restaurant_id=restaurant_id,
-                top_k=top_k,
-                months_back=months_back,
-            )
-            reviews = [r["payload"] for r in top_k_results]
-            logger.info(f"대표 벡터 기반으로 {len(reviews)}개 리뷰를 선택했습니다.")
-        elif reviews is None:
-            logger.warning("vector_search가 없고 reviews도 없습니다. 빈 결과를 반환합니다.")
-            return {
-                "restaurant_id": restaurant_id,
-                "positive_count": 0,
-                "negative_count": 0,
-                "total_count": 0,
-                "positive_ratio": 0,
-                "negative_ratio": 0
-            }
+        # reviews 미제공이면: vector_search에서 리뷰 가져오기 (샘플링 활성화 여부에 따라)
+        if reviews is None:
+            if not self.vector_search:
+                logger.warning("vector_search가 없고 reviews도 없습니다. 빈 결과를 반환합니다.")
+                return {
+                    "restaurant_id": restaurant_id,
+                    "positive_count": 0,
+                    "negative_count": 0,
+                    "total_count": 0,
+                    "positive_ratio": 0,
+                    "negative_ratio": 0
+                }
+            
+            # 샘플링 활성화 여부에 따라 분기
+            if Config.ENABLE_SENTIMENT_SAMPLING:
+                # 최근 리뷰부터 100개 샘플링
+                limit = Config.SENTIMENT_RECENT_TOP_K
+                logger.info(f"최근 리뷰 {limit}개 샘플링 활성화 (restaurant_id: {restaurant_id})")
+                reviews = self.vector_search.get_recent_restaurant_reviews(
+                    restaurant_id=restaurant_id,
+                    limit=limit
+                )
+                logger.info(f"최근 리뷰 {len(reviews)}개를 샘플링했습니다.")
+            else:
+                # 전체 리뷰 사용
+                reviews = self.vector_search.get_restaurant_reviews(str(restaurant_id))
+                logger.info(f"전체 리뷰 사용: {len(reviews)}개 리뷰 (restaurant_id: {restaurant_id})")
         
         if not reviews:
             logger.warning("분석할 리뷰가 없습니다.")
@@ -126,203 +193,65 @@ class SentimentAnalyzer:
                 "negative_ratio": 0
             }
         
-        logger.info(f"총 {len(content_list)}개의 리뷰를 LLM으로 분석합니다 (restaurant_id: {restaurant_id}).")
-        
-        # LLM 입력
-        result = self.llm_utils.analyze_all_reviews(
-            review_list=content_list,
-            restaurant_id=restaurant_id,
-            max_retries=max_retries
-        )
-        
-        logger.info("✅ 최종 결과:")
-        logger.info(json.dumps(result, ensure_ascii=False, indent=2))
+        # SENTIMENT_METHOD에 따라 분기 (샘플링 없음: 항상 전체 리뷰)
+        method = (Config.SENTIMENT_METHOD or "model").lower()
+        if method == "llm":
+            logger.info(f"총 {len(content_list)}개의 리뷰를 LLM sentiment 방식으로 집계합니다 (restaurant_id: {restaurant_id}).")
+            if self.llm_utils is None:
+                self.llm_utils = LLMUtils()
+            counts = self.llm_utils.count_sentiments(content_list)
+            positive_count = int(counts.get("positive_count", 0))
+            negative_count = int(counts.get("negative_count", 0))
+            total_count = len(content_list)
+        else:
+            logger.info(f"총 {len(content_list)}개의 리뷰를 sentiment 모델로 분류합니다 (restaurant_id: {restaurant_id}).")
+            positive_count, negative_count, total_count = self._classify_contents(content_list)
 
+        positive_ratio = int(round((positive_count / total_count) * 100)) if total_count else 0
+        negative_ratio = int(round((negative_count / total_count) * 100)) if total_count else 0
+        
         return {
-            "restaurant_id": result.get("restaurant_id", restaurant_id),
-            "positive_count": result.get("positive_count", 0),
-            "negative_count": result.get("negative_count", 0),
-            "total_count": result.get("total_count", len(content_list)),
-            "positive_ratio": result.get("positive_ratio", 0),
-            "negative_ratio": result.get("negative_ratio", 0)
+            "restaurant_id": restaurant_id,
+            "positive_count": positive_count,
+            "negative_count": negative_count,
+            "total_count": total_count,
+            "positive_ratio": positive_ratio,
+            "negative_ratio": negative_ratio,
         }
     
     async def analyze_async(
         self,
         reviews: List[Dict],
         restaurant_id: int,
-        max_tokens_per_batch: Optional[int] = None,
-        max_retries: int = Config.MAX_RETRIES,
     ) -> Dict:
         """
-        리뷰 리스트를 비동기로 분석하여 positive_ratio와 negative_ratio를 계산합니다 (vLLM 직접 사용 시).
-        
-        vLLM 직접 사용 모드에서는 내부적으로 analyze_multiple_restaurants_async()를 재사용하여
-        동적 배치 크기와 세마포어 기반 OOM 방지 전략을 적용합니다.
-        
-        OOM 방지 전략:
-        - 동적 배치 크기 계산 (리뷰 길이에 따라)
-        - 세마포어를 통한 동시 처리 수 제한
-        - 각 배치는 독립적으로 처리 가능 (메모리 사용량 예측 가능)
-        - vLLM이 자동으로 여러 배치를 효율적으로 처리 (Continuous Batching)
-        
-        Args:
-            reviews: 리뷰 딕셔너리 리스트 (REVIEW TABLE)
-            restaurant_id: 레스토랑 ID (BIGINT FK)
-            max_tokens_per_batch: 배치당 최대 토큰 수 (None이면 동적 계산)
-            max_retries: LLM 호출 실패 시 최대 재시도 횟수
-            
-        Returns:
-            최종 통계 결과 딕셔너리:
-            - restaurant_id: 레스토랑 ID
-            - positive_count: 긍정 리뷰 개수
-            - negative_count: 부정 리뷰 개수
-            - total_count: 전체 리뷰 개수
-            - positive_ratio: 긍정 비율 (%)
-            - negative_ratio: 부정 비율 (%)
+        비동기 엔드포인트 호환을 위한 wrapper.
+        (현재 sentiment는 LLM/vLLM이 아니라 sentiment 모델 기반으로 동작)
         """
-        if not reviews:
-            logger.warning("분석할 리뷰가 없습니다.")
-            return {
-                "restaurant_id": restaurant_id,
-                "positive_count": 0,
-                "negative_count": 0,
-                "total_count": 0,
-                "positive_ratio": 0,
-                "negative_ratio": 0
-            }
-        
-        # content_list 추출
-        content_list = extract_content_list(reviews)
-        
-        if not content_list:
-            logger.warning("content 필드가 있는 리뷰가 없습니다.")
-            return {
-                "restaurant_id": restaurant_id,
-                "positive_count": 0,
-                "negative_count": 0,
-                "total_count": len(reviews),
-                "positive_ratio": 0,
-                "negative_ratio": 0
-            }
-        
-        logger.info(f"총 {len(content_list)}개의 리뷰를 vLLM으로 비동기 분석합니다 (restaurant_id: {restaurant_id}).")
-
-        # vLLM 직접 사용 모드인지 확인
-        if hasattr(self.llm_utils, 'use_pod_vllm') and self.llm_utils.use_pod_vllm:
-            # vLLM 모드: analyze_multiple_restaurants_async() 재사용 (OOM 방지 전략 포함)
-            # 단일 레스토랑 요청을 리스트로 감싸서 전달
-            restaurants_data = [{
-                "restaurant_id": restaurant_id,
-                "reviews": reviews
-            }]
-            
-            results = await self.analyze_multiple_restaurants_async(
-                restaurants_data=restaurants_data,
-                max_tokens_per_batch=max_tokens_per_batch,
-                max_retries=max_retries
-            )
-            
-            # 결과가 비어있지 않으면 첫 번째 결과 반환
-            if results:
-                result = results[0]
-            else:
-                # 결과가 없는 경우 빈 결과 반환
-                result = {
-                    "restaurant_id": restaurant_id,
-                    "positive_count": 0,
-                    "negative_count": 0,
-                    "total_count": len(content_list),
-                    "positive_ratio": 0,
-                    "negative_ratio": 0
-                }
-        else:
-            # 기존 방식 (동기)
-            result = self.llm_utils.analyze_all_reviews(
-                review_list=content_list,
-                restaurant_id=restaurant_id,
-                max_retries=max_retries
-            )
-
-        logger.info("✅ 최종 결과:")
-        logger.info(json.dumps(result, ensure_ascii=False, indent=2))
-
-        return {
-            "restaurant_id": result.get("restaurant_id", restaurant_id),
-            "positive_count": result.get("positive_count", 0),
-            "negative_count": result.get("negative_count", 0),
-            "total_count": result.get("total_count", len(content_list)),
-            "positive_ratio": result.get("positive_ratio", 0),
-            "negative_ratio": result.get("negative_ratio", 0)
-        }
+        # 현재 구현은 sync지만, 엔드포인트는 async라 wrapper 유지
+        return self.analyze(reviews=reviews, restaurant_id=restaurant_id)
     
     async def analyze_multiple_restaurants_async(
         self,
         restaurants_data: List[Dict[str, Any]],  # [{"restaurant_id": 1, "reviews": [...]}, ...]
-        max_tokens_per_batch: Optional[int] = None,
-        max_retries: int = Config.MAX_RETRIES,
     ) -> List[Dict[str, Any]]:
         """
-        여러 레스토랑을 비동기 큐 방식으로 감성 분석 (동적 배치 크기)
-        
-        각 레스토랑의 리뷰를 동적 배치 크기로 나누고, 모든 배치를 비동기 큐에 넣어
-        vLLM의 Continuous Batching을 활용하여 처리합니다.
-        
-        OOM 방지 전략:
-        - 각 레스토랑별로 동적 배치 크기 계산 (리뷰 길이에 따라)
-        - 세마포어를 통한 동시 처리 수 제한
-        - vLLM Continuous Batching으로 GPU 활용률 극대화
-    
-    Args:
-            restaurants_data: 레스토랑 데이터 리스트
-                - restaurant_id: 레스토랑 ID
-                - reviews: 리뷰 딕셔너리 리스트 (REVIEW TABLE)
-            max_tokens_per_batch: 배치당 최대 토큰 수 (None이면 Config 값 사용)
-            max_retries: 최대 재시도 횟수
-            
-        Returns:
-            각 레스토랑별 감성 분석 결과 리스트
+        여러 레스토랑의 리뷰를 sentiment 모델로 분류하여 결과를 반환합니다.
+        샘플링이 활성화되어 있으면 대표 벡터 기반 TOP-K를 사용하고,
+        비활성화되어 있으면 전체 리뷰를 사용합니다.
         """
         if not restaurants_data:
             return []
-        
-        logger.info(f"총 {len(restaurants_data)}개 레스토랑을 비동기 큐 방식으로 처리합니다.")
-        
-        # content_list 추출 및 검증
-        processed_data = []
+
+        results: List[Dict[str, Any]] = []
         for data in restaurants_data:
-            restaurant_id = data["restaurant_id"]
+            restaurant_id = data.get("restaurant_id")
             reviews = data.get("reviews", [])
             
-            content_list = extract_content_list(reviews)
-            
-            if content_list:
-                processed_data.append({
-                    "restaurant_id": restaurant_id,
-                    "content_list": content_list
-                })
+            # 샘플링이 활성화되어 있으면 reviews를 None으로 전달하여 샘플링 로직 적용
+            # 샘플링이 비활성화되어 있으면 제공된 reviews를 사용 (없으면 전체 리뷰 조회)
+            if Config.ENABLE_SENTIMENT_SAMPLING:
+                results.append(self.analyze(reviews=None, restaurant_id=restaurant_id))
             else:
-                logger.warning(f"레스토랑 {restaurant_id}: content가 있는 리뷰가 없습니다.")
-        
-        if not processed_data:
-            return []
-        
-        # vLLM 직접 사용 모드인지 확인
-        if hasattr(self.llm_utils, 'use_pod_vllm') and self.llm_utils.use_pod_vllm:
-            results = await self.llm_utils.analyze_multiple_restaurants_vllm(
-                processed_data,
-                max_tokens_per_batch=max_tokens_per_batch,
-                max_retries=max_retries
-            )
-        else:
-            # 기존 방식: 각 레스토랑을 순차 처리
-            results = []
-            for data in processed_data:
-                result = self.llm_utils.analyze_all_reviews(
-                    review_list=data["content_list"],
-                    restaurant_id=data["restaurant_id"],
-                    max_retries=max_retries
-                )
-                results.append(result)
-        
+                results.append(self.analyze(reviews=reviews, restaurant_id=restaurant_id))
         return results

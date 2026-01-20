@@ -30,30 +30,8 @@ async def analyze_sentiment(
     debug: bool = Depends(get_debug_mode),
 ):
     """
-    단일 레스토랑의 리뷰 리스트를 감성 분석하여 positive_ratio와 negative_ratio를 계산합니다.
-    
-    vLLM 직접 사용 모드에서는 내부적으로 배치 처리 로직을 재사용하여
-    동적 배치 크기와 세마포어 기반 OOM 방지 전략을 적용합니다.
-    
-    OOM 방지 전략 (vLLM 모드):
-    - 각 레스토랑별로 동적 배치 크기 계산 (리뷰 길이에 따라)
-    - 세마포어를 통한 동시 처리 수 제한 (VLLM_MAX_CONCURRENT_BATCHES)
-    - 각 배치는 독립적으로 처리 가능 (메모리 사용량 예측 가능)
-    - vLLM이 자동으로 여러 배치를 효율적으로 처리 (Continuous Batching)
-    
-    프로세스:
-    1. reviews 리스트에서 content 필드 추출 (content_list)
-    2. vLLM 모드인 경우:
-       - 내부적으로 analyze_multiple_restaurants_async() 재사용
-       - 동적 배치 크기로 분할 후 비동기 큐 방식으로 처리
-    3. 기존 모드인 경우:
-       - LLM에 restaurant_id와 content_list 전달
-       - LLM이 긍/부정 개수 반환
-    4. 비율 계산 (positive_ratio = positive_count / total_count, negative_ratio = negative_count / total_count)
-    
-    - LLM이 리뷰 단위를 반환하는게 아님
-    - 총 리뷰(입력 토큰이 많으면 context middle lost 문제 때문에 배치로 할수도 있음)에서 긍/부정 개수를 세고
-    - positive_ratio = positive_count / total_count, negative_ratio = negative_count / total_count 등의 계산으로 비율까지 추가해서 반환
+    단일 레스토랑의 **전체 리뷰**를 sentiment 모델로 분류하여
+    **긍/부정 개수 반환 + 코드에서 직접 비율(%) 산출**합니다.
     
     - **reviews**: 리뷰 리스트 (REVIEW TABLE)
     - **restaurant_id**: 레스토랑 ID (BIGINT FK)
@@ -126,21 +104,10 @@ async def analyze_sentiment(
                         )
             
             # 대표 벡터 기반 TOP-K 방식 사용
-        # reviews가 제공되면 사용하고, 없으면 vector_search로 대표 벡터 기반 TOP-K 선택
-        if hasattr(analyzer.llm_utils, 'use_pod_vllm') and analyzer.llm_utils.use_pod_vllm:
-            # vLLM 직접 사용 모드: 비동기 메서드 사용 (OOM 방지 전략 포함)
-            result = await analyzer.analyze_async(
-                reviews=request.reviews,
-                restaurant_id=request.restaurant_id,
-            )
-        else:
-            # 대표 벡터 기반 TOP-K 방식 사용
-            result = analyzer.analyze(
-                reviews=request.reviews,  # None이면 vector_search 사용
-                restaurant_id=request.restaurant_id,
-                top_k=20,  # 기본값
-                months_back=None,  # 날짜 필터 없음
-            )
+        result = analyzer.analyze(
+            reviews=request.reviews,
+            restaurant_id=request.restaurant_id,
+        )
         
         # 메트릭 수집
         request_id = metrics.collect_metrics(
@@ -195,23 +162,7 @@ async def analyze_sentiment_batch(
     analyzer: SentimentAnalyzer = Depends(get_sentiment_analyzer),
 ):
     """
-    여러 레스토랑의 리뷰를 배치로 감성 분석 (비동기 큐 방식, 동적 배치 크기)
-    
-    각 레스토랑의 리뷰를 동적 배치 크기로 나누고, 모든 배치를 비동기 큐에 넣어
-    vLLM의 Continuous Batching을 활용하여 처리합니다.
-    
-    OOM 방지 전략:
-    - 각 레스토랑별로 동적 배치 크기 계산 (리뷰 길이에 따라)
-    - 세마포어를 통한 동시 처리 수 제한 (VLLM_MAX_CONCURRENT_BATCHES)
-    - 각 배치는 독립적으로 처리 가능 (메모리 사용량 예측 가능)
-    - vLLM이 자동으로 여러 배치를 효율적으로 처리 (Continuous Batching)
-    
-    프로세스:
-    1. 각 레스토랑의 리뷰에서 content 필드 추출 (content_list)
-    2. 각 레스토랑별로 동적 배치 크기 계산 (리뷰 길이 기반)
-    3. 모든 레스토랑의 배치를 비동기 큐에 추가
-    4. vLLM Continuous Batching으로 병렬 처리
-    5. 레스토랑별로 결과 집계 및 비율 계산
+    여러 레스토랑의 **전체 리뷰**를 sentiment 모델로 분류하여 결과를 반환합니다.
     
     Args:
         request: 배치 감성 분석 요청
@@ -224,10 +175,7 @@ async def analyze_sentiment_batch(
         각 레스토랑별 감성 분석 결과 리스트
     """
     try:
-        results = await analyzer.analyze_multiple_restaurants_async(
-            restaurants_data=request.restaurants,
-            max_tokens_per_batch=request.max_tokens_per_batch,
-        )
+        results = await analyzer.analyze_multiple_restaurants_async(restaurants_data=request.restaurants)
         return SentimentAnalysisBatchResponse(results=[
             SentimentAnalysisResponse(**result) for result in results
         ])

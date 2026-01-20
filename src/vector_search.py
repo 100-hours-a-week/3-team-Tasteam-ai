@@ -6,7 +6,7 @@ import uuid
 import hashlib
 import logging
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Optional, Any, Union
 
 from qdrant_client import QdrantClient, models
@@ -314,6 +314,75 @@ class VectorSearch:
             return [r.payload for r in records]
         except Exception as e:
             logger.error(f"리뷰 조회 중 오류: {str(e)}")
+            return []
+    
+    def get_recent_restaurant_reviews(
+        self, 
+        restaurant_id: Union[int, str], 
+        limit: int = 100
+    ) -> List[Dict]:
+        """
+        레스토랑 ID로 최근 리뷰를 조회합니다 (created_at 기준 내림차순).
+        
+        Args:
+            restaurant_id: 레스토랑 ID (int 또는 str)
+            limit: 반환할 최대 리뷰 수 (기본값: 100)
+            
+        Returns:
+            최근 리뷰 payload 리스트 (created_at 기준 내림차순 정렬)
+        """
+        try:
+            # int를 str로 변환
+            restaurant_id_str = str(restaurant_id) if isinstance(restaurant_id, int) else restaurant_id
+            
+            # 모든 리뷰 조회
+            records, _ = self.client.scroll(
+                collection_name=self.collection_name,
+                scroll_filter=models.Filter(
+                    must=[
+                        models.FieldCondition(
+                            key="restaurant_id",
+                            match=models.MatchValue(value=restaurant_id_str)
+                        )
+                    ]
+                )
+            )
+            
+            # payload 추출
+            reviews = [r.payload for r in records]
+            
+            # created_at 기준으로 정렬 (최신순)
+            def get_created_at(review: Dict) -> datetime:
+                created_at = review.get("created_at")
+                if not created_at:
+                    # created_at이 없으면 매우 오래된 것으로 간주
+                    return datetime.min.replace(tzinfo=timezone.utc)
+                
+                try:
+                    if isinstance(created_at, str):
+                        # ISO 형식 문자열 파싱
+                        if created_at.endswith('Z'):
+                            created_at = created_at[:-1] + '+00:00'
+                        return datetime.fromisoformat(created_at.replace('Z', '+00:00'))
+                    elif isinstance(created_at, datetime):
+                        return created_at if created_at.tzinfo else created_at.replace(tzinfo=timezone.utc)
+                    else:
+                        return datetime.min.replace(tzinfo=timezone.utc)
+                except (ValueError, TypeError):
+                    return datetime.min.replace(tzinfo=timezone.utc)
+            
+            # 최신순 정렬
+            sorted_reviews = sorted(
+                reviews,
+                key=get_created_at,
+                reverse=True
+            )
+            
+            # limit 적용
+            return sorted_reviews[:limit]
+            
+        except Exception as e:
+            logger.error(f"최근 리뷰 조회 중 오류: {str(e)}")
             return []
     
     def get_all_restaurant_ids(self) -> List[str]:

@@ -28,6 +28,13 @@ class Config:
     
     # 모델 설정 (환경 변수 지원)
     SENTIMENT_MODEL: str = os.getenv("SENTIMENT_MODEL", DEFAULT_SENTIMENT_MODEL)
+    # sentiment 계산 방식 선택
+    # - "model": HuggingFace sentiment 모델로 전체 리뷰 분류 → count/ratio를 코드에서 계산 (기본값)
+    # - "llm": 기존 LLM sentiment 방식(전체 리뷰 기반) 활성화 (샘플링 없음)
+    SENTIMENT_METHOD: str = os.getenv("SENTIMENT_METHOD", "model").lower()
+    # Sentiment 샘플링 설정
+    ENABLE_SENTIMENT_SAMPLING: bool = os.getenv("ENABLE_SENTIMENT_SAMPLING", "false").lower() == "true"  # 샘플링 활성화 여부
+    SENTIMENT_RECENT_TOP_K: int = int(os.getenv("SENTIMENT_RECENT_TOP_K", "100"))  # 샘플링 시 사용할 최근 리뷰 수 (기본값: 100)
     EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", DEFAULT_EMBEDDING_MODEL)
     LLM_MODEL: str = os.getenv("LLM_MODEL", DEFAULT_LLM_MODEL)
     
@@ -52,6 +59,7 @@ class Config:
     # OpenAI 설정 (빠른 검증용)
     OPENAI_API_KEY: Optional[str] = os.getenv("OPENAI_API_KEY")
     OPENAI_MODEL: str = os.getenv("OPENAI_MODEL", "gpt-4o-mini")  # 빠른 검증용 모델
+    ENABLE_OPENAI_FALLBACK: bool = os.getenv("ENABLE_OPENAI_FALLBACK", "false").lower() == "true"  # 로컬 큐 오버플로우 시 OpenAI API 폴백 활성화
     
     # RunPod 서버리스 엔드포인트 설정
     RUNPOD_API_KEY: Optional[str] = os.getenv("RUNPOD_API_KEY")

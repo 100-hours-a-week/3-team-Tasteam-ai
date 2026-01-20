@@ -52,6 +52,12 @@ class LLMUtils:
         self.use_runpod = use_runpod if use_runpod is not None else Config.USE_RUNPOD
         self.use_pod_vllm = use_pod_vllm if use_pod_vllm is not None else Config.USE_POD_VLLM
         
+        # Router 패턴: 로컬 큐 기본, 오버플로우 시 OpenAI API 폴백
+        # OpenAI 클라이언트는 폴백용으로 항상 초기화 시도 (선택적)
+        self.openai_client = None
+        self.openai_model = None
+        self.use_openai_as_fallback = False
+        
         # LLM_PROVIDER 우선순위 적용
         if self.llm_provider == "openai":
             self.use_openai = True
@@ -67,6 +73,21 @@ class LLMUtils:
         else:
             # 기본값: 기존 로직 유지
             self.use_openai = False
+        
+        # OpenAI API 폴백용 초기화 (로컬 큐 사용 시 오버플로우 대비, 선택적)
+        if Config.ENABLE_OPENAI_FALLBACK and Config.OPENAI_API_KEY and not self.use_openai:
+            try:
+                from openai import OpenAI
+                self.openai_client = OpenAI(api_key=Config.OPENAI_API_KEY)
+                self.openai_model = Config.OPENAI_MODEL
+                self.use_openai_as_fallback = True
+                logger.info(f"OpenAI API 폴백 활성화: {self.openai_model} (오버플로우 시 사용)")
+            except ImportError:
+                logger.warning("openai 패키지가 설치되지 않아 폴백 기능을 사용할 수 없습니다.")
+            except Exception as e:
+                logger.warning(f"OpenAI API 폴백 초기화 실패: {e}")
+        elif Config.ENABLE_OPENAI_FALLBACK and not Config.OPENAI_API_KEY:
+            logger.warning("ENABLE_OPENAI_FALLBACK이 활성화되었지만 OPENAI_API_KEY가 설정되지 않았습니다.")
         
         if self.use_openai:
             # OpenAI API 사용
@@ -88,6 +109,7 @@ class LLMUtils:
             self.model = None
             self.tokenizer = None
             self.device = None
+            self.batch_size = Config.LLM_BATCH_SIZE  # 기본 배치 크기 설정
         elif self.use_pod_vllm:
             # RunPod Pod에서 vLLM 직접 사용
             logger.info(f"vLLM 직접 사용 모드: {model_name}")
@@ -195,6 +217,9 @@ class LLMUtils:
                 self.tokenizer = None
             
             logger.info("✅ vLLM 모델 로딩 완료")
+            
+            # vLLM 모드에서도 batch_size 설정 (count_sentiments 등에서 사용)
+            self.batch_size = Config.LLM_BATCH_SIZE
             
         except ImportError:
             raise ImportError(
@@ -337,8 +362,7 @@ class LLMUtils:
         max_new_tokens: int = 50,
     ) -> str:
         """
-        LLM을 사용하여 응답을 생성합니다.
-        OpenAI API, RunPod 서버리스 엔드포인트, 또는 로컬 모델 사용.
+        Router 패턴: 로컬 큐 기본 사용, 오버플로우 시 OpenAI API 폴백
         
         Args:
             messages: 대화 메시지 리스트 (OpenAI 형식)
@@ -348,6 +372,7 @@ class LLMUtils:
         Returns:
             생성된 응답 텍스트
         """
+        # Router: OpenAI 전용 모드
         if self.use_openai:
             # OpenAI API 사용 (빠른 검증용)
             try:
@@ -366,13 +391,57 @@ class LLMUtils:
                     self.last_tokens_used = None
                 return response.choices[0].message.content.strip()
             except Exception as e:
-                logger.error(f"OpenAI API 호출 실패: {str(e)}")
                 self.last_tokens_used = None
                 raise
-        elif self.use_runpod:
+        else:
+            # Router: 로컬 큐 기본 사용 (오버플로우 시 OpenAI API 폴백)
+            try:
+                # 1단계: 로컬 큐 시도 (vLLM, RunPod, 또는 로컬 모델)
+                return self._generate_with_local_queue(messages, temperature, max_new_tokens)
+            except Exception as e:
+                # 2단계: 오버플로우/에러 발생 시 OpenAI API 폴백
+                if self.use_openai_as_fallback and self.openai_client:
+                    logger.warning(f"로컬 큐 처리 실패, OpenAI API로 폴백: {str(e)}")
+                    try:
+                        response = self.openai_client.chat.completions.create(
+                            model=self.openai_model,
+                            messages=messages,
+                            temperature=temperature,
+                            max_tokens=max_new_tokens,
+                            response_format={"type": "json_object"},
+                        )
+                        if hasattr(response, 'usage') and response.usage:
+                            self.last_tokens_used = response.usage.total_tokens
+                        else:
+                            self.last_tokens_used = None
+                        return response.choices[0].message.content.strip()
+                    except Exception as fallback_error:
+                        logger.error(f"OpenAI API 폴백도 실패: {str(fallback_error)}")
+                        raise e  # 원래 에러를 다시 발생
+                else:
+                    # 폴백 불가능한 경우 원래 에러 발생
+                    raise
+    
+    def _generate_with_local_queue(
+        self,
+        messages: List[Dict[str, str]],
+        temperature: float = 0.3,
+        max_new_tokens: int = 50,
+    ) -> str:
+        """
+        로컬 큐를 사용하여 응답 생성 (vLLM, RunPod, 또는 로컬 모델)
+        
+        Args:
+            messages: 대화 메시지 리스트 (OpenAI 형식)
+            temperature: 생성 온도
+            max_new_tokens: 최대 생성 토큰 수
+            
+        Returns:
+            생성된 응답 텍스트
+        """
+        if self.use_runpod:
             # RunPod 서버리스 엔드포인트 사용
             # Qwen chat template 형식으로 변환 (로컬 토크나이저 없이 직접 구성)
-            # 간단한 프롬프트 구성
             prompt_parts = []
             for msg in messages:
                 role = msg.get("role", "user")
@@ -389,6 +458,10 @@ class LLMUtils:
             # RunPod 호출
             response = self._call_runpod(prompt)
             return response.strip()
+        elif self.use_pod_vllm:
+            # vLLM 직접 사용 (비동기 처리 필요)
+            # 동기 메서드에서는 vLLM을 직접 사용할 수 없으므로 에러 발생
+            raise NotImplementedError("vLLM은 비동기 메서드를 사용해야 합니다.")
         else:
             # 로컬 모델 사용
             # Gemma 모델은 system role을 지원하지 않으므로 변환 필요
@@ -2009,13 +2082,29 @@ JSON 형식:
             )
             return template_summary
     
+    def _calculate_dynamic_similarity_threshold(self, review_count: int) -> float:
+        """
+        리뷰 수에 따라 동적 유사도 임계값 계산
+        
+        Args:
+            review_count: 전체 리뷰 수
+            
+        Returns:
+            동적 유사도 임계값
+        """
+        if review_count < 5:
+            return 0.4  # 리뷰가 적으면 임계값 낮춤
+        elif review_count < 10:
+            return 0.45  # 중간 수준
+        else:
+            return 0.5  # 리뷰가 많으면 기본값
+    
     def validate_aspects_by_cosine_similarity(
         self,
         aspects: List[Dict[str, Any]],
         reviews: List[Dict[str, Any]],
         vector_search: Any,  # VectorSearch 타입 (순환 참조 방지)
         similarity_threshold: float = 0.5,
-        min_matching_reviews: int = 2,
     ) -> List[Dict[str, Any]]:
         """
         대표 벡터 TOP-K 리뷰와 aspect claim 간 cosine 유사도로 필터링
@@ -2025,7 +2114,6 @@ JSON 형식:
             reviews: 대표 벡터 TOP-K 리뷰 (payload 포함)
             vector_search: VectorSearch 인스턴스 (encoder 접근용)
             similarity_threshold: 최소 cosine 유사도 (0.0 ~ 1.0)
-            min_matching_reviews: 최소 매칭 리뷰 수
         
         Returns:
             검증된 aspect 리스트
@@ -2133,23 +2221,23 @@ JSON 형식:
             # 3. 각 리뷰와의 cosine 유사도 계산
             similarities = np.dot(review_embeddings, claim_embedding)
             
-            # 4. threshold 이상인 리뷰 개수 확인
-            matching_count = np.sum(similarities >= similarity_threshold)
+            # 4. 최고 유사도 확인 (threshold 이상이면 통과)
+            max_similarity = float(np.max(similarities))
+            matching_count = int(np.sum(similarities >= similarity_threshold))
             
-            if matching_count >= min_matching_reviews:
+            if max_similarity >= similarity_threshold:
                 # 검증 통과: aspect에 매칭된 리뷰 정보 추가
-                aspect["validation_score"] = float(np.max(similarities))  # 최고 유사도
-                aspect["matching_review_count"] = int(matching_count)
+                aspect["validation_score"] = max_similarity  # 최고 유사도
+                aspect["matching_review_count"] = matching_count
                 validated_aspects.append(aspect)
                 logger.debug(
                     f"Aspect '{aspect.get('aspect', '')}' 검증 통과: "
-                    f"{matching_count}개 리뷰 매칭 (최고 유사도: {np.max(similarities):.3f})"
+                    f"최고 유사도 {max_similarity:.3f} (매칭 리뷰: {matching_count}개)"
                 )
             else:
                 logger.debug(
                     f"Aspect '{aspect.get('aspect', '')}' 검증 실패: "
-                    f"{matching_count}개 리뷰 매칭 (최소: {min_matching_reviews}, "
-                    f"최고 유사도: {np.max(similarities):.3f})"
+                    f"최고 유사도 {max_similarity:.3f} (임계값: {similarity_threshold:.2f})"
                 )
         
         return validated_aspects
@@ -2162,7 +2250,7 @@ JSON 형식:
         validate_aspects: bool = True,  # aspect 검증 여부
         min_positive_aspects: int = 2,  # 최소 긍정 aspect 개수
         min_negative_aspects: int = 1,  # 최소 부정 aspect 개수
-        max_retries: int = 2,  # 최대 재시도 횟수
+        max_retries: int = 1,  # 최대 재시도 횟수 (기본값: 1, 총 2회 시도)
         use_llm_polish: bool = True,  # LLM으로 overall_summary 개선 여부 (기본값: True)
     ) -> Dict:
         """
@@ -2215,6 +2303,19 @@ JSON 형식:
                     "negative_count": len(negative_reviews),
                     "tokens_used": None,
                 }
+            
+            # 동적 검증 기준 계산
+            total_review_count = len(review_texts)
+            dynamic_similarity_threshold = self._calculate_dynamic_similarity_threshold(total_review_count)
+            
+            # 부정 리뷰가 없으면 부정 aspect 최소 개수를 0으로 조정
+            adjusted_min_negative_aspects = 0 if len(negative_reviews) == 0 else min_negative_aspects
+            
+            logger.info(
+                f"동적 검증 기준 적용: 리뷰 수={total_review_count}, "
+                f"유사도 임계값={dynamic_similarity_threshold:.2f}, "
+                f"부정 aspect 최소 개수={adjusted_min_negative_aspects}"
+            )
             
             # 토큰 사용량 초기화 (재시도 루프 전)
             total_tokens_used = 0
@@ -2347,20 +2448,18 @@ aspect 추출 시 다음을 고려하세요:
                     positive_aspects_before = positive_aspects.copy()
                     negative_aspects_before = negative_aspects.copy()
                     
-                    # 검증 수행
+                    # 검증 수행 (동적 기준 사용)
                     validated_positive = self.validate_aspects_by_cosine_similarity(
                         aspects=positive_aspects,
                         reviews=all_reviews,  # 대표 벡터 TOP-K 리뷰
                         vector_search=vector_search,
-                        similarity_threshold=0.5,  # 조정 가능
-                        min_matching_reviews=2,  # 조정 가능
+                        similarity_threshold=dynamic_similarity_threshold,  # 동적 임계값
                     )
                     validated_negative = self.validate_aspects_by_cosine_similarity(
                         aspects=negative_aspects,
                         reviews=all_reviews,
                         vector_search=vector_search,
-                        similarity_threshold=0.5,
-                        min_matching_reviews=2,
+                        similarity_threshold=dynamic_similarity_threshold,  # 동적 임계값
                     )
                     
                     # 검증 통과/실패 분류
@@ -2387,9 +2486,9 @@ aspect 추출 시 다음을 고려하세요:
                         if not any((va.get('aspect', ''), va.get('claim', '')) == key for va in validated_negative_aspects):
                             validated_negative_aspects.append(a)
                     
-                    # 최소 개수 확인
+                    # 최소 개수 확인 (조정된 부정 aspect 최소 개수 사용)
                     if (len(validated_positive_aspects) >= min_positive_aspects and 
-                        len(validated_negative_aspects) >= min_negative_aspects):
+                        len(validated_negative_aspects) >= adjusted_min_negative_aspects):
                         # 충분한 aspect 확보 → 루프 탈출
                         logger.info(
                             f"Aspect 검증 완료: 긍정 {len(validated_positive_aspects)}개, 부정 {len(validated_negative_aspects)}개 통과"
@@ -2399,7 +2498,7 @@ aspect 추출 시 다음을 고려하세요:
                         # 부족하면 재시도 (C 방식: 검증 통과는 유지, 검증 실패는 수정)
                         logger.info(
                             f"Aspect 개수 부족 (긍정: {len(validated_positive_aspects)}/{min_positive_aspects}, "
-                            f"부정: {len(validated_negative_aspects)}/{min_negative_aspects}). "
+                            f"부정: {len(validated_negative_aspects)}/{adjusted_min_negative_aspects}). "
                             f"재시도합니다 (검증 통과: 유지, 검증 실패: 수정)."
                         )
                         continue
@@ -2744,14 +2843,27 @@ aspect 추출 시 다음을 고려하세요:
                 
                 # Aspect 검증 및 재시도 로직 (C 방식)
                 if validate_aspects and vector_search:
+                    # 동적 검증 기준 계산
+                    total_review_count = len(review_texts)
+                    dynamic_similarity_threshold = self._calculate_dynamic_similarity_threshold(total_review_count)
+                    
+                    # 부정 리뷰가 없으면 부정 aspect 최소 개수를 0으로 조정
+                    adjusted_min_negative_aspects = 0 if len(negative_reviews) == 0 else 1
+                    
+                    logger.debug(
+                        f"레스토랑 {restaurant_id} 동적 검증 기준 적용: 리뷰 수={total_review_count}, "
+                        f"유사도 임계값={dynamic_similarity_threshold:.2f}, "
+                        f"부정 aspect 최소 개수={adjusted_min_negative_aspects}"
+                    )
+                    
                     # 재시도 루프
                     validated_positive_aspects = []
                     validated_negative_aspects = []
                     failed_positive_aspects = []
                     failed_negative_aspects = []
-                    aspect_max_retries = 2  # aspect 재시도 횟수
+                    aspect_max_retries = 1  # aspect 재시도 횟수 (기본값: 1, 총 2회 시도)
                     min_positive_aspects = 2
-                    min_negative_aspects = 1
+                    min_negative_aspects = adjusted_min_negative_aspects
                     
                     for aspect_attempt in range(aspect_max_retries + 1):
                         if aspect_attempt == 0:
@@ -2833,21 +2945,19 @@ aspect 추출 시 다음을 고려하세요:
                                 current_positive = []
                                 current_negative = []
                         
-                        # 검증 수행
+                        # 검증 수행 (동적 기준 사용)
                         all_reviews = positive_reviews + negative_reviews
                         validated_positive = self.validate_aspects_by_cosine_similarity(
                             aspects=current_positive,
                             reviews=all_reviews,
                             vector_search=vector_search,
-                            similarity_threshold=0.5,
-                            min_matching_reviews=2,
+                            similarity_threshold=dynamic_similarity_threshold,  # 동적 임계값
                         )
                         validated_negative = self.validate_aspects_by_cosine_similarity(
                             aspects=current_negative,
                             reviews=all_reviews,
                             vector_search=vector_search,
-                            similarity_threshold=0.5,
-                            min_matching_reviews=2,
+                            similarity_threshold=dynamic_similarity_threshold,  # 동적 임계값
                         )
                         
                         # 검증 통과/실패 분류
@@ -2874,7 +2984,7 @@ aspect 추출 시 다음을 고려하세요:
                             if not any((va.get('aspect', ''), va.get('claim', '')) == key for va in validated_negative_aspects):
                                 validated_negative_aspects.append(a)
                         
-                        # 최소 개수 확인
+                        # 최소 개수 확인 (조정된 부정 aspect 최소 개수 사용)
                         if (len(validated_positive_aspects) >= min_positive_aspects and 
                             len(validated_negative_aspects) >= min_negative_aspects):
                             # 충분한 aspect 확보 → 루프 탈출
@@ -2886,7 +2996,9 @@ aspect 추출 시 다음을 고려하세요:
                         elif aspect_attempt < aspect_max_retries:
                             # 부족하면 재시도
                             logger.debug(
-                                f"레스토랑 {restaurant_id} Aspect 개수 부족. 재시도합니다."
+                                f"레스토랑 {restaurant_id} Aspect 개수 부족 "
+                                f"(긍정: {len(validated_positive_aspects)}/{min_positive_aspects}, "
+                                f"부정: {len(validated_negative_aspects)}/{min_negative_aspects}). 재시도합니다."
                             )
                             continue
                         else:
