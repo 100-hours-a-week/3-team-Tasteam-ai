@@ -51,8 +51,8 @@ uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --reload
 
 ### API 문서
 
-- Swagger UI: http://localhost:8000/docs
-- ReDoc: http://localhost:8000/redoc
+- Swagger UI: http://localhost:8001/docs
+- ReDoc: http://localhost:8001/redoc
 
 ### 주요 엔드포인트
 
