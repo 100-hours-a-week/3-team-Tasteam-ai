@@ -153,8 +153,8 @@ def print_header(msg: str):
 # runpod_env
 # 테스트 설정
 # RunPod Pod 서버 URL (환경 변수로 오버라이드 가능)
-BASE_URL = "http://213.192.2.74:40162"  # RunPod Pod IP:포트로 변경 (예: http://213.192.2.68:40183)
-#BASE_URL = "http://localhost:8001"
+#BASE_URL = "http://213.192.2.74:40162"  # RunPod Pod IP:포트로 변경 (예: http://213.192.2.68:40183)
+BASE_URL = "http://localhost:8001"
 API_PREFIX = "/api/v1"
 METRICS_DB_PATH = "metrics.db"
 
@@ -246,56 +246,41 @@ def check_server_health():
 
 
 def generate_test_data():
-    """convert_kr3_tsv.py를 사용하여 테스트 데이터 생성"""
-    print_header("테스트 데이터 생성")
+    """test_data_sample.json 파일에서 테스트 데이터 로드"""
+    print_header("테스트 데이터 로드")
     
-    # kr3.tsv 파일 확인
-    kr3_path = Path("kr3.tsv")
-    if not kr3_path.exists():
-        print_warning("kr3.tsv 파일이 없습니다. 테스트 데이터 생성을 건너뜁니다.")
+    # test_data_sample.json 파일 경로
+    test_data_path = project_root / "data" / "test_data_sample.json"
+    
+    if not test_data_path.exists():
+        print_warning(f"테스트 데이터 파일이 없습니다: {test_data_path}")
+        print_info("대체 방법: kr3.tsv 파일을 사용하여 데이터를 생성할 수 있습니다.")
         return None
-    
-    # 임시 JSON 파일 생성
-    temp_file = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
-    temp_file.close()
-    temp_json_path = temp_file.name
     
     try:
-        # convert_kr3_tsv.py 실행
-        print_info("kr3.tsv에서 테스트 데이터 생성 중...")
-        cmd = [
-            sys.executable,
-            "scripts/convert_kr3_tsv.py",
-            "--input", str(kr3_path),
-            "--output", temp_json_path,
-            "--sample", "200",  # 비교군을 위해 더 많은 리뷰
-            "--restaurants", "10"  # 비교군을 위해 더 많은 레스토랑
-        ]
-        
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-        
-        if result.returncode != 0:
-            print_error(f"데이터 생성 실패: {result.stderr}")
-            if os.path.exists(temp_json_path):
-                os.unlink(temp_json_path)
-            return None
-        
-        # 생성된 JSON 파일 읽기
-        with open(temp_json_path, 'r', encoding='utf-8') as f:
+        # JSON 파일 읽기
+        print_info(f"테스트 데이터 파일 로드 중: {test_data_path}")
+        with open(test_data_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
         
-        print_success(f"테스트 데이터 생성 완료: {len(data.get('restaurants', []))}개 레스토랑")
-        return data, temp_json_path
+        restaurants_count = len(data.get('restaurants', []))
+        print_success(f"테스트 데이터 로드 완료: {restaurants_count}개 레스토랑")
         
-    except subprocess.TimeoutExpired:
-        print_error("데이터 생성 시간 초과")
-        if os.path.exists(temp_json_path):
-            os.unlink(temp_json_path)
+        # 총 리뷰 수 계산
+        total_reviews = sum(
+            len(restaurant.get('reviews', []))
+            for restaurant in data.get('restaurants', [])
+        )
+        print_info(f"  - 총 리뷰 수: {total_reviews}개")
+        
+        # 임시 파일 경로는 None 반환 (더 이상 필요 없음)
+        return data, None
+        
+    except json.JSONDecodeError as e:
+        print_error(f"JSON 파일 파싱 오류: {str(e)}")
         return None
     except Exception as e:
-        print_error(f"데이터 생성 중 오류: {str(e)}")
-        if os.path.exists(temp_json_path):
-            os.unlink(temp_json_path)
+        print_error(f"테스트 데이터 로드 중 오류: {str(e)}")
         return None
 
 
@@ -2110,13 +2095,13 @@ def run_tests_for_model(
         
         # 테스트 실행
         results = []
-        #results.append(("감성 분석", test_sentiment_analysis(enable_benchmark=enable_benchmark, num_iterations=iterations)))
+        results.append(("감성 분석", test_sentiment_analysis(enable_benchmark=enable_benchmark, num_iterations=iterations)))
         results.append(("배치 감성 분석", test_sentiment_analysis_batch(enable_benchmark=enable_benchmark, num_iterations=iterations)))
-        #results.append(("리뷰 요약", test_summarize(enable_benchmark=enable_benchmark, num_iterations=iterations)))
+        results.append(("리뷰 요약", test_summarize(enable_benchmark=enable_benchmark, num_iterations=iterations)))
         results.append(("배치 리뷰 요약", test_summarize_batch(enable_benchmark=enable_benchmark, num_iterations=iterations)))
-        #results.append(("강점 추출", test_extract_strengths(enable_benchmark=enable_benchmark, num_iterations=iterations)))
+        results.append(("강점 추출", test_extract_strengths(enable_benchmark=enable_benchmark, num_iterations=iterations)))
         #results.append(("벡터 검색", test_vector_search(enable_benchmark=enable_benchmark, num_iterations=iterations)))
-        #results.append(("리뷰 이미지 검색", test_review_image_search(enable_benchmark=enable_benchmark, num_iterations=iterations)))
+        results.append(("리뷰 이미지 검색", test_review_image_search(enable_benchmark=enable_benchmark, num_iterations=iterations)))
         
         # 결과 집계
         success_count = sum(1 for _, result in results if result)
@@ -2507,13 +2492,13 @@ def main():
     results_dict = {}  # JSON 저장용
     test_metrics.clear()  # 테스트 메트릭 초기화
     
-    #results.append(("감성 분석", test_sentiment_analysis(enable_benchmark=args.benchmark, num_iterations=args.iterations)))
+    results.append(("감성 분석", test_sentiment_analysis(enable_benchmark=args.benchmark, num_iterations=args.iterations)))
     results.append(("배치 감성 분석", test_sentiment_analysis_batch(enable_benchmark=args.benchmark, num_iterations=args.iterations)))
-    #results.append(("리뷰 요약", test_summarize(enable_benchmark=args.benchmark, num_iterations=args.iterations)))
+    results.append(("리뷰 요약", test_summarize(enable_benchmark=args.benchmark, num_iterations=args.iterations)))
     results.append(("배치 리뷰 요약", test_summarize_batch(enable_benchmark=args.benchmark, num_iterations=args.iterations)))
-    #results.append(("강점 추출", test_extract_strengths(enable_benchmark=args.benchmark, num_iterations=args.iterations)))
+    results.append(("강점 추출", test_extract_strengths(enable_benchmark=args.benchmark, num_iterations=args.iterations)))
     #results.append(("벡터 검색", test_vector_search(enable_benchmark=args.benchmark, num_iterations=args.iterations)))
-    #results.append(("리뷰 이미지 검색", test_review_image_search(enable_benchmark=args.benchmark, num_iterations=args.iterations)))
+    results.append(("리뷰 이미지 검색", test_review_image_search(enable_benchmark=args.benchmark, num_iterations=args.iterations)))
     
     # 결과 요약
     print_header("테스트 결과 요약")
