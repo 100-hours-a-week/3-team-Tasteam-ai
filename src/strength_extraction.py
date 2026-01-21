@@ -7,6 +7,7 @@ import logging
 import math
 import re
 import time
+import asyncio
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any, Tuple
 import numpy as np
@@ -40,6 +41,8 @@ class StrengthExtractionPipeline:
         """
         self.llm_utils = llm_utils
         self.vector_search = vector_search
+        # 임베딩 캐시 (메모리 기반)
+        self._embedding_cache: Dict[str, np.ndarray] = {}
     
     # ==================== Step A: 타겟 긍정 근거 후보 수집 ====================
     
@@ -317,186 +320,261 @@ JSON 형식 (반드시 최소 {min_output}개 이상 출력):
     
     # ==================== Step C: 강점별 근거 확장/검증 ====================
     
-    def expand_and_validate_evidence(
+    def _calculate_dynamic_min_support(self, total_reviews: int) -> int:
+        """
+        총 리뷰 수에 따라 min_support 동적 조정
+        
+        Args:
+            total_reviews: 레스토랑의 총 리뷰 수
+        
+        Returns:
+            동적 조정된 min_support 값
+        """
+        if total_reviews < 20:
+            return 2  # 작은 레스토랑
+        elif total_reviews < 50:
+            return 3  # 중간 레스토랑
+        elif total_reviews < 100:
+            return 4  # 큰 레스토랑
+        else:
+            return 5  # 매우 큰 레스토랑 (기본값)
+    
+    def _get_cached_embedding(self, text: str) -> np.ndarray:
+        """
+        임베딩 캐시에서 조회하거나 새로 생성
+        
+        Args:
+            text: 임베딩할 텍스트
+        
+        Returns:
+            임베딩 벡터
+        """
+        if text in self._embedding_cache:
+            return self._embedding_cache[text]
+        
+        # 캐시 미스 시 새로 생성
+        embedding = self.vector_search.encoder.encode(text, convert_to_numpy=True)
+        self._embedding_cache[text] = embedding
+        return embedding
+    
+    async def _validate_single_strength(
+        self,
+        strength: Dict[str, Any],
+        restaurant_id: int,
+        min_support: int,
+        index: int,
+        total: int,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        단일 강점 검증 (비동기)
+        
+        Args:
+            strength: 검증할 강점 후보
+            restaurant_id: 레스토랑 ID
+            min_support: 최소 support_count
+            index: 현재 인덱스 (로깅용)
+            total: 전체 개수 (로깅용)
+        
+        Returns:
+            검증된 강점 또는 None
+        """
+        aspect = strength.get("aspect", "")
+        claim = strength.get("claim", "")
+        strength_type = strength.get("type", "specific")
+        
+        logger.info(f"강점 후보 {index}/{total}: aspect='{aspect}', claim='{claim[:50] if claim else 'N/A'}...', type='{strength_type}'")
+        
+        if not aspect or not claim:
+            logger.warning(f"강점 후보 {index}: aspect 또는 claim이 비어있어 스킵")
+            return None
+        
+        # 1. 쿼리 문장 생성
+        claim_words = claim.split()
+        is_simple_claim = (
+            len(claim_words) <= 3 and 
+            any(word in claim for word in ["좋다", "맛있다", "친절하다", "깨끗하다", "편하다", "넓다", "괜찮다", "만족"])
+        )
+        
+        if is_simple_claim:
+            query_text = f"{aspect} {claim}"
+        else:
+            query_text = f"{aspect} 좋다"
+        
+        try:
+            # 2. Qdrant 검색
+            logger.info(f"강점 '{aspect}' 검증: Qdrant 검색 시작 (restaurant_id: {restaurant_id}, query: {query_text[:50]}...)")
+            
+            search_results = self.vector_search.query_similar_reviews(
+                query_text=query_text,
+                restaurant_id=restaurant_id,
+                limit=50,
+                min_score=0.0,
+            )
+            
+            # 3. Support 계산
+            support_count_raw = len(search_results)
+            score_threshold = 0.3
+            valid_results = [
+                r for r in search_results 
+                if r.get("score", 0) >= score_threshold
+            ]
+            support_count_valid = len(valid_results)
+            
+            # 4. 긍정 리뷰 필터링
+            negative_keywords = ["별로", "불친절", "최악", "비추", "안가", "싫다", "나쁘다", "더럽다", "불만", "별점"]
+            
+            filtered_results = []
+            for r in valid_results:
+                review = r["payload"]
+                content = review.get("content", review.get("text", "")).lower()
+                
+                sentiment = review.get("sentiment") or review.get("is_recommended")
+                if sentiment is not None:
+                    if sentiment == "positive" or sentiment is True or (isinstance(sentiment, str) and "positive" in sentiment.lower()):
+                        filtered_results.append(r)
+                    continue
+                
+                has_negative = any(keyword in content for keyword in negative_keywords)
+                if not has_negative:
+                    filtered_results.append(r)
+            
+            evidence_reviews = [r["payload"] for r in filtered_results]
+            support_count = len(evidence_reviews)
+            
+            logger.info(
+                f"강점 '{aspect}' 검증: Qdrant 검색 결과 "
+                f"raw={support_count_raw}개, valid(score>={score_threshold})={support_count_valid}개, "
+                f"positive_filtered={support_count}개 (min_support: {min_support})"
+            )
+            
+            if support_count < min_support:
+                logger.warning(
+                    f"강점 '{aspect}': support_count {support_count} < {min_support}, 버림 "
+                    f"(raw: {support_count_raw}, valid: {support_count_valid})"
+                )
+                return None
+            
+            # 5. 일관성 체크 (임베딩 캐싱 사용)
+            if len(evidence_reviews) > 0:
+                embeddings = []
+                for r in evidence_reviews:
+                    text = r.get("content", r.get("text", ""))
+                    if text:
+                        embedding = self._get_cached_embedding(text)
+                        embeddings.append(embedding.tolist())
+                
+                consistency = self._calculate_consistency(embeddings)
+            else:
+                consistency = 1.0
+            
+            consistency_value = float(consistency) if isinstance(consistency, (int, float)) else 0.0
+            
+            if len(evidence_reviews) > 0:
+                logger.info(
+                    f"강점 '{aspect}': consistency {consistency_value:.2f} (임계값: 0.3)"
+                )
+                
+                if consistency_value < 0.25:
+                    logger.warning(
+                        f"강점 '{aspect}': consistency {consistency_value:.2f} < 0.25, 버림"
+                    )
+                    return None
+                else:
+                    logger.info(f"강점 '{aspect}': consistency 통과 ({consistency_value:.2f})")
+            
+            # 6. Recency 가중치
+            recency = self._calculate_recency_weight(evidence_reviews)
+            
+            # 7. Support ratio 계산
+            total_reviews = len(evidence_reviews)
+            support_ratio = support_count / total_reviews if total_reviews > 0 else 0
+            
+            # 8. Evidence review IDs 추출
+            evidence_review_ids = [
+                str(r.get("review_id") or r.get("id", ""))
+                for r in evidence_reviews
+            ]
+            
+            recency_value = float(recency) if isinstance(recency, (int, float)) else 0.0
+            logger.info(
+                f"강점 '{aspect}': 검증 통과! "
+                f"(support: {support_count}, raw: {support_count_raw}, valid: {support_count_valid}, "
+                f"consistency: {consistency_value:.2f}, recency: {recency_value:.2f})"
+            )
+            
+            return {
+                **strength,
+                "support_count": support_count,
+                "support_count_raw": support_count_raw,
+                "support_count_valid": support_count_valid,
+                "support_ratio": support_ratio,
+                "consistency": consistency_value,
+                "recency": recency_value,
+                "evidence_reviews": evidence_reviews[:10],
+                "evidence_review_ids": evidence_review_ids,
+            }
+            
+        except Exception as e:
+            logger.error(f"강점 '{aspect}' 검증 중 오류: {e}")
+            return None
+    
+    async def expand_and_validate_evidence(
         self,
         strength_candidates: List[Dict[str, Any]],
         restaurant_id: int,
         min_support: int = 5,
+        total_reviews: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         """
-        각 aspect에 대해 Qdrant 벡터 검색으로 근거 확장 및 검증
+        각 aspect에 대해 Qdrant 벡터 검색으로 근거 확장 및 검증 (비동기 병렬 처리)
         
         Args:
             strength_candidates: 강점 후보 리스트
             restaurant_id: 레스토랑 ID
-            min_support: 최소 support_count
+            min_support: 최소 support_count (동적 조정됨)
+            total_reviews: 레스토랑의 총 리뷰 수 (동적 min_support 계산용)
         
         Returns:
             검증된 강점 리스트
         """
-        validated_strengths = []
+        # 동적 min_support 조정
+        if total_reviews is not None:
+            adjusted_min_support = self._calculate_dynamic_min_support(total_reviews)
+            if adjusted_min_support != min_support:
+                logger.info(
+                    f"min_support 동적 조정: {min_support} → {adjusted_min_support} "
+                    f"(총 리뷰 수: {total_reviews})"
+                )
+                min_support = adjusted_min_support
         
-        logger.info(f"Step C: {len(strength_candidates)}개 강점 후보 검증 시작")
+        logger.info(f"Step C: {len(strength_candidates)}개 강점 후보 검증 시작 (min_support: {min_support}, 병렬 처리)")
         
-        for i, strength in enumerate(strength_candidates, 1):
-            aspect = strength.get("aspect", "")
-            claim = strength.get("claim", "")
-            strength_type = strength.get("type", "specific")  # type 필드 추가
-            
-            logger.info(f"강점 후보 {i}/{len(strength_candidates)}: aspect='{aspect}', claim='{claim[:50] if claim else 'N/A'}...', type='{strength_type}'")
-            
-            if not aspect or not claim:
-                logger.warning(f"강점 후보 {i}: aspect 또는 claim이 비어있어 스킵")
-                continue
-            
-            # type='generic'인 경우는 Step C에서 support_count로 걸러낼 예정이므로 일단 통과
-            
-            # 1. 쿼리 문장 생성 (일반적인 표현 사용)
-            # 벡터 검색에서 매칭률을 높이기 위해 일반적인 표현 사용
-            # claim이 일반적인 표현(3단어 이하, "좋다/맛있다/친절하다" 등 포함)이면 사용
-            # 그렇지 않으면 aspect만 사용하거나 간단한 긍정 표현 추가
-            claim_words = claim.split()
-            is_simple_claim = (
-                len(claim_words) <= 3 and 
-                any(word in claim for word in ["좋다", "맛있다", "친절하다", "깨끗하다", "편하다", "넓다", "괜찮다", "만족"])
+        # 병렬 처리: 모든 강점을 동시에 검증
+        tasks = [
+            self._validate_single_strength(
+                strength=strength,
+                restaurant_id=restaurant_id,
+                min_support=min_support,
+                index=i + 1,
+                total=len(strength_candidates),
             )
-            
-            if is_simple_claim:
-                # claim이 일반적인 표현이면 둘 다 사용
-                query_text = f"{aspect} {claim}"
-            else:
-                # claim이 너무 구체적이면 aspect에 일반적인 긍정 표현 추가
-                # 예: "불맛 좋다", "서비스 좋다"
-                query_text = f"{aspect} 좋다"
-            
-            try:
-                # 2. Qdrant 검색 (query_similar_reviews 메서드 사용 - 검증된 로직)
-                logger.info(f"강점 '{aspect}' 검증: Qdrant 검색 시작 (restaurant_id: {restaurant_id}, query: {query_text[:50]}...)")
-                
-                # query_similar_reviews는 {"payload": ..., "score": ...} 형식으로 반환
-                search_results = self.vector_search.query_similar_reviews(
-                    query_text=query_text,
-                    restaurant_id=restaurant_id,
-                    limit=50,  # top-N 근거 확보
-                    min_score=0.0,  # 최소 유사도 점수 (낮게 설정)
-                )
-                
-                # 3. Support 계산 (유효 근거 수)
-                # (A) support_count_raw: 전체 검색 결과 수
-                support_count_raw = len(search_results)
-                
-                # (A) score_threshold 기준으로 유효 근거만 카운트
-                score_threshold = 0.3  # 유사도 임계값 (조정 가능)
-                valid_results = [
-                    r for r in search_results 
-                    if r.get("score", 0) >= score_threshold
-                ]
-                support_count_valid = len(valid_results)
-                
-                # (B) 긍정 리뷰만 필터링 (강점은 긍정이어야 함)
-                positive_keywords = ["좋다", "맛있다", "친절하다", "깨끗하다", "편하다", "넓다", "괜찮다", "만족", "추천", "최고"]
-                negative_keywords = ["별로", "불친절", "최악", "비추", "안가", "싫다", "나쁘다", "더럽다", "불만", "별점"]
-                
-                filtered_results = []
-                for r in valid_results:
-                    review = r["payload"]
-                    content = review.get("content", review.get("text", "")).lower()
-                    
-                    # 감성 라벨이 있으면 positive만
-                    sentiment = review.get("sentiment") or review.get("is_recommended")
-                    if sentiment is not None:
-                        if sentiment == "positive" or sentiment is True or (isinstance(sentiment, str) and "positive" in sentiment.lower()):
-                            filtered_results.append(r)
-                        continue
-                    
-                    # 감성 라벨이 없으면 부정 키워드 체크
-                    has_negative = any(keyword in content for keyword in negative_keywords)
-                    if not has_negative:
-                        # 부정 키워드가 없으면 긍정으로 간주
-                        filtered_results.append(r)
-                
-                evidence_reviews = [r["payload"] for r in filtered_results]
-                support_count = len(evidence_reviews)  # 최종 유효 근거 수
-                
-                logger.info(
-                    f"강점 '{aspect}' 검증: Qdrant 검색 결과 "
-                    f"raw={support_count_raw}개, valid(score>={score_threshold})={support_count_valid}개, "
-                    f"positive_filtered={support_count}개 (min_support: {min_support})"
-                )
-                
-                if support_count < min_support:
-                    logger.warning(
-                        f"강점 '{aspect}': support_count {support_count} < {min_support}, 버림 "
-                        f"(raw: {support_count_raw}, valid: {support_count_valid})"
-                    )
-                    continue
-                
-                # 4. 분산도 체크 (근거들이 서로 다른 얘기인지)
-                if len(evidence_reviews) > 0:
-                    embeddings = [
-                        self.vector_search.encoder.encode(r.get("content", r.get("text", ""))).tolist()
-                        for r in evidence_reviews
-                    ]
-                    consistency = self._calculate_consistency(embeddings)
-                else:
-                    consistency = 1.0  # 리뷰가 없으면 일관성 최대값
-                
-                # consistency가 딕셔너리일 경우를 대비해 숫자로 변환
-                consistency_value = float(consistency) if isinstance(consistency, (int, float)) else 0.0
-                
-                if len(evidence_reviews) > 0:
-                    logger.info(
-                        f"강점 '{aspect}': consistency {consistency_value:.2f} (임계값: 0.3)"
-                    )
-                    
-                    # 테스트 데이터 대응을 위해 임계값 완화 (0.5 -> 0.3)
-                    if consistency_value < 0.25:  # 너무 분산됨
-                        logger.warning(
-                            f"강점 '{aspect}': consistency {consistency_value:.2f} < 0.25, 버림"
-                        )
-                        continue
-                    else:
-                        logger.info(f"강점 '{aspect}': consistency 통과 ({consistency_value:.2f})")
-                
-                # 5. Recency 가중치
-                recency = self._calculate_recency_weight(evidence_reviews)
-                
-                # 6. Support ratio 계산
-                total_reviews = len(evidence_reviews)
-                support_ratio = support_count / total_reviews if total_reviews > 0 else 0
-                
-                # Evidence review IDs 추출 (Step 4에서 사용)
-                evidence_review_ids = [
-                    str(r.get("review_id") or r.get("id", ""))
-                    for r in evidence_reviews
-                ]
-                
-                # recency가 딕셔너리일 경우를 대비해 숫자로 변환
-                recency_value = float(recency) if isinstance(recency, (int, float)) else 0.0
-                logger.info(
-                    f"강점 '{aspect}': 검증 통과! "
-                    f"(support: {support_count}, raw: {support_count_raw}, valid: {support_count_valid}, "
-                    f"consistency: {consistency_value:.2f}, recency: {recency_value:.2f})"
-                )
-                
-                validated_strengths.append({
-                    **strength,
-                    # claim은 Step D 이후 후처리 재생성 단계에서 생성
-                    "support_count": support_count,  # 유효 근거 수 (긍정 필터링 후)
-                    "support_count_raw": support_count_raw,  # 전체 검색 결과 수
-                    "support_count_valid": support_count_valid,  # score 기준 유효 수
-                    "support_ratio": support_ratio,
-                    "consistency": consistency_value,  # 숫자로 변환된 값 저장
-                    "recency": recency_value,  # 숫자로 변환된 값 저장
-                    "evidence_reviews": evidence_reviews[:10],  # 상위 10개만
-                    "evidence_review_ids": evidence_review_ids,  # Step 4에서 사용
-                })
-                
-            except Exception as e:
-                logger.error(f"강점 '{aspect}' 검증 중 오류: {e}")
-                continue
+            for i, strength in enumerate(strength_candidates)
+        ]
+        
+        results = await asyncio.gather(*tasks)
+        
+        # None 제거
+        validated_strengths = [r for r in results if r is not None]
         
         logger.info(f"{len(validated_strengths)}개 강점 검증 통과 (후보: {len(strength_candidates)}개)")
+        
+        # 임베딩 캐시 정리 (메모리 절약)
+        if len(self._embedding_cache) > 1000:
+            logger.info(f"임베딩 캐시 정리: {len(self._embedding_cache)}개 → 500개")
+            # 최근 사용한 것만 유지 (간단한 전략: 절반만 유지)
+            keys_to_keep = list(self._embedding_cache.keys())[:500]
+            self._embedding_cache = {k: self._embedding_cache[k] for k in keys_to_keep}
+        
         return validated_strengths
     
     def _calculate_consistency(self, embeddings: List[List[float]]) -> float:
@@ -618,7 +696,7 @@ JSON 형식 (반드시 최소 {min_output}개 이상 출력):
         evidence_reviews: List[Dict[str, Any]],
     ) -> Optional[np.ndarray]:
         """
-        Evidence 리뷰들의 임베딩 centroid 계산
+        Evidence 리뷰들의 임베딩 centroid 계산 (임베딩 캐싱 사용)
         
         Args:
             evidence_reviews: Evidence 리뷰 리스트
@@ -633,7 +711,7 @@ JSON 형식 (반드시 최소 {min_output}개 이상 출력):
         for review in evidence_reviews:
             text = review.get("content", "") or review.get("text", "")
             if text:
-                emb = self.vector_search.encoder.encode(text, convert_to_numpy=True)
+                emb = self._get_cached_embedding(text)
                 embeddings.append(emb)
         
         if not embeddings:
@@ -683,52 +761,60 @@ JSON 형식 (반드시 최소 {min_output}개 이상 출력):
                     # Fallback: aspect 텍스트 임베딩
                     aspect_text = strength.get("aspect", "")
                     representative_vectors.append(
-                        self.vector_search.encoder.encode(aspect_text, convert_to_numpy=True)
+                        self._get_cached_embedding(aspect_text) if aspect_text else self._get_cached_embedding("")
                     )
             else:
                 # Fallback: aspect 텍스트 임베딩
                 aspect_text = strength.get("aspect", "")
                 representative_vectors.append(
-                    self.vector_search.encoder.encode(aspect_text, convert_to_numpy=True)
+                    self._get_cached_embedding(aspect_text) if aspect_text else self._get_cached_embedding("")
                 )
         
-        # 2. 유사도 그래프 만들기 (모든 pair 계산)
-        edges = []
-        for i in range(n):
-            for j in range(i + 1, n):
-                # aspect type이 다르면 병합 금지
-                aspect_i = validated_strengths[i].get("aspect", "").strip()
-                aspect_j = validated_strengths[j].get("aspect", "").strip()
-                
-                if aspect_i != aspect_j:
-                    # aspect가 다르면 type이 다른 것으로 간주하고 병합 금지
-                    logger.debug(f"병합 금지: aspect_i='{aspect_i}' != aspect_j='{aspect_j}'")
-                    continue
-                
-                # Cosine similarity 계산
-                vec_i = representative_vectors[i]
-                vec_j = representative_vectors[j]
-                
-                dot_product = np.dot(vec_i, vec_j)
-                norm_i = np.linalg.norm(vec_i)
-                norm_j = np.linalg.norm(vec_j)
-                
-                if norm_i == 0 or norm_j == 0:
-                    continue
-                
-                similarity = dot_product / (norm_i * norm_j)
-                
-                # 가드레일 A) 이중 임계값
-                if similarity >= threshold_high:
-                    # 즉시 union
-                    edges.append((i, j))
-                elif similarity >= threshold_low:
-                    # 가드레일 B) evidence overlap 체크
+        # 2. 유사도 그래프 만들기 (배치 벡터 연산 + aspect별 그룹화)
+        # - 개선 1) aspect가 같을 때만 비교 (기존 로직 유지)
+        # - 개선 2) threshold_high 이상이면 즉시 union
+        # - 개선 3) 같은 aspect 내 유사도는 행렬곱으로 배치 계산
+        edges: List[Tuple[int, int]] = []
+
+        # aspect별 인덱스 그룹화
+        aspect_to_indices: Dict[str, List[int]] = {}
+        for idx, s in enumerate(validated_strengths):
+            aspect = (s.get("aspect", "") or "").strip()
+            aspect_to_indices.setdefault(aspect, []).append(idx)
+
+        for aspect, indices in aspect_to_indices.items():
+            if len(indices) < 2:
+                continue
+
+            # (m, d) 형태로 스택 후 row-wise 정규화
+            vecs = np.stack([representative_vectors[i] for i in indices], axis=0).astype(np.float32, copy=False)
+            norms = np.linalg.norm(vecs, axis=1, keepdims=True)
+            # zero-norm 방지
+            norms = np.where(norms == 0, 1.0, norms)
+            vecs = vecs / norms
+
+            # cosine similarity matrix (m, m)
+            sim_matrix = vecs @ vecs.T
+
+            # upper triangle만 사용 (i < j)
+            tri_r, tri_c = np.triu_indices(len(indices), k=1)
+            sims = sim_matrix[tri_r, tri_c]
+
+            # threshold_high: 즉시 union
+            high_mask = sims >= threshold_high
+            if np.any(high_mask):
+                for r, c in zip(tri_r[high_mask], tri_c[high_mask]):
+                    edges.append((indices[int(r)], indices[int(c)]))
+
+            # threshold_low: evidence overlap 체크 후 union
+            low_mask = (sims >= threshold_low) & (~high_mask)
+            if np.any(low_mask):
+                for r, c in zip(tri_r[low_mask], tri_c[low_mask]):
+                    i = indices[int(r)]
+                    j = indices[int(c)]
                     evidence_ids_1 = validated_strengths[i].get("evidence_review_ids", [])
                     evidence_ids_2 = validated_strengths[j].get("evidence_review_ids", [])
-                    
                     overlap = self._calculate_evidence_overlap(evidence_ids_1, evidence_ids_2)
-                    
                     if overlap >= evidence_overlap_threshold:
                         edges.append((i, j))
         
@@ -1360,12 +1446,17 @@ claim만 반환하세요 (JSON 형식):"""
                 "validated_count": 0,
             }
         
-        # Step C: 강점별 근거 확장/검증
-        logger.info(f"Step C 시작: {len(strength_candidates)}개 강점 후보 검증 (min_support: {min_support})")
-        validated_strengths = self.expand_and_validate_evidence(
+        # Step C: 강점별 근거 확장/검증 (비동기 병렬 처리)
+        # 총 리뷰 수 조회 (동적 min_support 계산용)
+        all_reviews = self.vector_search.get_restaurant_reviews(str(restaurant_id))
+        total_reviews = len(all_reviews) if all_reviews else None
+        
+        logger.info(f"Step C 시작: {len(strength_candidates)}개 강점 후보 검증 (min_support: {min_support}, 총 리뷰: {total_reviews})")
+        validated_strengths = await self.expand_and_validate_evidence(
             strength_candidates=strength_candidates,
             restaurant_id=restaurant_id,
             min_support=min_support,
+            total_reviews=total_reviews,
         )
         
         logger.info(f"Step C 완료: {len(validated_strengths)}개 강점 검증 통과")

@@ -22,6 +22,7 @@ pandas>=2.0.0
 # Utilities
 python-dotenv>=1.0.0
 requests>=2.31.0
+psutil>=7.0.0
 
 # GPU Optimization (Phase 1 & 2)
 # Flash Attention-2: 메모리 효율 및 속도 향상

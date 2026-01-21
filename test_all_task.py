@@ -1056,18 +1056,29 @@ def evaluate_accuracy(
             if not gt_restaurant:
                 return None
             
-            # Precision@K 계산
+            # Precision@K, Recall@K 계산 (k=1, 3, 5, 10)
             predicted_strengths = api_result.get("strengths", [])
             gt_strengths = gt_restaurant.get("ground_truth_strengths", {})
             gt_all = gt_strengths.get("representative", []) + gt_strengths.get("distinct", [])
             
             if predicted_strengths and gt_all:
-                # 간단한 Precision@5 계산
-                precision_at_5 = evaluator.calculate_precision_at_k(
-                    predicted_strengths=predicted_strengths[:5],
-                    ground_truth_strengths=gt_all,
-                    k=5
-                )
+                k_values = [1, 3, 5, 10]
+                precision_at_k = {}
+                recall_at_k = {}
+                
+                # 각 k 값에 대해 Precision@k, Recall@k 계산
+                for k in k_values:
+                    precision_at_k[f"P@{k}"] = evaluator.calculate_precision_at_k(
+                        predicted_strengths=predicted_strengths[:k],
+                        ground_truth_strengths=gt_all,
+                        k=k
+                    )
+                    recall_at_k[f"R@{k}"] = evaluator.calculate_recall_at_k(
+                        predicted_strengths=predicted_strengths[:k],
+                        ground_truth_strengths=gt_all,
+                        k=k
+                    )
+                
                 coverage = evaluator.calculate_coverage(
                     predicted_strengths=predicted_strengths,
                     ground_truth_strengths=gt_all
@@ -1077,7 +1088,11 @@ def evaluate_accuracy(
                 coverage_value = coverage.get("coverage", 0.0) if isinstance(coverage, dict) else coverage
                 
                 return {
-                    "precision_at_5": precision_at_5,
+                    "k_values": k_values,
+                    "precision_at_k": precision_at_k,
+                    "recall_at_k": recall_at_k,
+                    "precision_at_5": precision_at_k.get("P@5", 0.0),  # 하위 호환성 유지
+                    "recall_at_5": recall_at_k.get("R@5", 0.0),  # 하위 호환성 유지
                     "coverage": coverage_value,
                 }
         
@@ -1732,11 +1747,38 @@ def test_extract_strengths(enable_benchmark: bool = False, num_iterations: int =
                 )
                 if accuracy_metrics:
                     print_info("정확도 평가 (Ground Truth 비교):")
-                    if accuracy_metrics.get("precision_at_5") is not None:
+                    
+                    # k_values 전체에 대한 Precision/Recall 출력
+                    if accuracy_metrics.get("precision_at_k"):
+                        print_info("  Precision@k:")
+                        precision_at_k = accuracy_metrics.get("precision_at_k", {})
+                        k_values = accuracy_metrics.get("k_values", [1, 3, 5, 10])
+                        for k in k_values:
+                            k_key = f"P@{k}"
+                            precision = precision_at_k.get(k_key, 0.0)
+                            if isinstance(precision, (int, float)):
+                                print(f"    - {k_key}: {float(precision):.4f} ({float(precision)*100:.2f}%)")
+                    
+                    if accuracy_metrics.get("recall_at_k"):
+                        print_info("  Recall@k:")
+                        recall_at_k = accuracy_metrics.get("recall_at_k", {})
+                        k_values = accuracy_metrics.get("k_values", [1, 3, 5, 10])
+                        for k in k_values:
+                            k_key = f"R@{k}"
+                            recall = recall_at_k.get(k_key, 0.0)
+                            if isinstance(recall, (int, float)):
+                                print(f"    - {k_key}: {float(recall):.4f} ({float(recall)*100:.2f}%)")
+                    
+                    # 하위 호환성: precision_at_5, recall_at_5 개별 출력도 지원
+                    if accuracy_metrics.get("precision_at_5") is not None and not accuracy_metrics.get("precision_at_k"):
                         precision_at_5 = accuracy_metrics['precision_at_5']
-                        # precision_at_5가 딕셔너리일 경우를 대비해 숫자로 변환
                         if isinstance(precision_at_5, (int, float)):
                             print(f"  - Precision@5: {float(precision_at_5):.4f}")
+                    if accuracy_metrics.get("recall_at_5") is not None and not accuracy_metrics.get("recall_at_k"):
+                        recall_at_5 = accuracy_metrics["recall_at_5"]
+                        if isinstance(recall_at_5, (int, float)):
+                            print(f"  - Recall@5: {float(recall_at_5):.4f}")
+                    
                     if accuracy_metrics.get("coverage") is not None:
                         coverage = accuracy_metrics['coverage']
                         # coverage가 딕셔너리일 경우를 대비해 숫자로 변환
@@ -1747,8 +1789,10 @@ def test_extract_strengths(enable_benchmark: bool = False, num_iterations: int =
                             coverage_value = coverage.get("coverage", 0.0)
                             if isinstance(coverage_value, (int, float)):
                                 print(f"  - Coverage: {float(coverage_value):.4f}")
+                    
                     target_accuracy = 0.88
-                    precision_at_5_value = accuracy_metrics.get("precision_at_5", 0)
+                    # precision_at_k에서 P@5 값을 우선 사용
+                    precision_at_5_value = accuracy_metrics.get("precision_at_k", {}).get("P@5") or accuracy_metrics.get("precision_at_5", 0)
                     if isinstance(precision_at_5_value, (int, float)) and float(precision_at_5_value) >= target_accuracy:
                         print_success(f"  ✓ 목표 달성 (목표: {target_accuracy}, 실제: {float(precision_at_5_value):.4f})")
                     elif isinstance(precision_at_5_value, (int, float)):
@@ -1813,11 +1857,38 @@ def test_extract_strengths(enable_benchmark: bool = False, num_iterations: int =
                 )
                 if accuracy_metrics:
                     print_info("정확도 평가 (Ground Truth 비교):")
-                    if accuracy_metrics.get("precision_at_5") is not None:
+                    
+                    # k_values 전체에 대한 Precision/Recall 출력
+                    if accuracy_metrics.get("precision_at_k"):
+                        print_info("  Precision@k:")
+                        precision_at_k = accuracy_metrics.get("precision_at_k", {})
+                        k_values = accuracy_metrics.get("k_values", [1, 3, 5, 10])
+                        for k in k_values:
+                            k_key = f"P@{k}"
+                            precision = precision_at_k.get(k_key, 0.0)
+                            if isinstance(precision, (int, float)):
+                                print(f"    - {k_key}: {float(precision):.4f} ({float(precision)*100:.2f}%)")
+                    
+                    if accuracy_metrics.get("recall_at_k"):
+                        print_info("  Recall@k:")
+                        recall_at_k = accuracy_metrics.get("recall_at_k", {})
+                        k_values = accuracy_metrics.get("k_values", [1, 3, 5, 10])
+                        for k in k_values:
+                            k_key = f"R@{k}"
+                            recall = recall_at_k.get(k_key, 0.0)
+                            if isinstance(recall, (int, float)):
+                                print(f"    - {k_key}: {float(recall):.4f} ({float(recall)*100:.2f}%)")
+                    
+                    # 하위 호환성: precision_at_5, recall_at_5 개별 출력도 지원
+                    if accuracy_metrics.get("precision_at_5") is not None and not accuracy_metrics.get("precision_at_k"):
                         precision_at_5 = accuracy_metrics['precision_at_5']
-                        # precision_at_5가 딕셔너리일 경우를 대비해 숫자로 변환
                         if isinstance(precision_at_5, (int, float)):
                             print(f"  - Precision@5: {float(precision_at_5):.4f}")
+                    if accuracy_metrics.get("recall_at_5") is not None and not accuracy_metrics.get("recall_at_k"):
+                        recall_at_5 = accuracy_metrics["recall_at_5"]
+                        if isinstance(recall_at_5, (int, float)):
+                            print(f"  - Recall@5: {float(recall_at_5):.4f}")
+                    
                     if accuracy_metrics.get("coverage") is not None:
                         coverage = accuracy_metrics['coverage']
                         # coverage가 딕셔너리일 경우를 대비해 숫자로 변환
@@ -1924,9 +1995,19 @@ def test_vector_search(enable_benchmark: bool = False, num_iterations: int = 5):
                                         if isinstance(precision, (int, float)):
                                             print(f"  - {k_key}: {float(precision):.4f} ({float(precision)*100:.2f}%)")
                                     
+                                    avg_recalls = precision_result.get("average_recalls", {})
+                                    if avg_recalls:
+                                        print_info("Recall@k 평가 (임베딩 모델 정확도):")
+                                        for k in k_values:
+                                            k_key = f"R@{k}"
+                                            recall = avg_recalls.get(k_key, 0.0)
+                                            if isinstance(recall, (int, float)):
+                                                print(f"  - {k_key}: {float(recall):.4f} ({float(recall)*100:.2f}%)")
+                                    
                                     precision_metrics = {
                                         "k_values": k_values,
                                         "average_precisions": avg_precisions,
+                                        "average_recalls": avg_recalls if avg_recalls else None,
                                         "total_queries": precision_result.get("total_queries", 0),
                                         "evaluated_queries": precision_result.get("evaluated_queries", 0),
                                     }
@@ -2073,6 +2154,87 @@ def test_review_image_search(enable_benchmark: bool = False, num_iterations: int
                     if db_metrics.get("avg_tokens_used"):
                         print(f"  - 평균 토큰 사용량: {db_metrics['avg_tokens_used']:.0f} tokens")
                 
+                # Precision@k / Recall@k 평가 (임베딩 모델 정확도 측정)
+                precision_metrics = None
+                if EVALUATION_AVAILABLE:
+                    try:
+                        ground_truth_path = str(project_root / "scripts" / "Ground_truth_vector_search.json")
+                        if Path(ground_truth_path).exists():
+                            evaluator = PrecisionAtKEvaluator(
+                                base_url=BASE_URL,
+                                ground_truth_path=ground_truth_path
+                            )
+                            
+                            # 이미지 검색 결과에서 review_id 추출
+                            last_response = stats.get("last_successful_response", {})
+                            if last_response and last_response.get("results"):
+                                # 이미지 검색 결과를 벡터 검색 형식으로 변환하여 평가
+                                # 쿼리와 레스토랑 ID를 사용하여 Ground Truth와 매칭
+                                query_text = payload.get("query", "")
+                                restaurant_id = payload.get("restaurant_id")
+                                
+                                # Precision@k 평가 수행 (k=1, 3, 5, 10)
+                                k_values = [1, 3, 5, 10]
+                                
+                                # 이미지 검색 결과에서 review_id 리스트 추출
+                                retrieved_review_ids = []
+                                for result in last_response.get("results", []):
+                                    review_id = result.get("review_id")
+                                    if review_id is not None:
+                                        try:
+                                            retrieved_review_ids.append(int(review_id))
+                                        except (ValueError, TypeError):
+                                            continue
+                                
+                                if retrieved_review_ids and evaluator.ground_truth:
+                                    # Ground Truth에서 해당 쿼리와 레스토랑 ID로 관련 문서 찾기
+                                    queries = evaluator.ground_truth.get("queries", [])
+                                    relevant_ids = set()
+                                    for query_data in queries:
+                                        if (query_data.get("query") == query_text or 
+                                            (restaurant_id and query_data.get("restaurant_id") == restaurant_id)):
+                                            relevant_ids.update(query_data.get("relevant_review_ids", []))
+                                    
+                                    if relevant_ids:
+                                        # Precision@k, Recall@k 계산
+                                        precision_at_k = {}
+                                        recall_at_k = {}
+                                        for k in k_values:
+                                            precision_at_k[f"P@{k}"] = evaluator.calculate_precision_at_k(
+                                                retrieved_ids=retrieved_review_ids,
+                                                relevant_ids=relevant_ids,
+                                                k=k
+                                            )
+                                            recall_at_k[f"R@{k}"] = evaluator.calculate_recall_at_k(
+                                                retrieved_ids=retrieved_review_ids,
+                                                relevant_ids=relevant_ids,
+                                                k=k
+                                            )
+                                        
+                                        if precision_at_k or recall_at_k:
+                                            print_info("Precision@k / Recall@k 평가 (임베딩 모델 정확도):")
+                                            for k in k_values:
+                                                k_key_p = f"P@{k}"
+                                                k_key_r = f"R@{k}"
+                                                precision = precision_at_k.get(k_key_p, 0.0)
+                                                recall = recall_at_k.get(k_key_r, 0.0)
+                                                if isinstance(precision, (int, float)):
+                                                    print(f"  - {k_key_p}: {float(precision):.4f} ({float(precision)*100:.2f}%)")
+                                                if isinstance(recall, (int, float)):
+                                                    print(f"  - {k_key_r}: {float(recall):.4f} ({float(recall)*100:.2f}%)")
+                                        
+                                        precision_metrics = {
+                                            "k_values": k_values,
+                                            "precision_at_k": precision_at_k,
+                                            "recall_at_k": recall_at_k,
+                                            "total_queries": 1,
+                                            "evaluated_queries": 1 if relevant_ids else 0,
+                                        }
+                        else:
+                            print_warning(f"Ground Truth 파일을 찾을 수 없습니다: {ground_truth_path}")
+                    except Exception as e:
+                        print_warning(f"Precision@k / Recall@k 평가 실패: {str(e)}")
+                
                 # JSON 저장용 메트릭 수집
                 test_metrics["리뷰 이미지 검색"] = {
                     "performance": {
@@ -2093,7 +2255,7 @@ def test_review_image_search(enable_benchmark: bool = False, num_iterations: int
                         "target_p99_achieved": p99_time <= target_p99,
                     },
                     "sqlite_metrics": db_metrics if db_metrics else None,
-                    "accuracy": None,  # 이미지 검색은 정확도 평가 없음
+                    "accuracy": precision_metrics if precision_metrics else None,  # Precision@k / Recall@k 메트릭
                 }
                 
                 return True
@@ -2179,6 +2341,11 @@ def run_tests_for_model(
         print_header(f"모델 테스트: {model_name} ({provider})")
         print_info(f"서버 URL: {BASE_URL}")
         
+        # test_metrics 초기화 (모델별로 독립적으로 관리)
+        global test_metrics
+        original_test_metrics = test_metrics.copy()
+        test_metrics.clear()
+        
         # 테스트 실행
         selected_tests = tests or ["summarize", "summarize_batch"]
         if "all" in selected_tests:
@@ -2202,9 +2369,29 @@ def run_tests_for_model(
             label, fn = test_registry[key]
             results.append((label, fn()))
         
+        # test_metrics 저장 (모델별로)
+        model_test_metrics = test_metrics.copy()
+        
+        # results를 qwen.json과 유사한 구조로도 제공 (형식 변환 X, 반환값에만 포함)
+        # - compare_models 저장 시 이 구조를 그대로 덤프하면 모든 메트릭이 포함됨
+        test_results: Dict[str, Any] = {}
+        for test_name, ok in results:
+            test_result_dict: Dict[str, Any] = {
+                "status": "passed" if ok else "failed",
+                "success": ok,
+            }
+            if test_name in model_test_metrics:
+                # performance/sqlite_metrics/accuracy 등 모든 메트릭 포함
+                test_result_dict.update(model_test_metrics[test_name])
+            test_results[test_name] = test_result_dict
+        
         # 결과 집계
         success_count = sum(1 for _, result in results if result)
         total_count = len(results)
+        
+        # test_metrics 복원
+        test_metrics.clear()
+        test_metrics.update(original_test_metrics)
         
         return {
             "model_name": model_name,
@@ -2212,7 +2399,9 @@ def run_tests_for_model(
             "success_count": success_count,
             "total_count": total_count,
             "success_rate": (success_count / total_count * 100) if total_count > 0 else 0,
-            "results": results,
+            "results": results,  # 기존 호환
+            "test_results": test_results,  # 권장: 테스트별 + 메트릭까지 포함된 구조
+            "test_metrics": model_test_metrics,  # 모든 메트릭 원본 (디버깅/후처리용)
         }
     finally:
         # 환경 변수 복원
@@ -2346,7 +2535,7 @@ def compare_models(
             status = "✓" if success_rate == 100 else "⚠" if success_rate >= 50 else "✗"
             print(f"  {status} {model_name}: {success_rate:.1f}% ({result['success_count']}/{result['total_count']})")
     
-    # 결과 저장
+    # 결과 저장 (형식 변환 없이, 반환값 그대로 저장)
     if save_results:
         with open(save_results, 'w', encoding='utf-8') as f:
             json.dump(all_results, f, ensure_ascii=False, indent=2)
@@ -2451,7 +2640,7 @@ def main():
     parser.add_argument(
         "--tests",
         nargs="+",
-        default=["summarize", "summarize_batch"],
+        default=["all"],
         choices=["all", "sentiment", "sentiment_batch", "summarize", "summarize_batch", "strength", "vector", "image_search"],
         help="실행할 테스트 선택 (기본값: summarize summarize_batch). 예: --tests summarize summarize_batch",
     )

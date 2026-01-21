@@ -83,6 +83,34 @@ class PrecisionAtKEvaluator:
         precision = relevant_count / k
         
         return precision
+
+    def calculate_recall_at_k(
+        self,
+        retrieved_ids: List[int],
+        relevant_ids: Set[int],
+        k: int
+    ) -> float:
+        """
+        Recall@k 계산
+        
+        - Recall@k = (상위 k개 검색 결과 중 관련 있는 문서 수) / (전체 관련 문서 수)
+        
+        Args:
+            retrieved_ids: 검색된 리뷰 ID 리스트 (상위 k개 사용)
+            relevant_ids: 관련 있는 리뷰 ID 집합
+            k: 평가할 상위 k개 결과
+            
+        Returns:
+            Recall@k 값 (0.0 ~ 1.0)
+        """
+        if k == 0:
+            return 0.0
+        if not relevant_ids:
+            return 0.0
+        
+        top_k_ids = retrieved_ids[:k]
+        relevant_count = sum(1 for doc_id in top_k_ids if doc_id in relevant_ids)
+        return relevant_count / len(relevant_ids)
     
     def search_reviews(
         self,
@@ -174,6 +202,7 @@ class PrecisionAtKEvaluator:
         logger.info(f"총 {len(queries)}개 쿼리 평가 시작 (k 값: {k_values})")
         
         all_precisions = {k: [] for k in k_values}
+        all_recalls = {k: [] for k in k_values}
         query_results = []
         
         for idx, query_data in enumerate(queries, 1):
@@ -212,6 +241,7 @@ class PrecisionAtKEvaluator:
             
             # 각 k 값에 대한 Precision@k 계산
             precisions = {}
+            recalls = {}
             for k in k_values:
                 precision = self.calculate_precision_at_k(
                     retrieved_ids=retrieved_ids,
@@ -220,6 +250,14 @@ class PrecisionAtKEvaluator:
                 )
                 precisions[f"P@{k}"] = precision
                 all_precisions[k].append(precision)
+
+                recall = self.calculate_recall_at_k(
+                    retrieved_ids=retrieved_ids,
+                    relevant_ids=relevant_ids,
+                    k=k
+                )
+                recalls[f"R@{k}"] = recall
+                all_recalls[k].append(recall)
             
             query_result = {
                 "query": query_text,
@@ -227,21 +265,29 @@ class PrecisionAtKEvaluator:
                 "retrieved_count": len(retrieved_ids),
                 "relevant_count": len(relevant_ids),
                 "retrieved_ids": retrieved_ids[:max(k_values)],  # 최대 k값까지만 저장
-                "precisions": precisions
+                "precisions": precisions,
+                "recalls": recalls,
             }
             query_results.append(query_result)
             
             # 진행 상황 출력
             precisions_str = ", ".join([f"P@{k}={precisions[f'P@{k}']:.3f}" for k in k_values])
-            logger.info(f"  검색된 문서 수: {len(retrieved_ids)}, {precisions_str}")
+            recalls_str = ", ".join([f"R@{k}={recalls[f'R@{k}']:.3f}" for k in k_values])
+            logger.info(f"  검색된 문서 수: {len(retrieved_ids)}, {precisions_str}, {recalls_str}")
         
         # 전체 평균 계산
         avg_precisions = {}
+        avg_recalls = {}
         for k in k_values:
             if all_precisions[k]:
                 avg_precisions[f"P@{k}"] = sum(all_precisions[k]) / len(all_precisions[k])
             else:
                 avg_precisions[f"P@{k}"] = 0.0
+
+            if all_recalls[k]:
+                avg_recalls[f"R@{k}"] = sum(all_recalls[k]) / len(all_recalls[k])
+            else:
+                avg_recalls[f"R@{k}"] = 0.0
         
         result = {
             "timestamp": datetime.now().isoformat(),
@@ -249,6 +295,7 @@ class PrecisionAtKEvaluator:
             "evaluated_queries": len(query_results),
             "k_values": k_values,
             "average_precisions": avg_precisions,
+            "average_recalls": avg_recalls,
             "query_results": query_results
         }
         
@@ -257,16 +304,18 @@ class PrecisionAtKEvaluator:
     def print_summary(self, result: Dict[str, Any]):
         """평가 결과 요약 출력"""
         print("\n" + "="*60)
-        print("Precision@k 평가 결과 요약")
+        print("Precision@k / Recall@k 평가 결과 요약")
         print("="*60)
         
         print(f"\n총 쿼리 수: {result['total_queries']}")
         print(f"평가된 쿼리 수: {result['evaluated_queries']}")
-        print(f"\n평균 Precision@k:")
+        print(f"\n평균 Precision@k / Recall@k:")
         
         for k in result['k_values']:
             avg_precision = result['average_precisions'][f"P@{k}"]
+            avg_recall = result.get('average_recalls', {}).get(f"R@{k}", 0.0)
             print(f"  P@{k}: {avg_precision:.4f} ({avg_precision*100:.2f}%)")
+            print(f"  R@{k}: {avg_recall:.4f} ({avg_recall*100:.2f}%)")
         
         print("="*60 + "\n")
 

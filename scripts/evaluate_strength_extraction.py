@@ -153,6 +153,55 @@ class StrengthExtractionEvaluator:
         
         return precision
     
+    def calculate_recall_at_k(
+        self,
+        predicted_strengths: List[Dict[str, Any]],
+        ground_truth_strengths: List[Dict[str, Any]],
+        k: int,
+    ) -> float:
+        """
+        Recall@K 계산
+        
+        정의:
+        - GT(정답) aspect 집합을 만들고,
+        - 예측 상위 k개에서 GT aspect를 몇 개 '맞췄는지'를 세어
+        - Recall@K = (맞춘 GT aspect 수) / (전체 GT aspect 수)
+        
+        Args:
+            predicted_strengths: 예측된 강점 리스트 (final_score 기준 정렬 가정)
+            ground_truth_strengths: Ground Truth 강점 리스트
+            k: 평가할 상위 k개 강점
+            
+        Returns:
+            Recall@K 값 (0.0 ~ 1.0)
+        """
+        if k == 0 or not predicted_strengths:
+            return 0.0
+        
+        # Ground Truth aspect 집합 생성
+        gt_aspects = set()
+        for strength in ground_truth_strengths:
+            aspect = self.normalize_aspect(strength.get("aspect", ""))
+            if aspect:
+                gt_aspects.add(aspect)
+        
+        if not gt_aspects:
+            return 0.0
+        
+        # 상위 k개 강점만 사용
+        top_k_strengths = predicted_strengths[:k]
+        
+        # 관련 있는(GT에 포함되는) 강점 수 계산
+        relevant_count = 0
+        for strength in top_k_strengths:
+            aspect = self.normalize_aspect(strength.get("aspect", ""))
+            if aspect in gt_aspects:
+                relevant_count += 1
+        
+        # Recall@K = 관련 있는 강점 수 / |GT|
+        recall = relevant_count / len(gt_aspects)
+        return recall
+    
     def calculate_coverage(
         self,
         predicted_strengths: List[Dict[str, Any]],
