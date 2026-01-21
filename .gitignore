@@ -1,7 +1,6 @@
 __pycache__/
 .env
 venv/
-.env.*
 .DS_Store
 .cursor/data/kr3.tsv
 data/kr3.tsv
