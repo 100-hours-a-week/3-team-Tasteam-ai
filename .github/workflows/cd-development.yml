@@ -36,7 +36,6 @@ jobs:
           key: ${{ secrets.DEVELOP_KEY }}
           port: ${{ secrets.DEVELOP_PORT || 22 }}
           command_timeout: 10m
-          script_stop: true
           script: |
             set -e
 
@@ -45,6 +44,7 @@ jobs:
 
             # 1. 기존 프로세스 중지
             pkill -f "uvicorn" || true
+            sleep 1
 
             # 2. 소스 교체 (venv, logs는 유지)
             rm -rf $APP_DIR/src $APP_DIR/app.py $APP_DIR/requirements.txt $APP_DIR/README.md $APP_DIR/data $APP_DIR/scripts $APP_DIR/test_all_task.py
@@ -53,18 +53,21 @@ jobs:
 
             # 3. 의존성 설치
             cd $APP_DIR
-            source venv/bin/activate
-            pip install -r requirements.txt --quiet
+            $APP_DIR/venv/bin/pip install -r requirements.txt --quiet
 
-            # 4. 애플리케이션 시작
-            nohup python app.py > logs/app.log 2>&1 &
+            # 4. 애플리케이션 시작 (백그라운드로 완전히 분리)
+            nohup $APP_DIR/venv/bin/python app.py > logs/app.log 2>&1 &
+            APP_PID=$!
+            disown $APP_PID
 
             # 5. 시작 확인
-            sleep 2
-            if pgrep -f "python app.py" > /dev/null; then
-              echo "Application started successfully"
+            sleep 3
+            if ps -p $APP_PID > /dev/null; then
+              echo "Application started successfully (PID: $APP_PID)"
+              exit 0
             else
               echo "Failed to start application"
+              tail -20 logs/app.log
               exit 1
             fi
 
