@@ -36,38 +36,51 @@ jobs:
           key: ${{ secrets.DEVELOP_KEY }}
           port: ${{ secrets.DEVELOP_PORT || 22 }}
           command_timeout: 10m
+          request_pty: false
           script: |
             set -e
 
             APP_DIR="/home/${{ secrets.DEVELOP_USERNAME }}/ai"
             TEMP_DIR="$APP_DIR/temp"
+            PORT=8001
 
-            # 1. 기존 프로세스 중지
-            pkill -f "uvicorn" || true
-            sleep 1
+            echo "===== AI 서버 배포 시작 ====="
+
+            # 1. 기존 프로세스 중지 (포트 기반)
+            echo "[1/5] 기존 프로세스 종료"
+            PID=$(lsof -ti :$PORT || true)
+            if [ -n "$PID" ]; then
+              kill -15 "$PID"
+              sleep 2
+            fi
 
             # 2. 소스 교체 (venv, logs는 유지)
+            echo "[2/5] 소스 코드 교체"
             rm -rf $APP_DIR/src $APP_DIR/app.py $APP_DIR/requirements.txt $APP_DIR/README.md $APP_DIR/data $APP_DIR/scripts $APP_DIR/test_all_task.py
             cp -r $TEMP_DIR/* $APP_DIR/
             rm -rf $TEMP_DIR/*
 
-            # 3. 의존성 설치
+            # 3. 가상환경 및 의존성 설치
+            echo "[3/5] 의존성 설치"
             cd $APP_DIR
-            $APP_DIR/venv/bin/pip install -r requirements.txt --quiet
+            python3 -m venv venv
+            source venv/bin/activate
+            pip install --no-cache-dir -r requirements.txt
 
-            # 4. 애플리케이션 시작 (백그라운드로 완전히 분리)
-            nohup $APP_DIR/venv/bin/python app.py > logs/app.log 2>&1 &
-            APP_PID=$!
-            disown $APP_PID
+            # 4. 애플리케이션 시작
+            echo "[4/5] FastAPI 서버 실행"
+            nohup python3 app.py > logs/ai.log 2>&1 &
 
             # 5. 시작 확인
-            sleep 3
-            if ps -p $APP_PID > /dev/null; then
-              echo "Application started successfully (PID: $APP_PID)"
+            echo "[5/5] 서버 시작 확인"
+            sleep 2
+            if lsof -ti :$PORT > /dev/null; then
+              echo "===== 배포 완료 ====="
+              echo "AI 서버 실행 중 (port $PORT)"
               exit 0
             else
-              echo "Failed to start application"
-              tail -20 logs/app.log
+              echo "===== 배포 실패 ====="
+              tail -20 logs/ai.log
               exit 1
             fi
 
