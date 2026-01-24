@@ -2,6 +2,7 @@
 set -e
 
 APP_DIR="/home/appuser/ai"
+TEMP_DIR="$APP_DIR/temp"
 PORT=8001
 
 echo "===== AI 서버 배포 시작 ====="
@@ -37,11 +38,20 @@ fi
 echo "[2/5] 소스 코드 교체"
 cd $APP_DIR
 
-# temp 디렉토리 확인
-if [ ! -d "$TEMP_DIR" ] || [ -z "$(ls -A $TEMP_DIR)" ]; then
-  echo "에러: temp 디렉토리가 비어있습니다. SCP 전송이 완료되지 않았습니다."
-  exit 1
-fi
+# temp 디렉토리 확인 (최대 30초 대기)
+for i in {1..30}; do
+  if [ -d "$TEMP_DIR" ] && [ -n "$(ls -A $TEMP_DIR 2>/dev/null)" ]; then
+    echo "temp 디렉토리 준비 완료"
+    break
+  fi
+  if [ $i -eq 30 ]; then
+    echo "에러: temp 디렉토리가 비어있습니다. SCP 전송이 완료되지 않았습니다."
+    ls -la $TEMP_DIR || echo "temp 디렉토리가 존재하지 않습니다"
+    exit 1
+  fi
+  echo "temp 디렉토리 대기 중... ($i/30)"
+  sleep 1
+done
 
 # 기존 소스 삭제 (venv, logs는 유지)
 rm -rf src app.py requirements.txt README.md data scripts test_all_task.py
