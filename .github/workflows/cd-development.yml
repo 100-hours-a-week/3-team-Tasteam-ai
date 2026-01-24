@@ -23,9 +23,10 @@ jobs:
           username: ${{ secrets.DEVELOP_USERNAME }}
           key: ${{ secrets.DEVELOP_KEY }}
           port: ${{ secrets.DEVELOP_PORT || 22 }}
-          source: "./*"
+          source: "src,app.py,requirements.txt,README.md,data,scripts,test_all_task.py"
           target: "/home/${{ secrets.DEVELOP_USERNAME }}/ai/temp"
           strip_components: 0
+          rm: true
 
       # 3. 배포 스크립트 전송
       - name: Transfer Startup Script
