@@ -27,7 +27,19 @@ jobs:
           target: "/home/${{ secrets.DEVELOP_USERNAME }}/ai/temp"
           strip_components: 0
 
-      # 3. 배포 실행 (중단 배포)
+      # 3. 배포 스크립트 전송
+      - name: Transfer Startup Script
+        uses: appleboy/scp-action@master
+        with:
+          host: ${{ secrets.DEVELOP_HOST }}
+          username: ${{ secrets.DEVELOP_USERNAME }}
+          key: ${{ secrets.DEVELOP_KEY }}
+          port: ${{ secrets.DEVELOP_PORT || 22 }}
+          source: "ai-startup.sh"
+          target: "/home/${{ secrets.DEVELOP_USERNAME }}/ai/"
+          strip_components: 0
+
+      # 4. 배포 실행
       - name: Deploy Application
         uses: appleboy/ssh-action@master
         with:
@@ -38,53 +50,10 @@ jobs:
           command_timeout: 10m
           request_pty: false
           script: |
-            set -e
+            chmod +x /home/${{ secrets.DEVELOP_USERNAME }}/ai/ai-startup.sh
+            bash /home/${{ secrets.DEVELOP_USERNAME }}/ai/ai-startup.sh
 
-            APP_DIR="/home/${{ secrets.DEVELOP_USERNAME }}/ai"
-            TEMP_DIR="$APP_DIR/temp"
-            PORT=8001
-
-            echo "===== AI 서버 배포 시작 ====="
-
-            # 1. 기존 프로세스 중지 (포트 기반)
-            echo "[1/5] 기존 프로세스 종료"
-            PID=$(lsof -ti :$PORT || true)
-            if [ -n "$PID" ]; then
-              kill -15 "$PID"
-              sleep 2
-            fi
-
-            # 2. 소스 교체 (venv, logs는 유지)
-            echo "[2/5] 소스 코드 교체"
-            rm -rf $APP_DIR/src $APP_DIR/app.py $APP_DIR/requirements.txt $APP_DIR/README.md $APP_DIR/data $APP_DIR/scripts $APP_DIR/test_all_task.py
-            cp -r $TEMP_DIR/* $APP_DIR/
-            rm -rf $TEMP_DIR/*
-
-            # 3. 가상환경 및 의존성 설치
-            echo "[3/5] 의존성 설치"
-            cd $APP_DIR
-            python3 -m venv venv
-            source venv/bin/activate
-            pip install --no-cache-dir -r requirements.txt
-
-            # 4. 애플리케이션 시작
-            echo "[4/5] FastAPI 서버 실행"
-            nohup python3 app.py > logs/ai.log 2>&1 &
-
-            # 5. 시작 확인
-            echo "[5/5] 서버 시작 확인"
-            sleep 2
-            if lsof -ti :$PORT > /dev/null; then
-              echo "===== 배포 완료 ====="
-              echo "AI 서버 실행 중 (port $PORT)"
-              exit 0
-            else
-              echo "===== 배포 실패 ====="
-              tail -20 logs/ai.log
-              exit 1
-            fi
-
-      # 4. 배포 결과 알림
+      # 5. 배포 결과 알림
       - name: Notify Deployment Result
         if: always()
         uses: sarisia/actions-status-discord@v1
