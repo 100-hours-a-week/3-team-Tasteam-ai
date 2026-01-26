@@ -24,8 +24,6 @@ jobs:
       - name: Syntax Check
         run: python -m py_compile app.py
 
-      # Feature 브랜치에서는 Import 검증, 테스트, SonarCloud 생략
-
       # CI 결과 알림 (실패 시에만)
       - name: Notify CI result to Discord
         if: failure()
