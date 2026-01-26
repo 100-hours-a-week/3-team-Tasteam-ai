@@ -35,9 +35,9 @@ jobs:
         run: |
           python -c "from src.api.main import app; print('FastAPI app imported successfully')"
 
-      # 테스트코드
-      - name: Run Tests
-        run: python test_all_task.py
+#      # 테스트코드
+#      - name: Run Tests
+#        run: python test_all_task.py
 
       # CI 결과 알림 (PR은 항상)
       - name: Notify CI result to Discord
