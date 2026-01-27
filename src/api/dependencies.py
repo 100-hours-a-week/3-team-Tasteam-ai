@@ -4,7 +4,6 @@ FastAPI 의존성 주입
 
 from functools import lru_cache
 from fastapi import Depends, Header, Query
-from sentence_transformers import SentenceTransformer
 from qdrant_client import QdrantClient
 from typing import Optional
 
@@ -14,16 +13,15 @@ from ..vector_search import VectorSearch
 from ..llm_utils import LLMUtils
 from ..metrics_collector import MetricsCollector
 
-
-@lru_cache()
-def get_encoder() -> SentenceTransformer:
-    """SentenceTransformer 인코더 싱글톤"""
-    return SentenceTransformer(Config.EMBEDDING_MODEL)
+# 의존성 싱글톤 (매 요청 인스턴스 생성 방지 — Encoder/Qdrant는 @lru_cache, 나머지는 모듈 캐시)
+_vector_search_singleton: Optional[VectorSearch] = None
+_sentiment_analyzer_singleton: Optional[SentimentAnalyzer] = None
 
 
 @lru_cache()
 def get_qdrant_client() -> QdrantClient:
     """Qdrant 클라이언트 싱글톤"""
+    # 메모리 모드
     if Config.QDRANT_URL == ":memory:":
         return QdrantClient(location=":memory:")
     
@@ -32,7 +30,18 @@ def get_qdrant_client() -> QdrantClient:
         return QdrantClient(url=Config.QDRANT_URL)
     
     # 그 외는 로컬 파일 경로 (on-disk)
-    return QdrantClient(path=Config.QDRANT_URL)
+    # 디렉토리가 없으면 자동 생성
+    import os
+    qdrant_path = Config.QDRANT_URL
+    if not os.path.isabs(qdrant_path):
+        # 상대 경로인 경우 프로젝트 루트 기준으로 변환
+        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        qdrant_path = os.path.join(project_root, qdrant_path)
+    
+    # 디렉토리 생성
+    os.makedirs(qdrant_path, exist_ok=True)
+    
+    return QdrantClient(path=qdrant_path)
 
 
 @lru_cache()
@@ -84,23 +93,23 @@ def get_debug_mode(
 
 
 def get_vector_search(
-    encoder: SentenceTransformer = Depends(get_encoder),
     qdrant_client: QdrantClient = Depends(get_qdrant_client),
 ) -> VectorSearch:
-    """벡터 검색 의존성"""
-    return VectorSearch(
-        encoder=encoder,
-        qdrant_client=qdrant_client,
-        collection_name=Config.COLLECTION_NAME,
-    )
+    """벡터 검색 의존성 (싱글톤 — FastEmbed Dense+Sparse, 초기화 비용 재사용)"""
+    global _vector_search_singleton
+    if _vector_search_singleton is None:
+        _vector_search_singleton = VectorSearch(
+            qdrant_client=qdrant_client,
+            collection_name=Config.COLLECTION_NAME,
+        )
+    return _vector_search_singleton
 
 
 def get_sentiment_analyzer(
-    llm_utils: LLMUtils = Depends(get_llm_utils),
     vector_search: VectorSearch = Depends(get_vector_search),
 ) -> SentimentAnalyzer:
-    """감성 분석기 의존성"""
-    return SentimentAnalyzer(
-        llm_utils=llm_utils,
-        vector_search=vector_search,
-    )
+    """감성 분석기 의존성 (싱글톤 — HF pipeline 로딩 비용 재사용)"""
+    global _sentiment_analyzer_singleton
+    if _sentiment_analyzer_singleton is None:
+        _sentiment_analyzer_singleton = SentimentAnalyzer(vector_search=vector_search)
+    return _sentiment_analyzer_singleton

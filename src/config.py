@@ -12,7 +12,8 @@ except ImportError:
 
 # 기본 설정값
 DEFAULT_SENTIMENT_MODEL = "Dilwolf/Kakao_app-kr_sentiment"
-DEFAULT_EMBEDDING_MODEL = "dragonkue/BGE-m3-ko"
+# final_summary_pipeline과 동일: sentence-transformers/paraphrase-multilingual-mpnet-base-v2 (768 dim)
+DEFAULT_EMBEDDING_MODEL = "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"
 DEFAULT_LLM_MODEL = "Qwen/Qwen2.5-7B-Instruct"
 DEFAULT_SCORE_THRESHOLD = 0.8
 DEFAULT_MAX_RETRIES = 3
@@ -28,10 +29,6 @@ class Config:
     
     # 모델 설정 (환경 변수 지원)
     SENTIMENT_MODEL: str = os.getenv("SENTIMENT_MODEL", DEFAULT_SENTIMENT_MODEL)
-    # sentiment 계산 방식 선택
-    # - "model": HuggingFace sentiment 모델로 전체 리뷰 분류 → count/ratio를 코드에서 계산 (기본값)
-    # - "llm": 기존 LLM sentiment 방식(전체 리뷰 기반) 활성화 (샘플링 없음)
-    SENTIMENT_METHOD: str = os.getenv("SENTIMENT_METHOD", "model").lower()
     # Sentiment 샘플링 설정
     ENABLE_SENTIMENT_SAMPLING: bool = os.getenv("ENABLE_SENTIMENT_SAMPLING", "false").lower() == "true"  # 샘플링 활성화 여부
     SENTIMENT_RECENT_TOP_K: int = int(os.getenv("SENTIMENT_RECENT_TOP_K", "100"))  # 샘플링 시 사용할 최근 리뷰 수 (기본값: 100)
@@ -46,10 +43,11 @@ class Config:
     
     # Qdrant 설정
     COLLECTION_NAME: str = DEFAULT_COLLECTION_NAME
+    # QDRANT_URL: ":memory:" (메모리), "./qdrant_db" (on-disk), "http://localhost:6333" (원격 서버)
     QDRANT_URL: Optional[str] = os.getenv("QDRANT_URL", ":memory:")
     
     # GPU 설정
-    USE_GPU: bool = os.getenv("USE_GPU", "true").lower() == "true"
+    USE_GPU: bool = os.getenv("USE_GPU#", "true").lower() == "true"
     GPU_DEVICE: int = int(os.getenv("GPU_DEVICE", "0"))
     USE_FP16: bool = os.getenv("USE_FP16", "true").lower() == "true"
     
@@ -102,6 +100,15 @@ class Config:
     
     # SKIP 로직 설정 (초기 전략: analysis_metrics 기반)
     SKIP_MIN_INTERVAL_SECONDS: int = int(os.getenv("SKIP_MIN_INTERVAL_SECONDS", "3600"))  # 최소 간격 (초, 기본값: 1시간)
+    
+    # Strength Extraction - 전체 데이터셋 평균 비율 (배치 작업 결과로 교체 필요)
+    ALL_AVERAGE_SERVICE_RATIO: float = float(os.getenv("ALL_AVERAGE_SERVICE_RATIO", "0.60"))  # 전체 평균 서비스 긍정 비율
+    ALL_AVERAGE_PRICE_RATIO: float = float(os.getenv("ALL_AVERAGE_PRICE_RATIO", "0.55"))  # 전체 평균 가격 긍정 비율
+    # strength_in_aspect와 동일한 '전체' 사용: aspect_data 파일(TSV의 Review 컬럼, JSON의 content)에서 계산
+    ALL_AVERAGE_ASPECT_DATA_PATH: Optional[str] = os.getenv("ALL_AVERAGE_ASPECT_DATA_PATH","/Users/js/tasteam-aicode-gpu-all-python-process-runtime_for_github/data/test_data_sample.json")  # 예: data/kr3.tsv
+    
+    # Aspect Seed 파일 경로 (선택적)
+    ASPECT_SEEDS_FILE: Optional[str] = os.getenv("ASPECT_SEEDS_FILE")  # Aspect seed JSON 파일 경로
     
     @classmethod
     def get_device(cls):

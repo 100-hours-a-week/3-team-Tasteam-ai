@@ -10,3 +10,4 @@ metrics.db-wal
 logs/
 package-lock.json
 package.json
+__pycache__/
