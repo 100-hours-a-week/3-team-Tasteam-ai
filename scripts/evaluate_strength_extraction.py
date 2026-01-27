@@ -94,6 +94,10 @@ class StrengthExtractionEvaluator:
             logger.error(f"강점 추출 중 오류 발생: {e}")
             return {}
     
+    def _get_aspect(self, strength: Dict[str, Any]) -> str:
+        """예측/GT 강점에서 aspect 추출 (신규 API는 category만 있음)."""
+        return (strength.get("aspect") or strength.get("category") or "")
+
     def normalize_aspect(self, aspect: str) -> str:
         """
         Aspect 텍스트 정규화 (비교용)
@@ -131,7 +135,7 @@ class StrengthExtractionEvaluator:
         # Ground Truth aspect 집합 생성
         gt_aspects = set()
         for strength in ground_truth_strengths:
-            aspect = self.normalize_aspect(strength.get("aspect", ""))
+            aspect = self.normalize_aspect(self._get_aspect(strength))
             if aspect:
                 gt_aspects.add(aspect)
         
@@ -144,7 +148,7 @@ class StrengthExtractionEvaluator:
         # 관련 있는 강점 수 계산
         relevant_count = 0
         for strength in top_k_strengths:
-            aspect = self.normalize_aspect(strength.get("aspect", ""))
+            aspect = self.normalize_aspect(self._get_aspect(strength))
             if aspect in gt_aspects:
                 relevant_count += 1
         
@@ -181,7 +185,7 @@ class StrengthExtractionEvaluator:
         # Ground Truth aspect 집합 생성
         gt_aspects = set()
         for strength in ground_truth_strengths:
-            aspect = self.normalize_aspect(strength.get("aspect", ""))
+            aspect = self.normalize_aspect(self._get_aspect(strength))
             if aspect:
                 gt_aspects.add(aspect)
         
@@ -194,7 +198,7 @@ class StrengthExtractionEvaluator:
         # 관련 있는(GT에 포함되는) 강점 수 계산
         relevant_count = 0
         for strength in top_k_strengths:
-            aspect = self.normalize_aspect(strength.get("aspect", ""))
+            aspect = self.normalize_aspect(self._get_aspect(strength))
             if aspect in gt_aspects:
                 relevant_count += 1
         
@@ -228,14 +232,14 @@ class StrengthExtractionEvaluator:
         # Ground Truth aspect 집합
         gt_aspects = set()
         for strength in ground_truth_strengths:
-            aspect = self.normalize_aspect(strength.get("aspect", ""))
+            aspect = self.normalize_aspect(self._get_aspect(strength))
             if aspect:
                 gt_aspects.add(aspect)
         
         # 예측된 aspect 집합
         pred_aspects = set()
         for strength in predicted_strengths:
-            aspect = self.normalize_aspect(strength.get("aspect", ""))
+            aspect = self.normalize_aspect(self._get_aspect(strength))
             if aspect:
                 pred_aspects.add(aspect)
         
@@ -283,14 +287,14 @@ class StrengthExtractionEvaluator:
         # Ground Truth aspect 집합
         gt_aspects = set()
         for strength in ground_truth_strengths:
-            aspect = self.normalize_aspect(strength.get("aspect", ""))
+            aspect = self.normalize_aspect(self._get_aspect(strength))
             if aspect:
                 gt_aspects.add(aspect)
         
         # 예측된 aspect 중 Ground Truth에 없는 것
         false_positives = 0
         for strength in predicted_strengths:
-            aspect = self.normalize_aspect(strength.get("aspect", ""))
+            aspect = self.normalize_aspect(self._get_aspect(strength))
             if aspect and aspect not in gt_aspects:
                 false_positives += 1
         
@@ -363,14 +367,14 @@ class StrengthExtractionEvaluator:
         Returns:
             매칭된 Ground Truth 강점 또는 None
         """
-        predicted_aspect = self.normalize_aspect(predicted_strength.get("aspect", ""))
+        predicted_aspect = self.normalize_aspect(self._get_aspect(predicted_strength))
         
         if not predicted_aspect:
             return None
         
         # Aspect 텍스트로 매칭
         for gt_strength in ground_truth_strengths:
-            gt_aspect = self.normalize_aspect(gt_strength.get("aspect", ""))
+            gt_aspect = self.normalize_aspect(self._get_aspect(gt_strength))
             if predicted_aspect == gt_aspect:
                 return gt_strength
         

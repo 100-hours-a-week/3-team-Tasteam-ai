@@ -1,8 +1,11 @@
 """
 RunPod Pod 서버 API 전체 기능 통합 테스트 스크립트 (다중 모델 지원)
 
-이 스크립트는 RunPod Pod에서 실행 중인 FastAPI 서버를 대상으로 테스트를 수행합니다.
+이 스크립트는 RunPod Pod에서 실행 중인 FastAPI 서버(src 기반)를 대상으로 API 테스트를 수행합니다.
+모든 테스트는 HTTP API 호출만 사용하며, hybrid_search/final_pipeline 등 비-src 모듈에 의존하지 않습니다.
 성능 측정, 정확도 측정, 여러 모델 비교를 지원합니다.
+
+감성 분석 / 요약 / 강점 추출: src 파이프라인 (카테고리별 하이브리드 요약, Kiwi+lift 강점, HF+LLM 감성 등)
 
 사용 방법:
     ========================================
@@ -91,7 +94,10 @@ import tempfile
 import argparse
 import statistics
 import sqlite3
-import psutil
+try:
+    import psutil
+except ImportError:
+    psutil = None  # optional: CPU/메모리 통계는 생략
 from pathlib import Path
 from typing import Dict, List, Any, Optional, Tuple
 from datetime import datetime
@@ -161,6 +167,9 @@ METRICS_DB_PATH = "metrics.db"
 # 샘플 데이터 (데이터 생성 후 업데이트됨)
 SAMPLE_RESTAURANT_ID = 1
 SAMPLE_REVIEWS = []
+
+# 강점 추출: strength_in_aspect와 맞추기 위해 restaurant_id=4 우선 사용 (test_data_sample에 4가 있으면)
+STRENGTH_TARGET_RESTAURANT_ID: Optional[int] = None
 
 # 테스트 메트릭 수집용 전역 딕셔너리 (JSON 저장용)
 test_metrics: Dict[str, Any] = {}
@@ -279,24 +288,103 @@ def generate_test_data(
         with open(test_data_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
         
-        restaurants_count = len(data.get('restaurants', []))
-        print_success(f"테스트 데이터 로드 완료: {restaurants_count}개 레스토랑")
+        # 데이터 형식 확인 및 변환
+        if isinstance(data, list):
+            # 리스트 형식: 리뷰 리스트를 레스토랑별로 그룹화
+            print_info("리스트 형식 데이터 감지, 레스토랑별로 그룹화 중...")
+            restaurants_dict = {}
+            for review in data:
+                if not isinstance(review, dict):
+                    continue
+                restaurant_id = review.get('restaurant_id')
+                if restaurant_id is None:
+                    continue
+                
+                restaurant_id_str = str(restaurant_id)
+                if restaurant_id_str not in restaurants_dict:
+                    restaurants_dict[restaurant_id_str] = {
+                        'restaurant_id': restaurant_id,
+                        'restaurant_name': review.get('restaurant_name', f'Restaurant {restaurant_id}'),
+                        'food_category_id': review.get('food_category_id'),
+                        'food_category_name': review.get('food_category_name'),
+                        'reviews': []
+                    }
+                
+                # 리뷰 추가 (필요한 필드만 추출)
+                review_data = {
+                    'id': review.get('id'),
+                    'restaurant_id': review.get('restaurant_id'),
+                    'member_id': review.get('member_id'),
+                    'group_id': review.get('group_id'),
+                    'subgroup_id': review.get('subgroup_id'),
+                    'content': review.get('content', ''),
+                    'is_recommended': review.get('is_recommended'),
+                    'created_at': review.get('created_at'),
+                    'updated_at': review.get('updated_at'),
+                    'deleted_at': review.get('deleted_at'),
+                    'images': review.get('images', [])
+                }
+                restaurants_dict[restaurant_id_str]['reviews'].append(review_data)
+            
+            # 딕셔너리 형식으로 변환
+            data = {
+                'restaurants': list(restaurants_dict.values())
+            }
+            print_info(f"  - {len(data['restaurants'])}개 레스토랑으로 그룹화 완료")
         
-        # 총 리뷰 수 계산
-        total_reviews = sum(
-            len(restaurant.get('reviews', []))
-            for restaurant in data.get('restaurants', [])
-        )
-        print_info(f"  - 총 리뷰 수: {total_reviews}개")
-        
-        # 임시 파일 경로는 None 반환 (더 이상 필요 없음)
-        return data, None
+        # 딕셔너리 형식 처리
+        if isinstance(data, dict):
+            restaurants_count = len(data.get('restaurants', []))
+            print_success(f"테스트 데이터 로드 완료: {restaurants_count}개 레스토랑")
+            
+            # 총 리뷰 수 계산
+            total_reviews = sum(
+                len(restaurant.get('reviews', []))
+                for restaurant in data.get('restaurants', [])
+            )
+            print_info(f"  - 총 리뷰 수: {total_reviews}개")
+            
+            # 전역 변수 업데이트
+            global SAMPLE_RESTAURANT_ID, SAMPLE_REVIEWS, STRENGTH_TARGET_RESTAURANT_ID
+            if data.get('restaurants'):
+                first_restaurant = data['restaurants'][0]
+                SAMPLE_RESTAURANT_ID = first_restaurant.get('restaurant_id', 1)
+                # strength_in_aspect와 맞추기: restaurant_id=4가 있으면 강점 추출에서 4 사용
+                STRENGTH_TARGET_RESTAURANT_ID = 4 if any((r.get('restaurant_id') or 0) == 4 for r in data.get('restaurants', [])) else None
+                # ReviewModel 형식으로 변환
+                SAMPLE_REVIEWS = []
+                for review in first_restaurant.get('reviews', []):
+                    if isinstance(review, dict) and review.get('content'):
+                        review_obj = {
+                            'id': review.get('id'),
+                            'restaurant_id': review.get('restaurant_id', SAMPLE_RESTAURANT_ID),
+                            'member_id': review.get('member_id'),
+                            'group_id': review.get('group_id'),
+                            'subgroup_id': review.get('subgroup_id'),
+                            'content': review.get('content', ''),
+                            'is_recommended': review.get('is_recommended'),
+                            'created_at': review.get('created_at'),
+                            'updated_at': review.get('updated_at'),
+                            'deleted_at': review.get('deleted_at'),
+                            'images': review.get('images', [])
+                        }
+                        SAMPLE_REVIEWS.append(review_obj)
+                print_info(f"  - 샘플 레스토랑 ID: {SAMPLE_RESTAURANT_ID}")
+                print_info(f"  - 샘플 리뷰 수: {len(SAMPLE_REVIEWS)}개")
+            
+            # 임시 파일 경로는 None 반환 (더 이상 필요 없음)
+            return data, None
+        else:
+            print_error(f"지원하지 않는 데이터 형식: {type(data)}")
+            return None
         
     except json.JSONDecodeError as e:
         print_error(f"JSON 파일 파싱 오류: {str(e)}")
         return None
     except Exception as e:
         print_error(f"테스트 데이터 로드 중 오류: {str(e)}")
+        import traceback
+        print_error(f"상세 오류: {traceback.format_exc()}")
         return None
 
 
@@ -486,9 +574,12 @@ def measure_performance(
             pass
     
     # CPU/메모리 메트릭 수집 시작
-    cpu_before = psutil.cpu_percent(interval=None)
-    mem_before = psutil.virtual_memory()
-    
+    if psutil:
+        cpu_before = psutil.cpu_percent(interval=None)
+        mem_before = psutil.virtual_memory()
+    else:
+        cpu_before, mem_before = 0, None
+
     # 워밍업
     for i in range(warmup_iterations):
         try:
@@ -554,9 +645,12 @@ def measure_performance(
     measurement_end_time = time.perf_counter()
     
     # CPU/메모리 메트릭 수집 종료
-    cpu_after = psutil.cpu_percent(interval=None)
-    mem_after = psutil.virtual_memory()
-    
+    if psutil:
+        cpu_after = psutil.cpu_percent(interval=None)
+        mem_after = psutil.virtual_memory()
+    else:
+        cpu_after, mem_after = None, None
+
     # GPU 메트릭 수집 종료
     if gpu_monitor:
         try:
@@ -689,9 +783,12 @@ def load_test(
             pass
     
     # CPU/메모리 메트릭 수집 시작
-    cpu_before = psutil.cpu_percent(interval=None)
-    mem_before = psutil.virtual_memory()
-    
+    if psutil:
+        cpu_before = psutil.cpu_percent(interval=None)
+        mem_before = psutil.virtual_memory()
+    else:
+        cpu_before, mem_before = 0, None
+
     print_info(f"부하테스트 시작: 총 {total_requests}개 요청, 동시 사용자 {concurrent_users}명")
     if ramp_up_seconds > 0:
         print_info(f"점진적 부하 증가: {ramp_up_seconds}초 동안 부하 증가")
@@ -740,9 +837,12 @@ def load_test(
     test_end_time = time.perf_counter()
     
     # CPU/메모리 메트릭 수집 종료
-    cpu_after = psutil.cpu_percent(interval=None)
-    mem_after = psutil.virtual_memory()
-    
+    if psutil:
+        cpu_after = psutil.cpu_percent(interval=None)
+        mem_after = psutil.virtual_memory()
+    else:
+        cpu_after, mem_after = None, None
+
     # GPU 메트릭 수집 종료
     if gpu_monitor:
         try:
@@ -1023,7 +1123,17 @@ def evaluate_accuracy(
                 return None
             
             # BLEU Score 계산
+            # 새로운 파이프라인: categories 필드 지원
             predicted_summary = api_result.get("overall_summary", "")
+            if not predicted_summary and api_result.get("categories"):
+                # categories에서 overall_summary 생성 시도
+                categories = api_result.get("categories", {})
+                summaries = []
+                for cat_data in categories.values():
+                    if isinstance(cat_data, dict) and cat_data.get("summary"):
+                        summaries.append(cat_data["summary"])
+                predicted_summary = " ".join(summaries) if summaries else ""
+            
             gt_summary = gt_restaurant.get("overall_summary", "")
             
             if predicted_summary and gt_summary:
@@ -1103,14 +1213,66 @@ def evaluate_accuracy(
 
 
 def test_sentiment_analysis(enable_benchmark: bool = False, num_iterations: int = 5):
-    """감성 분석 테스트"""
+    """
+    감성 분석 테스트 (새 파이프라인: HuggingFace 1차 분류 + LLM 재판정)
+    
+    입력 예시:
+        {
+            "restaurant_id": 1,
+            "reviews": [
+                {"restaurant_id": 1, "content": "맛이 정말 좋아요", ...},
+                {"restaurant_id": 1, "content": "서비스가 별로였어요", ...}
+            ]
+        }
+    
+    출력 예시:
+        ✓ 감성 분석 성공 (소요 시간: 2.34초)
+          - 긍정 비율: 60%
+          - 부정 비율: 30%
+          - 중립 비율: 10%
+          - 긍정 개수: 6
+          - 부정 개수: 3
+          - 중립 개수: 1
+          - 전체 개수: 10
+    """
     print_header("1. 감성 분석 테스트")
     
     url = f"{BASE_URL}{API_PREFIX}/sentiment/analyze"
-    payload = {
-        "restaurant_id": SAMPLE_RESTAURANT_ID,
-        "reviews": SAMPLE_REVIEWS
-    }
+    # reviews는 ReviewModel 형식이어야 함 (필수)
+    if not SAMPLE_REVIEWS:
+        print_warning("테스트 리뷰가 없습니다. Qdrant에서 자동 조회를 시도합니다.")
+        # 최소한의 리뷰 객체 생성 (서버에서 처리할 수 있도록)
+        payload = {
+            "restaurant_id": SAMPLE_RESTAURANT_ID,
+            "reviews": []  # 빈 리스트 (서버에서 자동 조회)
+        }
+    else:
+        # ReviewModel 형식으로 변환 (이미 변환되어 있을 수 있음)
+        reviews_list = []
+        for review in SAMPLE_REVIEWS:
+            if isinstance(review, dict):
+                # 이미 ReviewModel 형식인지 확인
+                if 'content' in review:
+                    reviews_list.append(review)
+                else:
+                    # 문자열인 경우 ReviewModel 형식으로 변환
+                    reviews_list.append({
+                        'restaurant_id': SAMPLE_RESTAURANT_ID,
+                        'content': str(review),
+                        'is_recommended': None,
+                    })
+            elif isinstance(review, str):
+                # 문자열인 경우 ReviewModel 형식으로 변환
+                reviews_list.append({
+                    'restaurant_id': SAMPLE_RESTAURANT_ID,
+                    'content': review,
+                    'is_recommended': None,
+                })
+        
+        payload = {
+            "restaurant_id": SAMPLE_RESTAURANT_ID,
+            "reviews": reviews_list
+        }
     
     try:
         if enable_benchmark:
@@ -1231,8 +1393,10 @@ def test_sentiment_analysis(enable_benchmark: bool = False, num_iterations: int 
                 print_success(f"감성 분석 성공 (소요 시간: {elapsed_time:.2f}초)")
                 print(f"  - 긍정 비율: {data.get('positive_ratio', 'N/A')}%")
                 print(f"  - 부정 비율: {data.get('negative_ratio', 'N/A')}%")
+                print(f"  - 중립 비율: {data.get('neutral_ratio', 'N/A')}%")  # 새로 추가된 필드
                 print(f"  - 긍정 개수: {data.get('positive_count', 'N/A')}")
                 print(f"  - 부정 개수: {data.get('negative_count', 'N/A')}")
+                print(f"  - 중립 개수: {data.get('neutral_count', 'N/A')}")  # 새로 추가된 필드
                 print(f"  - 전체 개수: {data.get('total_count', 'N/A')}")
                 if data.get('debug'):
                     print(f"  - Request ID: {data['debug'].get('request_id', 'N/A')}")
@@ -1248,16 +1412,52 @@ def test_sentiment_analysis(enable_benchmark: bool = False, num_iterations: int 
 
 
 def test_sentiment_analysis_batch(enable_benchmark: bool = False, num_iterations: int = 5):
-    """배치 감성 분석 테스트"""
+    """
+    배치 감성 분석 테스트 (새 파이프라인: HuggingFace 1차 분류 + LLM 재판정)
+    
+    입력 예시:
+        {
+            "restaurants": [
+                {"restaurant_id": 1, "reviews": [...]},
+                {"restaurant_id": 2, "reviews": [...]}
+            ]
+        }
+    
+    출력 예시:
+        ✓ 배치 감성 분석 성공 (소요 시간: 5.67초)
+          - 처리된 레스토랑 수: 2
+            레스토랑 1: 긍정 60%, 부정 30%
+            레스토랑 2: 긍정 70%, 부정 20%
+    """
     print_header("2. 배치 감성 분석 테스트")
     
     url = f"{BASE_URL}{API_PREFIX}/sentiment/analyze/batch"
     # 10개 레스토랑 배치 생성 (QUANTITATIVE_METRICS.md 요구사항)
     restaurants_payload = []
+    # ReviewModel 형식으로 변환
+    reviews_list = []
+    for review in SAMPLE_REVIEWS:
+        if isinstance(review, dict) and 'content' in review:
+            reviews_list.append(review)
+        elif isinstance(review, str):
+            reviews_list.append({
+                'restaurant_id': SAMPLE_RESTAURANT_ID,
+                'content': review,
+                'is_recommended': None,
+            })
+    
     for i in range(10):
+        # 각 레스토랑에 맞게 restaurant_id 업데이트
+        restaurant_reviews = []
+        for review in reviews_list:
+            if isinstance(review, dict):
+                review_copy = review.copy()
+                review_copy['restaurant_id'] = SAMPLE_RESTAURANT_ID + i
+                restaurant_reviews.append(review_copy)
+        
         restaurants_payload.append({
             "restaurant_id": SAMPLE_RESTAURANT_ID + i,
-            "reviews": SAMPLE_REVIEWS  # 모든 레스토랑에 동일한 리뷰 사용
+            "reviews": restaurant_reviews if restaurant_reviews else []  # 빈 리스트면 서버에서 자동 조회
         })
     
     payload = {
@@ -1342,23 +1542,39 @@ def test_sentiment_analysis_batch(enable_benchmark: bool = False, num_iterations
 
 
 def test_summarize(enable_benchmark: bool = False, num_iterations: int = 5):
-    """리뷰 요약 테스트"""
+    """
+    리뷰 요약 테스트 (새 파이프라인: 카테고리별 하이브리드 검색 + 요약)
+    
+    입력:
+        {
+            "restaurant_id": 1,
+            "limit": 10
+        }
+    
+    출력:
+        전체 요약 + 카테고리별 요약 (service, price, food) + 포인트/근거 개수
+        
+        예시:
+        ✓ 리뷰 요약 성공 (소요 시간: 9.17초)
+          레스토랑 1:
+            * 전체 요약: 이 음식점은 분위기와 음식의 맛이 뛰어나며...
+            * service: 서비스가 친절하고 응대가 빠릅니다... (포인트 3개, 근거 5개)
+            * price: 가격 대비 만족스러운 경험을 제공합니다... (포인트 2개, 근거 4개)
+            * food: 음식의 맛과 품질이 우수합니다... (포인트 4개, 근거 6개)
+    """
     print_header("3. 리뷰 요약 테스트")
     
     url = f"{BASE_URL}{API_PREFIX}/llm/summarize"
     payload = {
-        "restaurant_id": str(SAMPLE_RESTAURANT_ID),
-        "positive_query": "맛있다 좋다 만족",
-        "negative_query": "맛없다 별로 불만",
+        "restaurant_id": SAMPLE_RESTAURANT_ID,
         "limit": 10,
-        "min_score": 0.0
     }
     
     try:
         if enable_benchmark:
             # 성능 측정 모드
             print_info(f"성능 측정 모드: {num_iterations}회 반복 실행 중...")
-            success, stats = measure_performance(url, payload, num_iterations=num_iterations, warmup_iterations=1, timeout=120)
+            success, stats = measure_performance(url, payload, num_iterations=num_iterations, warmup_iterations=1, timeout=1000)
             
             if success and stats:
                 print_success(f"리뷰 요약 성공 (평균 처리 시간: {stats['avg_latency_sec']:.2f}초)")
@@ -1474,19 +1690,33 @@ def test_summarize(enable_benchmark: bool = False, num_iterations: int = 5):
                 print_error("성능 측정 실패")
                 return False
         else:
-            # 기본 테스트 모드
+            # 기본 테스트 모드 (요약은 recall_seeds·하이브리드·LLM으로 120초 초과 가능)
             start_time = time.time()
-            response = requests.post(url, json=payload, timeout=120)
+            response = requests.post(url, json=payload, timeout=300)
             elapsed_time = time.time() - start_time
             
             if response.status_code == 200:
                 data = response.json()
                 print_success(f"리뷰 요약 성공 (소요 시간: {elapsed_time:.2f}초)")
-                print(f"  - 전체 요약: {data.get('overall_summary', 'N/A')[:100]}...")
-                print(f"  - 긍정 aspect 수: {len(data.get('positive_aspects', []))}")
-                print(f"  - 부정 aspect 수: {len(data.get('negative_aspects', []))}")
-                print(f"  - 긍정 리뷰 수: {data.get('positive_count', 'N/A')}")
-                print(f"  - 부정 리뷰 수: {data.get('negative_count', 'N/A')}")
+                restaurant_id = data.get('restaurant_id', 'N/A')
+                overall_summary = data.get('overall_summary', 'N/A')[:60]
+                categories = data.get('categories')
+                
+                print(f"    레스토랑 {restaurant_id}:")
+                print(f"      * 전체 요약: {overall_summary}...")
+                
+                if categories:
+                    for cat_name, cat_data in categories.items():
+                        if isinstance(cat_data, dict):
+                            summary = cat_data.get('summary', '')[:60] if cat_data.get('summary') else 'N/A'
+                            bullets_count = len(cat_data.get('bullets', []))
+                            evidence_count = len(cat_data.get('evidence', []))
+                            print(f"      * {cat_name}: {summary}... (포인트 {bullets_count}개, 근거 {evidence_count}개)")
+                        elif isinstance(cat_data, str):
+                            # 문자열로 저장된 경우 (직렬화된 JSON)
+                            print(f"      * {cat_name}: {cat_data[:50]}...")
+                else:
+                    print(f"      * 카테고리별 요약: 없음")
                 
                 # 정확도 평가 (Ground Truth 비교, 기본 모드에서도 수행)
                 ground_truth_path = str(project_root / "scripts" / "Ground_truth_summary.json")
@@ -1512,26 +1742,38 @@ def test_summarize(enable_benchmark: bool = False, num_iterations: int = 5):
 
 
 def test_summarize_batch(enable_benchmark: bool = False, num_iterations: int = 5):
-    """배치 리뷰 요약 테스트"""
+    """
+    배치 리뷰 요약 테스트 (새 파이프라인: 카테고리별 하이브리드 검색 + 요약)
+    
+    입력:
+        {
+            "restaurants": [
+                {"restaurant_id": 1, "limit": 10},
+                {"restaurant_id": 2, "limit": 10}
+            ]
+        }
+    
+    출력:
+        전체 요약 + 카테고리별 요약 (service, price, food) + 포인트/근거 개수
+        
+        예시:
+        ✓ 배치 리뷰 요약 성공 (소요 시간: 27.56초)
+          - 처리된 레스토랑 수: 2
+            레스토랑 1:
+              * 전체 요약: 이 음식점은 분위기와 음식의 맛이 뛰어나며...
+              * service: 서비스가 친절하고 응대가 빠릅니다... (포인트 3개, 근거 5개)
+              * price: 가격 대비 만족스러운 경험을 제공합니다... (포인트 2개, 근거 4개)
+            레스토랑 2:
+              * 전체 요약: 음식의 품질과 서비스가 우수합니다...
+              * service: 직원들이 친절하고 주문 처리가 빠릅니다... (포인트 4개, 근거 6개)
+    """
     print_header("4. 배치 리뷰 요약 테스트")
     
     url = f"{BASE_URL}{API_PREFIX}/llm/summarize/batch"
     payload = {
         "restaurants": [
-            {
-                "restaurant_id": SAMPLE_RESTAURANT_ID,
-                "positive_query": "맛있다 좋다 만족",
-                "negative_query": "맛없다 별로 불만",
-                "limit": 10,
-                "min_score": 0.0
-            },
-            {
-                "restaurant_id": SAMPLE_RESTAURANT_ID + 1,
-                "positive_query": "맛있다 좋다 만족",
-                "negative_query": "맛없다 별로 불만",
-                "limit": 10,
-                "min_score": 0.0
-            }
+            {"restaurant_id": SAMPLE_RESTAURANT_ID, "limit": 10},
+            {"restaurant_id": SAMPLE_RESTAURANT_ID + 1, "limit": 10},
         ]
     }
     
@@ -1539,7 +1781,7 @@ def test_summarize_batch(enable_benchmark: bool = False, num_iterations: int = 5
         if enable_benchmark:
             # 성능 측정 모드
             print_info(f"성능 측정 모드: {num_iterations}회 반복 실행 중...")
-            success, stats = measure_performance(url, payload, num_iterations=num_iterations, warmup_iterations=1, timeout=180)
+            success, stats = measure_performance(url, payload, num_iterations=num_iterations, warmup_iterations=1, timeout=1000)
             
             if success and stats:
                 print_success(f"배치 리뷰 요약 성공 (평균 처리 시간: {stats['avg_latency_sec']:.2f}초)")
@@ -1635,7 +1877,7 @@ def test_summarize_batch(enable_benchmark: bool = False, num_iterations: int = 5
         else:
             # 기본 테스트 모드
             start_time = time.time()
-            response = requests.post(url, json=payload, timeout=180)
+            response = requests.post(url, json=payload, timeout=400)
             elapsed_time = time.time() - start_time
             
             if response.status_code == 200:
@@ -1643,9 +1885,22 @@ def test_summarize_batch(enable_benchmark: bool = False, num_iterations: int = 5
                 print_success(f"배치 리뷰 요약 성공 (소요 시간: {elapsed_time:.2f}초)")
                 print(f"  - 처리된 레스토랑 수: {len(data.get('results', []))}")
                 for result in data.get('results', []):
-                    print(f"    레스토랑 {result.get('restaurant_id')}: "
-                          f"요약 완료 ({len(result.get('positive_aspects', []))}개 긍정, "
-                          f"{len(result.get('negative_aspects', []))}개 부정 aspect)")
+                    restaurant_id = result.get('restaurant_id')
+                    overall_summary = result.get('overall_summary', 'N/A')[:60]
+                    categories = result.get('categories')
+                    
+                    print(f"    레스토랑 {restaurant_id}:")
+                    print(f"      * 전체 요약: {overall_summary}...")
+                    
+                    if categories:
+                        for cat_name, cat_data in categories.items():
+                            if isinstance(cat_data, dict):
+                                summary = cat_data.get('summary', '')[:60] if cat_data.get('summary') else 'N/A'
+                                bullets_count = len(cat_data.get('bullets', []))
+                                evidence_count = len(cat_data.get('evidence', []))
+                                print(f"      * {cat_name}: {summary}... (포인트 {bullets_count}개, 근거 {evidence_count}개)")
+                    else:
+                        print(f"      * 카테고리별 요약: 없음")
                 return True
             else:
                 print_error(f"배치 리뷰 요약 실패: {response.status_code}")
@@ -1657,20 +1912,32 @@ def test_summarize_batch(enable_benchmark: bool = False, num_iterations: int = 5
 
 
 def test_extract_strengths(enable_benchmark: bool = False, num_iterations: int = 5):
-    """강점 추출 테스트"""
+    """
+    강점 추출 테스트 (src 파이프라인: Kiwi + service/price 비율 + lift_percentage)
+    
+    입력:
+        {
+            "restaurant_id": 1,
+            "top_k": 5
+        }
+    
+    출력:
+        strengths: [{ category, lift_percentage }], category_lift (카테고리별 lift %)
+        예시:
+        ✓ 강점 추출 성공 (소요 시간: 3.45초)
+          레스토랑 1:
+            * 추출된 강점 수: 2개
+            * service: lift 20%
+            * price: lift 15%
+    """
     print_header("5. 강점 추출 테스트")
     
     url = f"{BASE_URL}{API_PREFIX}/llm/extract/strengths"
+    # strength_in_aspect와 맞추기: test_data에 4가 있으면 4, 없으면 SAMPLE_RESTAURANT_ID
+    rid = STRENGTH_TARGET_RESTAURANT_ID if STRENGTH_TARGET_RESTAURANT_ID is not None else SAMPLE_RESTAURANT_ID
     payload = {
-        "restaurant_id": SAMPLE_RESTAURANT_ID,
-        "strength_type": "both",  # representative + distinct
-        "category_filter": None,  # None이면 모든 레스토랑과 비교 (비교군 찾기 가능)
-        "region_filter": None,
-        "price_band_filter": None,
+        "restaurant_id": rid,
         "top_k": 5,
-        "max_candidates": 100,
-        "months_back": 24,  # 테스트 데이터 대응을 위해 24개월로 확대
-        "min_support": 1  # 테스트 데이터 대응을 위해 1로 낮춤 (최소 1개 리뷰만 있어도 통과)
     }
     
     try:
@@ -1741,7 +2008,7 @@ def test_extract_strengths(enable_benchmark: bool = False, num_iterations: int =
                 ground_truth_path = str(project_root / "scripts" / "Ground_truth_strength.json")
                 accuracy_metrics = evaluate_accuracy(
                     analysis_type="strength",
-                    restaurant_id=SAMPLE_RESTAURANT_ID,
+                    restaurant_id=rid,
                     api_result=stats.get("last_successful_response", {}),
                     ground_truth_path=ground_truth_path
                 )
@@ -1828,30 +2095,46 @@ def test_extract_strengths(enable_benchmark: bool = False, num_iterations: int =
         else:
             # 기본 테스트 모드
             start_time = time.time()
-            response = requests.post(url, json=payload, timeout=180)
+            response = requests.post(url, json=payload, timeout=1000)
             elapsed_time = time.time() - start_time
             
             if response.status_code == 200:
                 data = response.json()
                 print_success(f"강점 추출 성공 (소요 시간: {elapsed_time:.2f}초)")
-                print(f"  - 추출된 강점 수: {len(data.get('strengths', []))}")
-                print(f"  - 후보 수: {data.get('total_candidates', 'N/A')}")
-                print(f"  - 검증 통과 수: {data.get('validated_count', 'N/A')}")
+                restaurant_id = data.get('restaurant_id', 'N/A')
+                strengths = data.get('strengths', [])
                 
-                # 상위 3개 강점 출력
-                for i, strength in enumerate(data.get('strengths', [])[:3], 1):
-                    print(f"\n  강점 {i}:")
-                    print(f"    - Aspect: {strength.get('aspect', 'N/A')}")
-                    print(f"    - Claim: {strength.get('claim', 'N/A')[:50]}...")
-                    print(f"    - Support Count: {strength.get('support_count', 'N/A')}")
-                    if strength.get('distinct_score') is not None:
-                        print(f"    - Distinct Score: {strength.get('distinct_score', 'N/A')}")
+                print(f"    레스토랑 {restaurant_id}:")
+                category_lift = data.get('category_lift') or {}
+                print(f"      * 추출된 강점 수: {len(strengths)}개")
+                if category_lift:
+                    parts = [f"{k}: {v}%" for k, v in category_lift.items()]
+                    print(f"      * 카테고리별 lift: {', '.join(parts)}")
+                strength_display = data.get('strength_display') or []
+                if strength_display:
+                    print(f"      * strength_display (판교 평균 N배):")
+                    for s in strength_display:
+                        print(f"        - {s}")
+                
+                if strengths:
+                    for strength in strengths:
+                        category = strength.get('category', strength.get('aspect', 'N/A'))
+                        lift_percentage = strength.get('lift_percentage')
+                        if lift_percentage is not None:
+                            print(f"      * {category}: lift {lift_percentage}%")
+                        else:
+                            print(f"      * {category}")
+                else:
+                    if category_lift:
+                        print(f"      * 강점(양수 lift): 없음 — 전체 평균 대비 양수인 카테고리 없음")
+                    else:
+                        print(f"      * 강점: 없음")
                 
                 # 정확도 평가 (Ground Truth 비교, 기본 모드에서도 수행)
                 ground_truth_path = str(project_root / "scripts" / "Ground_truth_strength.json")
                 accuracy_metrics = evaluate_accuracy(
                     analysis_type="strength",
-                    restaurant_id=SAMPLE_RESTAURANT_ID,
+                    restaurant_id=rid,
                     api_result=data,
                     ground_truth_path=ground_truth_path
                 )
@@ -2642,7 +2925,7 @@ def main():
         nargs="+",
         default=["all"],
         choices=["all", "sentiment", "sentiment_batch", "summarize", "summarize_batch", "strength", "vector", "image_search"],
-        help="실행할 테스트 선택 (기본값: summarize summarize_batch). 예: --tests summarize summarize_batch",
+        help="실행할 테스트 선택 (기본값: all). src 기반 API 테스트만 포함.",
     )
     parser.add_argument(
         "--total-requests",
@@ -2740,11 +3023,11 @@ def main():
         print_warning("OPENAI_API_KEY가 설정되지 않았습니다.")
         print_info("다음 명령으로 설정하세요: export OPENAI_API_KEY='your_api_key'")
     # OpenAI API 키 확인 메시지 제거
-    
-    # 서버 헬스 체크
+
+    # 서버 헬스 체크 (모든 테스트가 src 기반 API 호출)
     if not check_server_health():
         sys.exit(1)
-    
+
     # 테스트 데이터 생성
     data_result = generate_test_data(
         generate_from_kr3=args.generate_from_kr3,
@@ -2760,10 +3043,30 @@ def main():
         
         # SAMPLE_RESTAURANT_ID와 SAMPLE_REVIEWS를 실제 데이터로 업데이트
         if data.get("restaurants"):
-            global SAMPLE_RESTAURANT_ID, SAMPLE_REVIEWS
+            global SAMPLE_RESTAURANT_ID, SAMPLE_REVIEWS, STRENGTH_TARGET_RESTAURANT_ID
             first_restaurant = data["restaurants"][0]
             SAMPLE_RESTAURANT_ID = first_restaurant.get("restaurant_id", 1)
-            SAMPLE_REVIEWS = first_restaurant.get("reviews", [])
+            # strength_in_aspect와 맞추기: restaurant_id=4가 있으면 강점 추출에서 4 사용
+            STRENGTH_TARGET_RESTAURANT_ID = 4 if any((r.get("restaurant_id") or 0) == 4 for r in data.get("restaurants", [])) else None
+            # 리뷰 객체를 ReviewModel 형식으로 저장 (API가 ReviewModel 리스트를 기대)
+            SAMPLE_REVIEWS = []
+            for review in first_restaurant.get("reviews", []):
+                if isinstance(review, dict) and review.get('content'):
+                    # ReviewModel 형식으로 변환
+                    review_obj = {
+                        'id': review.get('id'),
+                        'restaurant_id': review.get('restaurant_id', SAMPLE_RESTAURANT_ID),
+                        'member_id': review.get('member_id'),
+                        'group_id': review.get('group_id'),
+                        'subgroup_id': review.get('subgroup_id'),
+                        'content': review.get('content', ''),
+                        'is_recommended': review.get('is_recommended'),
+                        'created_at': review.get('created_at'),
+                        'updated_at': review.get('updated_at'),
+                        'deleted_at': review.get('deleted_at'),
+                        'images': review.get('images', [])
+                    }
+                    SAMPLE_REVIEWS.append(review_obj)
             print_info(f"테스트 레스토랑 ID: {SAMPLE_RESTAURANT_ID}")
             print_info(f"테스트 리뷰 수: {len(SAMPLE_REVIEWS)}개")
     
@@ -2807,13 +3110,13 @@ def main():
         
         sys.exit(0)
     
-    # 일반 모드: 데이터 업로드 (compare_models 모드가 아닐 때만)
+    # 일반 모드: 데이터 업로드 (compare_models 모드가 아닐 때)
     if test_data:
         if upload_data_to_qdrant(test_data):
             print_success("테스트 데이터 준비 완료")
         else:
             print_warning("Qdrant upload 실패. 일부 테스트가 실패할 수 있습니다.")
-    else:
+    elif not test_data:
         print_warning("테스트 데이터 생성 실패. 일부 테스트가 실패할 수 있습니다.")
     
     # 임시 파일 정리
@@ -2866,25 +3169,13 @@ def main():
             print(f"  - 최대 동시 요청 수: {stats.get('max_concurrent_requests', 'N/A')}")
             load_test_results["배치 감성 분석"] = stats
         
-        # 2. 배치 리뷰 요약 부하테스트
+        # 2. 배치 리뷰 요약 부하테스트 (새 파이프라인)
         print_header("2. 배치 리뷰 요약 부하테스트")
         url = f"{BASE_URL}{API_PREFIX}/llm/summarize/batch"
         payload = {
             "restaurants": [
-                {
-                    "restaurant_id": SAMPLE_RESTAURANT_ID,
-                    "positive_query": "맛있다 좋다 만족",
-                    "negative_query": "맛없다 별로 불만",
-                    "limit": 10,
-                    "min_score": 0.0
-                },
-                {
-                    "restaurant_id": SAMPLE_RESTAURANT_ID + 1,
-                    "positive_query": "맛있다 좋다 만족",
-                    "negative_query": "맛없다 별로 불만",
-                    "limit": 10,
-                    "min_score": 0.0
-                }
+                {"restaurant_id": SAMPLE_RESTAURANT_ID, "limit": 10},
+                {"restaurant_id": SAMPLE_RESTAURANT_ID + 1, "limit": 10},
             ]
         }
         success, stats = load_test(

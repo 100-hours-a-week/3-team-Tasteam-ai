@@ -1,5 +1,7 @@
 """
-벡터 검색 모듈
+벡터 검색 모듈 (FastEmbed 전용: Dense + Sparse)
+- Dense: TextEmbedding('sentence-transformers/paraphrase-multilingual-mpnet-base-v2') (final_summary_pipeline과 동일)
+- Sparse: SparseTextEmbedding('Qdrant/bm25')
 """
 
 import uuid
@@ -11,8 +13,7 @@ from typing import Dict, List, Optional, Any, Union
 
 from qdrant_client import QdrantClient, models
 from qdrant_client.models import PointStruct
-from sentence_transformers import SentenceTransformer
-import torch
+from fastembed import TextEmbedding, SparseTextEmbedding
 import numpy as np
 
 from .config import Config
@@ -20,48 +21,83 @@ from .review_utils import extract_image_urls, validate_review_data, validate_res
 
 logger = logging.getLogger(__name__)
 
+# final_summary_pipeline과 동일
+DENSE_MODEL_NAME = "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"
+SPARSE_MODEL_NAME = "Qdrant/bm25"
+
+
+class _FastEmbedEncoderAdapter:
+    """FastEmbed Dense 모델을 SentenceTransformer 유사 인터페이스로 노출 (strength_extraction, llm_utils 호환)."""
+
+    def __init__(self, dense_model: TextEmbedding, dense_dim: int, batch_size: int):
+        self._model = dense_model
+        self._dim = dense_dim
+        self._batch_size = batch_size
+
+    def encode(self, sentences, batch_size=None, convert_to_numpy=True, **kwargs):
+        if isinstance(sentences, str):
+            sentences = [sentences]
+        if not sentences:
+            return np.array([]).reshape(0, self._dim)
+        arrs = list(self._model.embed(sentences))
+        out = np.array(arrs)
+        if len(sentences) == 1:
+            return out[0]
+        return out
+
+    def get_sentence_embedding_dimension(self) -> int:
+        return self._dim
+
+    def get_model_kwargs(self) -> Dict:
+        return {"batch_size": self._batch_size}
+
 
 class VectorSearch:
     """벡터 검색 클래스"""
     
     def __init__(
         self,
-        encoder: SentenceTransformer,
         qdrant_client: QdrantClient,
         collection_name: str = Config.COLLECTION_NAME,
     ):
         """
         Args:
-            encoder: SentenceTransformer 인코더
             qdrant_client: Qdrant 클라이언트
             collection_name: 컬렉션 이름
         """
-        self.encoder = encoder
-        
-        # GPU 및 FP16 최적화 적용
-        if Config.USE_GPU and torch.cuda.is_available():
-            self.encoder = self.encoder.cuda()
-            if Config.USE_FP16:
-                self.encoder = self.encoder.half()  # FP16 양자화
-            self.batch_size = Config.get_optimal_batch_size("embedding")
-        else:
-            self.batch_size = 32
+        # FastEmbed Dense (final_summary_pipeline과 동일)
+        self._dense_model = TextEmbedding(DENSE_MODEL_NAME)
+        self._dense_dim = 768  # paraphrase-multilingual-mpnet-base-v2
+        self.batch_size = Config.get_optimal_batch_size("embedding")
+        self.encoder = _FastEmbedEncoderAdapter(self._dense_model, self._dense_dim, self.batch_size)
         
         self.client = qdrant_client
         self.collection_name = collection_name
         
-        # 컬렉션이 없으면 생성
+        # Sparse 벡터 모델 캐싱 (초기화 비용이 크므로 재사용)
+        self._sparse_model = None
+        
+        # 컬렉션이 없으면 생성 (하이브리드 검색: Dense + Sparse)
         try:
-            self.client.get_collection(collection_name)
+            collection_info = self.client.get_collection(collection_name)
+            # 기존 컬렉션에 sparse_vectors_config가 없으면 업데이트 필요 (마이그레이션)
+            if not hasattr(collection_info.config, 'sparse_vectors_config') or collection_info.config.sparse_vectors_config is None:
+                logger.warning(f"컬렉션 {collection_name}에 sparse_vectors_config가 없습니다. 하이브리드 검색을 위해 재생성이 필요할 수 있습니다.")
         except Exception:
-            # 컬렉션이 없으면 생성
+            # 컬렉션이 없으면 생성 (하이브리드 검색 지원)
             self.client.create_collection(
                 collection_name=collection_name,
-                vectors_config=models.VectorParams(
-                    size=encoder.get_sentence_embedding_dimension(),
-                    distance=models.Distance.COSINE,
-                ),
+                vectors_config={
+                    "dense": models.VectorParams(
+                        size=self._dense_dim,
+                        distance=models.Distance.COSINE,
+                    )
+                },
+                sparse_vectors_config={
+                    "sparse": models.SparseVectorParams()
+                },
             )
+            logger.info(f"하이브리드 검색 지원 컬렉션 생성 완료: {collection_name} (dense + sparse)")
     
     def _get_point_id(self, restaurant_id: Union[int, str], review_id: Union[int, str]) -> str:
         """
@@ -77,6 +113,49 @@ class VectorSearch:
         """
         content = f"{restaurant_id}:{review_id}"
         return hashlib.md5(content.encode()).hexdigest()
+    
+    def _is_collection_single_vector(self) -> bool:
+        """
+        컬렉션이 단일 벡터 형식인지 확인
+        
+        Returns:
+            True: 단일 벡터 형식, False: named 벡터 형식
+        """
+        try:
+            collection_info = self.client.get_collection(self.collection_name)
+            params = getattr(collection_info.config, "params", None)
+            vectors_cfg = getattr(params, "vectors", None) if params else None
+            # dict가 아니면 단일 벡터 형식
+            return not isinstance(vectors_cfg, dict)
+        except Exception:
+            # 컬렉션 정보를 가져올 수 없으면 named 벡터로 가정
+            return False
+    
+    def _normalize_vector_for_collection(self, vector: Any) -> Any:
+        """
+        컬렉션 형식에 맞게 벡터를 정규화
+        
+        Args:
+            vector: 포인트의 벡터 (dict 또는 list)
+            
+        Returns:
+            컬렉션 형식에 맞는 벡터
+        """
+        if not self._is_collection_single_vector():
+            # named 벡터 형식이면 그대로 반환
+            return vector
+        
+        # 단일 벡터 형식이면 dict에서 dense 추출
+        if isinstance(vector, dict):
+            if "dense" in vector:
+                return vector["dense"]
+            else:
+                # dense가 없으면 첫 번째 벡터 사용 (fallback)
+                logger.warning("'dense' 벡터가 없어 첫 번째 벡터 사용")
+                return list(vector.values())[0] if vector else None
+        
+        # 이미 단일 벡터 형식이면 그대로 반환
+        return vector
     
     def prepare_points(self, data: Dict, batch_size: Optional[int] = None) -> List[PointStruct]:
         """
@@ -169,18 +248,40 @@ class VectorSearch:
                 "version": review.get("version", 1),
             })
         
-        # 2단계: 배치로 벡터 인코딩 (대용량 처리 최적화)
-        logger.info(f"총 {len(review_texts)}개의 리뷰를 배치로 인코딩합니다 (배치 크기: {batch_size})")
+        # 2단계: 배치로 벡터 인코딩 (Dense + Sparse, 대용량 처리 최적화)
+        logger.info(f"총 {len(review_texts)}개의 리뷰를 배치로 인코딩합니다 (배치 크기: {batch_size}, 하이브리드: Dense + Sparse)")
+        
+        # Sparse 모델 초기화 (한 번만, final_summary_pipeline과 동일)
+        try:
+            if self._sparse_model is None:
+                self._sparse_model = SparseTextEmbedding(SPARSE_MODEL_NAME)
+                logger.info(f"Sparse 벡터 모델 로드 완료: {SPARSE_MODEL_NAME}")
+        except Exception as e:
+            logger.warning(f"Sparse 벡터 모델 로드 실패, Dense만 사용: {e}")
+            self._sparse_model = None
         
         for i in range(0, len(review_texts), batch_size):
             batch_texts = review_texts[i:i + batch_size]
             batch_metadata = review_metadata[i:i + batch_size]
             
             try:
-                # 배치 인코딩 (한 번에 처리하여 성능 향상)
-                batch_vectors = self.encoder.encode(batch_texts)
+                # Dense 벡터 배치 인코딩
+                batch_dense_vectors = self.encoder.encode(batch_texts)
                 
-                for text, vector, metadata in zip(batch_texts, batch_vectors, batch_metadata):
+                # Sparse 벡터 배치 인코딩
+                batch_sparse_vectors = []
+                if self._sparse_model:
+                    try:
+                        for text in batch_texts:
+                            sparse_emb = next(self._sparse_model.embed([text]))
+                            batch_sparse_vectors.append(sparse_emb)
+                    except Exception as e:
+                        logger.warning(f"Sparse 벡터 생성 실패 (배치 {i//batch_size + 1}), Dense만 사용: {e}")
+                        batch_sparse_vectors = [None] * len(batch_texts)
+                else:
+                    batch_sparse_vectors = [None] * len(batch_texts)
+                
+                for text, dense_vector, sparse_emb, metadata in zip(batch_texts, batch_dense_vectors, batch_sparse_vectors, batch_metadata):
                     try:
                         # : id 기반 Point ID 생성
                         review_id = metadata.get("id") or metadata.get("review_id")
@@ -189,9 +290,23 @@ class VectorSearch:
                             restaurant_id or "",
                             review_id or ""
                         )
+                        
+                        # 벡터 구성 (하이브리드: Dense + Sparse)
+                        if sparse_emb is not None:
+                            vector_dict = {
+                                "dense": dense_vector.tolist(),
+                                "sparse": models.SparseVector(
+                                    indices=list(sparse_emb.indices),
+                                    values=list(sparse_emb.values),
+                                )
+                            }
+                        else:
+                            # Sparse 없으면 Dense만 (하위 호환성)
+                            vector_dict = dense_vector.tolist()
+                        
                         point = PointStruct(
                             id=point_id,
-                            vector=vector.tolist(),
+                            vector=vector_dict,
                             payload=metadata
                         )
                         points.append(point)
@@ -203,7 +318,16 @@ class VectorSearch:
                 # 배치 실패 시 개별 처리
                 for text, metadata in zip(batch_texts, batch_metadata):
                     try:
-                        vector = self.encoder.encode(text)
+                        dense_vector = self.encoder.encode(text)
+                        
+                        # Sparse 벡터 생성
+                        sparse_emb = None
+                        if self._sparse_model:
+                            try:
+                                sparse_emb = next(self._sparse_model.embed([text]))
+                            except Exception:
+                                pass
+                        
                         # : id 기반 Point ID 생성
                         review_id = metadata.get("id") or metadata.get("review_id")
                         restaurant_id = metadata.get("restaurant_id")
@@ -211,9 +335,22 @@ class VectorSearch:
                             restaurant_id or "",
                             review_id or ""
                         )
+                        
+                        # 벡터 구성
+                        if sparse_emb is not None:
+                            vector_dict = {
+                                "dense": dense_vector.tolist(),
+                                "sparse": models.SparseVector(
+                                    indices=list(sparse_emb.indices),
+                                    values=list(sparse_emb.values),
+                                )
+                            }
+                        else:
+                            vector_dict = dense_vector.tolist()
+                        
                         point = PointStruct(
                             id=point_id,
-                            vector=vector.tolist(),
+                            vector=vector_dict,
                             payload=metadata
                         )
                         points.append(point)
@@ -236,11 +373,30 @@ class VectorSearch:
                 logger.warning("업로드할 포인트가 없습니다.")
                 return
             
+            # 컬렉션 형식에 맞게 포인트 벡터 정규화
+            normalized_points = []
+            for point in points:
+                normalized_vector = self._normalize_vector_for_collection(point.vector)
+                if normalized_vector is None:
+                    logger.error(f"포인트 {point.id}: 벡터 정규화 실패, 건너뜀")
+                    continue
+                
+                normalized_point = models.PointStruct(
+                    id=point.id,
+                    vector=normalized_vector,
+                    payload=point.payload
+                )
+                normalized_points.append(normalized_point)
+            
+            if not normalized_points:
+                logger.warning("정규화된 포인트가 없습니다.")
+                return
+            
             self.client.upload_points(
                 collection_name=self.collection_name,
-                points=points
+                points=normalized_points
             )
-            logger.info(f"{len(points)}개의 포인트를 업로드했습니다.")
+            logger.info(f"{len(normalized_points)}개의 포인트를 업로드했습니다.")
         except Exception as e:
             logger.error(f"포인트 업로드 중 오류: {str(e)}")
             raise
@@ -265,10 +421,17 @@ class VectorSearch:
             
             for point in points:
                 ids.append(point.id)
-                vectors.append(point.vector)
+                # 컬렉션 형식에 맞게 벡터 정규화
+                vector = self._normalize_vector_for_collection(point.vector)
+                if vector is None:
+                    logger.error(f"포인트 {point.id}: 벡터가 없습니다.")
+                    continue
+                
+                vectors.append(vector)
                 payloads.append(point.payload)
             
-            logger.info(f"{len(points)}개의 포인트를 upload_collection으로 업로드 시작...")
+            is_single = self._is_collection_single_vector()
+            logger.info(f"{len(points)}개의 포인트를 upload_collection으로 업로드 시작... (컬렉션 형식: {'단일 벡터' if is_single else 'named 벡터'})")
             
             # upload_collection 사용 (대용량 데이터에 효율적)
             # wait=True로 설정하여 업로드 완료를 기다림
@@ -309,11 +472,31 @@ class VectorSearch:
                             match=models.MatchValue(value=restaurant_id_str)
                         )
                     ]
-                )
+                ),
+                limit=10000,
+                with_payload=True,
+                with_vectors=False,
             )
             return [r.payload for r in records]
         except Exception as e:
             logger.error(f"리뷰 조회 중 오류: {str(e)}")
+            return []
+
+    def get_all_reviews_for_all_average(self, limit: int = 5000) -> List[Dict]:
+        """
+        전체 리뷰 샘플 조회 (강점 추출 시 '전체 평균' 계산용, strength_in_aspect와 동일 데이터 소스 개념).
+        filter 없이 scroll하여 limit개 payload 반환.
+        """
+        try:
+            records, _ = self.client.scroll(
+                collection_name=self.collection_name,
+                limit=limit,
+                with_payload=True,
+                with_vectors=False,
+            )
+            return [r.payload for r in records if r.payload]
+        except Exception as e:
+            logger.warning(f"전체 리뷰 샘플 조회 실패 (ALL_AVERAGE fallback 사용): {e}")
             return []
     
     def get_recent_restaurant_reviews(
@@ -474,7 +657,13 @@ class VectorSearch:
                         continue
                     vector = self.encoder.encode(review_text, convert_to_numpy=True)
                 else:
-                    vector = np.array(record.vector)
+                    # named vector(dense+sparse)면 dense만 사용 (restaurant_vectors는 단일 벡터)
+                    v = record.vector
+                    if isinstance(v, dict):
+                        v = v.get("dense")
+                    if v is None:
+                        continue
+                    vector = np.array(v)
                 
                 # 가중치 계산
                 weight = 1.0
@@ -924,13 +1113,16 @@ class VectorSearch:
             
             query_filter = models.Filter(must=filter_conditions)
             
-            # 3. 대표 벡터로 검색
-            results = self.client.query_points(
-                collection_name=self.collection_name,
-                query=restaurant_vector.tolist(),
-                query_filter=query_filter,
-                limit=top_k * 2,  # 날짜 필터링 전에 더 많이 가져옴
-            ).points
+            # 3. 대표 벡터로 검색 (named 벡터 컬렉션이면 using="dense")
+            qp_kw = {
+                "collection_name": self.collection_name,
+                "query": restaurant_vector.tolist(),
+                "query_filter": query_filter,
+                "limit": top_k * 2,  # 날짜 필터링 전에 더 많이 가져옴
+            }
+            if not self._is_collection_single_vector():
+                qp_kw["using"] = "dense"
+            results = self.client.query_points(**qp_kw).points
             
             # 4. 결과 변환
             candidates = []
@@ -989,6 +1181,7 @@ class VectorSearch:
         limit: int = 3,
         min_score: float = 0.0,
         food_category_id: Optional[int] = None,
+        use_hybrid: bool = False,
     ) -> List[Dict]:
         """
         의미 기반으로 유사한 리뷰를 검색합니다 ( 기반).
@@ -999,10 +1192,20 @@ class VectorSearch:
             limit: 반환할 최대 개수
             min_score: 최소 유사도 점수
             food_category_id: 음식 카테고리 ID 필터 (선택사항, strength 기능용)
+            use_hybrid: 하이브리드 검색 사용 여부 (Dense + Sparse)
             
         Returns:
             검색 결과 리스트 (payload와 score 포함,  컬럼명)
         """
+        if use_hybrid:
+            return self.query_hybrid_search(
+                query_text=query_text,
+                restaurant_id=restaurant_id,
+                limit=limit,
+                min_score=min_score,
+                food_category_id=food_category_id,
+            )
+        
         try:
             query_vector = self.encoder.encode(query_text).tolist()
             
@@ -1027,12 +1230,16 @@ class VectorSearch:
             
             query_filter = models.Filter(must=filter_conditions) if filter_conditions else None
             
-            hits = self.client.query_points(
-                collection_name=self.collection_name,
-                query=query_vector,
-                query_filter=query_filter,
-                limit=limit
-            ).points
+            # named 벡터(dense+sparse) 컬렉션이면 using="dense" 필요. 단일 벡터면 생략.
+            qp_kw = {
+                "collection_name": self.collection_name,
+                "query": query_vector,
+                "query_filter": query_filter,
+                "limit": limit,
+            }
+            if not self._is_collection_single_vector():
+                qp_kw["using"] = "dense"
+            hits = self.client.query_points(**qp_kw).points
             
             results = []
             for hit in hits:
@@ -1046,6 +1253,141 @@ class VectorSearch:
         except Exception as e:
             logger.error(f"리뷰 검색 중 오류: {str(e)}")
             return []
+    
+    def query_hybrid_search(
+        self,
+        query_text: str,
+        restaurant_id: Optional[Union[int, str]] = None,
+        limit: int = 5,
+        min_score: float = 0.0,
+        food_category_id: Optional[int] = None,
+    ) -> List[Dict]:
+        """
+        하이브리드 검색 (Dense + Sparse 벡터)
+        
+        Args:
+            query_text: 검색 쿼리 텍스트
+            restaurant_id: 필터링할 레스토랑 ID
+            limit: 반환할 최대 개수
+            min_score: 최소 유사도 점수
+            food_category_id: 음식 카테고리 ID 필터
+            
+        Returns:
+            검색 결과 리스트 (payload와 score 포함)
+        """
+        try:
+            # 컬렉션이 단일 벡터 형식이면 하이브리드 검색 불가능
+            if self._is_collection_single_vector():
+                # 단일 벡터 형식이면 일반 검색으로 폴백
+                return self.query_similar_reviews(
+                    query_text=query_text,
+                    restaurant_id=restaurant_id,
+                    limit=limit,
+                    min_score=min_score,
+                    food_category_id=food_category_id,
+                    use_hybrid=False,
+                )
+            
+            # Dense 벡터 생성
+            dense_vector = self.encoder.encode(query_text).tolist()
+            
+            # Sparse 벡터 생성 (FastEmbed 사용, 모델 캐싱)
+            try:
+                if self._sparse_model is None:
+                    self._sparse_model = SparseTextEmbedding(SPARSE_MODEL_NAME)
+                
+                sparse_emb = next(self._sparse_model.embed([query_text]))
+                
+                sparse_vector = models.SparseVector(
+                    indices=list(sparse_emb.indices),
+                    values=list(sparse_emb.values),
+                )
+            except Exception as e:
+                logger.warning(f"Sparse 벡터 생성 실패, Dense만 사용: {e}")
+                # Sparse 벡터 생성 실패 시 Dense만 사용
+                return self.query_similar_reviews(
+                    query_text=query_text,
+                    restaurant_id=restaurant_id,
+                    limit=limit,
+                    min_score=min_score,
+                    food_category_id=food_category_id,
+                    use_hybrid=False,
+                )
+            
+            # 필터 조건 구성
+            filter_conditions = []
+            if restaurant_id:
+                restaurant_id_str = str(restaurant_id) if isinstance(restaurant_id, int) else restaurant_id
+                filter_conditions.append(
+                    models.FieldCondition(
+                        key="restaurant_id",
+                        match=models.MatchValue(value=restaurant_id_str)
+                    )
+                )
+            
+            if food_category_id:
+                filter_conditions.append(
+                    models.FieldCondition(
+                        key="food_category_id",
+                        match=models.MatchValue(value=food_category_id)
+                    )
+                )
+            
+            query_filter = models.Filter(must=filter_conditions) if filter_conditions else None
+            
+            # 하이브리드 검색 (RRF - Reciprocal Rank Fusion)
+            try:
+                hits = self.client.query_points(
+                    collection_name=self.collection_name,
+                    query=models.FusionQuery(
+                        fusion=models.Fusion.RRF
+                    ),
+                    prefetch=[
+                        models.Prefetch(
+                            query=dense_vector,
+                            using="dense",
+                        ),
+                        models.Prefetch(
+                            query=sparse_vector,
+                            using="sparse",
+                        ),
+                    ],
+                    query_filter=query_filter,
+                    limit=limit,
+                    with_payload=True,
+                ).points
+            except Exception as e:
+                # Sparse 벡터가 컬렉션에 없거나 하이브리드 검색이 지원되지 않는 경우
+                logger.warning(f"하이브리드 검색 실패 (Sparse 벡터 없음 또는 미지원): {e}, Dense만 사용")
+                return self.query_similar_reviews(
+                    query_text=query_text,
+                    restaurant_id=restaurant_id,
+                    limit=limit,
+                    min_score=min_score,
+                    food_category_id=food_category_id,
+                    use_hybrid=False,
+                )
+            
+            results = []
+            for hit in hits:
+                if hit.score and hit.score >= min_score:
+                    results.append({
+                        "payload": hit.payload,
+                        "score": hit.score
+                    })
+            
+            return results
+        except Exception as e:
+            logger.error(f"하이브리드 검색 중 오류: {str(e)}")
+            # 폴백: Dense만 사용
+            return self.query_similar_reviews(
+                query_text=query_text,
+                restaurant_id=restaurant_id,
+                limit=limit,
+                min_score=min_score,
+                food_category_id=food_category_id,
+                use_hybrid=False,
+            )
     
     @staticmethod
     def _should_expand_query(query: str) -> bool:
@@ -1613,29 +1955,63 @@ class VectorSearch:
             if not valid_reviews:
                 return results
             
-            # 2. 배치로 벡터 인코딩 (성능 최적화)
-            logger.info(f"총 {len(valid_reviews)}개의 리뷰를 배치로 인코딩합니다 (배치 크기: {batch_size})")
+            # 2. 배치로 벡터 인코딩 (Dense + Sparse, 성능 최적화)
+            logger.info(f"총 {len(valid_reviews)}개의 리뷰를 배치로 인코딩합니다 (배치 크기: {batch_size}, 하이브리드: Dense + Sparse)")
             
-            all_vectors = []
+            # Sparse 모델 초기화 (한 번만, final_summary_pipeline과 동일)
+            try:
+                if self._sparse_model is None:
+                    self._sparse_model = SparseTextEmbedding(SPARSE_MODEL_NAME)
+                    logger.info(f"Sparse 벡터 모델 로드 완료: {SPARSE_MODEL_NAME}")
+            except Exception as e:
+                logger.warning(f"Sparse 벡터 모델 로드 실패, Dense만 사용: {e}")
+                self._sparse_model = None
+            
+            all_dense_vectors = []
+            all_sparse_vectors = []
             for i in range(0, len(review_texts), batch_size):
                 batch_texts = review_texts[i:i + batch_size]
                 try:
-                    batch_vectors = self.encoder.encode(batch_texts)
-                    all_vectors.extend(batch_vectors)
+                    # Dense 벡터 배치 인코딩
+                    batch_dense_vectors = self.encoder.encode(batch_texts)
+                    all_dense_vectors.extend(batch_dense_vectors)
+                    
+                    # Sparse 벡터 배치 인코딩
+                    batch_sparse_vectors = []
+                    if self._sparse_model:
+                        try:
+                            for text in batch_texts:
+                                sparse_emb = next(self._sparse_model.embed([text]))
+                                batch_sparse_vectors.append(sparse_emb)
+                        except Exception as e:
+                            logger.warning(f"Sparse 벡터 생성 실패 (배치 {i//batch_size + 1}), Dense만 사용: {e}")
+                            batch_sparse_vectors = [None] * len(batch_texts)
+                    else:
+                        batch_sparse_vectors = [None] * len(batch_texts)
+                    all_sparse_vectors.extend(batch_sparse_vectors)
                 except Exception as e:
                     logger.error(f"배치 인코딩 중 오류 발생 (배치 {i//batch_size + 1}): {str(e)}")
                     # 배치 실패 시 개별 처리
                     for text in batch_texts:
                         try:
-                            vector = self.encoder.encode(text)
-                            all_vectors.append(vector)
+                            dense_vector = self.encoder.encode(text)
+                            all_dense_vectors.append(dense_vector)
+                            
+                            sparse_emb = None
+                            if self._sparse_model:
+                                try:
+                                    sparse_emb = next(self._sparse_model.embed([text]))
+                                except Exception:
+                                    pass
+                            all_sparse_vectors.append(sparse_emb)
                         except Exception as e2:
                             logger.error(f"개별 인코딩 중 오류: {str(e2)}")
-                            all_vectors.append(None)
+                            all_dense_vectors.append(None)
+                            all_sparse_vectors.append(None)
             
             # 3. 포인트 생성
-            for review, vector in zip(valid_reviews, all_vectors):
-                if vector is None:
+            for review, dense_vector, sparse_emb in zip(valid_reviews, all_dense_vectors, all_sparse_vectors):
+                if dense_vector is None:
                     results.append({
                         "action": "error",
                         "review_id": review.get("review_id"),
@@ -1677,9 +2053,33 @@ class VectorSearch:
                     "version": new_version,
                 }
                 
+                # 벡터 구성 (하이브리드: Dense + Sparse)
+                if sparse_emb is not None:
+                    vector_dict = {
+                        "dense": dense_vector.tolist(),
+                        "sparse": models.SparseVector(
+                            indices=list(sparse_emb.indices),
+                            values=list(sparse_emb.values),
+                        )
+                    }
+                else:
+                    # Sparse 없으면 Dense만 (하위 호환성)
+                    vector_dict = dense_vector.tolist()
+                
+                # 컬렉션 형식에 맞게 벡터 정규화
+                normalized_vector = self._normalize_vector_for_collection(vector_dict)
+                if normalized_vector is None:
+                    logger.error(f"포인트 {point_id}: 벡터 정규화 실패")
+                    results.append({
+                        "action": "error",
+                        "review_id": review_id,
+                        "error": "벡터 정규화 실패"
+                    })
+                    continue
+                
                 point = models.PointStruct(
                     id=point_id,
-                    vector=vector.tolist(),
+                    vector=normalized_vector,
                     payload=payload
                 )
                 
@@ -1737,30 +2137,119 @@ class VectorSearch:
         except Exception as e:
             logger.error(f"배치 upsert 중 오류: {str(e)}")
             raise
+    
+    def update_reviews_sentiment(
+        self,
+        restaurant_id: Union[int, str],
+        reviews: List[Dict[str, Any]],
+        sentiment_labels: List[Optional[str]],
+    ) -> int:
+        """
+        리뷰들의 sentiment 라벨을 Qdrant payload에 업데이트
+        
+        Args:
+            restaurant_id: 레스토랑 ID
+            reviews: 리뷰 딕셔너리 리스트
+            sentiment_labels: 각 리뷰의 sentiment 라벨 리스트 ("positive", "negative", "neutral", None)
+        
+        Returns:
+            업데이트된 리뷰 개수
+        """
+        if not reviews or not sentiment_labels or len(reviews) != len(sentiment_labels):
+            logger.warning(f"리뷰와 sentiment_labels 개수가 일치하지 않습니다 (reviews: {len(reviews)}, labels: {len(sentiment_labels)})")
+            return 0
+        
+        updated_count = 0
+        point_ids_to_update = []
+        payloads_to_update = []
+        
+        for review, label in zip(reviews, sentiment_labels):
+            if label is None:
+                continue  # None인 경우 스킵 (알 수 없는 라벨)
+            
+            # Point ID 생성
+            # Pydantic 모델인 경우 속성으로 접근, 딕셔너리인 경우 .get() 사용
+            if hasattr(review, 'review_id'):
+                review_id = review.review_id
+            elif hasattr(review, 'id'):
+                review_id = review.id
+            elif isinstance(review, dict):
+                review_id = review.get("review_id") or review.get("id")
+            else:
+                continue
+            
+            if not review_id:
+                continue
+            
+            point_id = self._get_point_id(restaurant_id, review_id)
+            point_ids_to_update.append(point_id)
+            
+            # Payload 업데이트 (기존 payload는 유지하고 sentiment만 추가/업데이트)
+            payload_update = {
+                "sentiment": label,  # "positive", "negative", "neutral"
+            }
+            # 하위 호환성을 위해 is_recommended도 설정
+            if label == "positive":
+                payload_update["is_recommended"] = True
+            elif label == "negative":
+                payload_update["is_recommended"] = False
+            # neutral인 경우 is_recommended는 설정하지 않음 (기존 값 유지)
+            
+            payloads_to_update.append(payload_update)
+        
+        if not point_ids_to_update:
+            logger.warning("업데이트할 리뷰가 없습니다.")
+            return 0
+        
+        try:
+            # 배치로 payload 업데이트
+            batch_size = 100  # Qdrant 배치 업데이트 크기
+            for i in range(0, len(point_ids_to_update), batch_size):
+                batch_ids = point_ids_to_update[i:i + batch_size]
+                batch_payloads = payloads_to_update[i:i + batch_size]
+                
+                # 각 포인트의 payload 업데이트
+                for point_id, payload in zip(batch_ids, batch_payloads):
+                    try:
+                        self.client.set_payload(
+                            collection_name=self.collection_name,
+                            payload=payload,
+                            points=[point_id],
+                        )
+                        updated_count += 1
+                    except Exception as e:
+                        logger.warning(f"Point {point_id}의 sentiment 업데이트 실패: {e}")
+                        continue
+            
+            logger.info(f"Qdrant sentiment 라벨 업데이트 완료: {updated_count}개 리뷰 (restaurant_id: {restaurant_id})")
+            return updated_count
+            
+        except Exception as e:
+            logger.error(f"Qdrant sentiment 라벨 업데이트 중 오류: {e}")
+            return updated_count
 
 
 # 편의 함수들
 def prepare_qdrant_points(
     data: Dict,
-    encoder: SentenceTransformer,
     collection_name: str = Config.COLLECTION_NAME,
+    qdrant_client: Optional[QdrantClient] = None,
 ) -> List[PointStruct]:
     """
     레스토랑 데이터를 Qdrant 포인트로 변환하는 편의 함수.
+    FastEmbed Dense+Sparse 사용 (encoder 인자 제거).
     
     Args:
         data: 레스토랑 데이터 딕셔너리
-        encoder: SentenceTransformer 인코더
         collection_name: 컬렉션 이름
+        qdrant_client: Qdrant 클라이언트 (None이면 :memory: 사용)
         
     Returns:
         Qdrant PointStruct 리스트
     """
-    # 임시 클라이언트 생성 (실제로는 전달받아야 함)
-    from qdrant_client import QdrantClient
-    temp_client = QdrantClient(":memory:")
-    
-    vector_search = VectorSearch(encoder, temp_client, collection_name)
+    if qdrant_client is None:
+        qdrant_client = QdrantClient(":memory:")
+    vector_search = VectorSearch(qdrant_client=qdrant_client, collection_name=collection_name)
     return vector_search.prepare_points(data)
 
 
@@ -1771,6 +2260,7 @@ def get_restaurant_reviews(
 ) -> List[Dict]:
     """
     레스토랑 ID로 리뷰를 조회하는 편의 함수.
+    FastEmbed 기반 VectorSearch 사용 (encoder 인자 제거).
     
     Args:
         qdrant_client: Qdrant 클라이언트
@@ -1780,17 +2270,12 @@ def get_restaurant_reviews(
     Returns:
         리뷰 payload 리스트
     """
-    # encoder는 실제로 필요 없지만 클래스 구조상 필요
-    from sentence_transformers import SentenceTransformer
-    encoder = SentenceTransformer(Config.EMBEDDING_MODEL)
-    
-    vector_search = VectorSearch(encoder, qdrant_client, collection_name)
+    vector_search = VectorSearch(qdrant_client=qdrant_client, collection_name=collection_name)
     return vector_search.get_restaurant_reviews(restaurant_id)
 
 
 def query_similar_reviews(
     qdrant_client: QdrantClient,
-    encoder: SentenceTransformer,
     query_text: str,
     restaurant_id: Optional[str] = None,
     collection_name: str = Config.COLLECTION_NAME,
@@ -1799,10 +2284,10 @@ def query_similar_reviews(
 ) -> List[Dict]:
     """
     의미 기반으로 유사한 리뷰를 검색하는 편의 함수.
+    FastEmbed 기반 VectorSearch 사용 (encoder 인자 제거).
     
     Args:
         qdrant_client: Qdrant 클라이언트
-        encoder: SentenceTransformer 인코더
         query_text: 검색 쿼리 텍스트
         restaurant_id: 필터링할 레스토랑 ID (None이면 전체)
         collection_name: 컬렉션 이름
@@ -1812,13 +2297,12 @@ def query_similar_reviews(
     Returns:
         검색 결과 리스트 (payload와 score 포함)
     """
-    vector_search = VectorSearch(encoder, qdrant_client, collection_name)
+    vector_search = VectorSearch(qdrant_client=qdrant_client, collection_name=collection_name)
     return vector_search.query_similar_reviews(query_text, restaurant_id, limit, min_score)
 
 
 def get_reviews_with_images(
     qdrant_client: QdrantClient,
-    encoder: SentenceTransformer,
     query_text: str,
     collection_name: str = Config.COLLECTION_NAME,
     limit: int = 10,
@@ -1826,10 +2310,10 @@ def get_reviews_with_images(
 ) -> List[Dict]:
     """
     이미지가 있는 리뷰를 검색하는 편의 함수.
+    FastEmbed 기반 VectorSearch 사용 (encoder 인자 제거).
     
     Args:
         qdrant_client: Qdrant 클라이언트
-        encoder: SentenceTransformer 인코더
         query_text: 검색 쿼리 텍스트
         collection_name: 컬렉션 이름
         limit: 반환할 최대 개수
@@ -1838,7 +2322,7 @@ def get_reviews_with_images(
     Returns:
         이미지 URL이 있는 리뷰 리스트
     """
-    vector_search = VectorSearch(encoder, qdrant_client, collection_name)
+    vector_search = VectorSearch(qdrant_client=qdrant_client, collection_name=collection_name)
     return vector_search.get_reviews_with_images(query_text, limit, min_score)
 
 

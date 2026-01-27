@@ -24,6 +24,8 @@ from ...metrics_collector import MetricsCollector
 from ...config import Config
 from ...strength_extraction import StrengthExtractionPipeline
 from ...cache import acquire_lock
+from ...summary_pipeline import summarize_aspects_new
+from ...aspect_seeds import DEFAULT_SERVICE_SEEDS, DEFAULT_PRICE_SEEDS, DEFAULT_FOOD_SEEDS
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -38,44 +40,35 @@ async def summarize_reviews(
     debug: bool = Depends(get_debug_mode),
 ):
     """
-    벡터 검색을 활용하여 단일 레스토랑의 긍정/부정 리뷰를 자동 검색하고 요약합니다.
+    새로운 파이프라인: 하이브리드 검색 (Dense + Sparse) + 카테고리별 요약
     
-    vLLM 직접 사용 모드에서는 내부적으로 배치 처리 로직을 재사용하여
-    동적 배치 크기와 세마포어 기반 OOM 방지 전략을 적용합니다.
+    프로세스:
+    1. 기본 시드만 사용 (DEFAULT_SERVICE/PRICE/FOOD_SEEDS, 파일 미사용)
+    2. 카테고리별(service, price, food) 하이브리드 검색 수행
+    3. 각 카테고리별로 LLM 요약 생성 (summary, bullets, evidence)
+    4. overall_summary 생성
     
-    OOM 방지 전략 (vLLM 모드):
-    - 각 레스토랑별로 동적 배치 크기 계산 (리뷰 길이에 따라)
-    - 세마포어를 통한 동시 처리 수 제한 (VLLM_MAX_CONCURRENT_BATCHES)
-    - 각 배치는 독립적으로 처리 가능 (메모리 사용량 예측 가능)
-    - vLLM이 자동으로 여러 배치를 효율적으로 처리 (Continuous Batching)
+    주의사항:
+    - 이 파이프라인은 긍정/부정 aspect를 세지 않습니다
+    - 카테고리별(service/price/food) 하이브리드 검색으로 관련 리뷰를 찾고 요약만 생성합니다
+    - 긍정/부정 분류는 sentiment analysis 파이프라인에서 수행됩니다
     
-    프로세스 (aspect 기반):
-    1. 벡터 검색으로 긍정 리뷰 자동 검색
-       - query = ["맛있다 좋다 친절하다"]
-       - filter( must ( restaurant id = summary 하고자하는 id (단일 id)))
-    2. 벡터 검색으로 부정 리뷰 자동 검색
-       - query = ["맛없다 싫다 불친절하다"]
-       - filter( must ( restaurant id = summary 하고자하는 id (단일 id)))
-    3. 긍정 리뷰에서 aspect 단위 장점 추출 (strength 추출의 Step B 로직 재사용)
-    4. 부정 리뷰에서 aspect 단위 단점 추출 (동일한 로직)
-    5. LLM이 positive_aspects + negative_aspects를 기반으로 overall_summary 생성
-    6. 메타데이터와 함께 반환
-    
-    - **restaurant_id**: 레스토랑 ID (단일 ID만 허용)
-    - **positive_query**: 긍정 리뷰 검색 쿼리 (기본값: "맛있다 좋다 만족")
-    - **negative_query**: 부정 리뷰 검색 쿼리 (기본값: "맛없다 별로 불만")
-    - **limit**: 각 카테고리당 검색할 최대 리뷰 수 (기본값: 10)
-    - **min_score**: 최소 유사도 점수 (기본값: 0.0)
+    Args:
+        restaurant_id: 레스토랑 ID
+        limit: 각 카테고리당 검색할 최대 리뷰 수 (기본값: 10)
+        min_score: 최소 유사도 점수 (기본값: 0.0, 사용 안 함)
     
     Returns:
         - restaurant_id: 레스토랑 ID
-        - overall_summary: 전체 요약 (positive_aspects + negative_aspects 기반)
-        - positive_aspects: 긍정 aspect 리스트 (aspect, claim, evidence_quotes, evidence_review_ids)
-        - negative_aspects: 부정 aspect 리스트 (aspect, claim, evidence_quotes, evidence_review_ids)
-        - positive_reviews: 긍정 리뷰 메타데이터
-        - negative_reviews: 부정 리뷰 메타데이터
-        - positive_count: 긍정 리뷰 개수
-        - negative_count: 부정 리뷰 개수
+        - overall_summary: 전체 요약
+        - categories: 카테고리별 상세 요약 (service, price, food)
+            - summary: 카테고리별 요약
+            - bullets: 주요 포인트 리스트
+            - evidence: 근거 리뷰 리스트 (review_id, snippet, rank)
+        - positive_aspects: [] (새 파이프라인은 긍정/부정 aspect를 세지 않음)
+        - negative_aspects: [] (새 파이프라인은 긍정/부정 aspect를 세지 않음)
+        - positive_count: 0 (새 파이프라인은 긍정/부정 개수를 세지 않음)
+        - negative_count: 0 (새 파이프라인은 긍정/부정 개수를 세지 않음)
     """
     start_time = time.time()
     
@@ -133,108 +126,111 @@ async def summarize_reviews(
                         )
                     else:
                         return SummaryDisplayResponse(
+                            restaurant_id=request.restaurant_id,
                             overall_summary="",
                             positive_aspects=[],
                             negative_aspects=[],
                         )
             
-            # 대표 벡터 기반 TOP-K 리뷰 선택
-        # 1. 대표 벡터 주위 TOP-K 리뷰 검색
-        top_k_results = vector_search.query_by_restaurant_vector(
-            restaurant_id=request.restaurant_id,
-            top_k=request.limit * 2,  # 긍정/부정 모두 포함할 수 있도록 더 많이 가져옴
-            months_back=None,  # 날짜 필터 없음
+            # 새로운 파이프라인: 하이브리드 검색 + Aspect 기반 카테고리별 요약
+        # 1. 기본 시드만 사용 (DEFAULT_*_SEEDS, 파일/ASPECT_SEEDS_FILE 미사용)
+        seed_list = [DEFAULT_SERVICE_SEEDS, DEFAULT_PRICE_SEEDS, DEFAULT_FOOD_SEEDS]
+        name_list = ["service", "price", "food"]
+        logger.info("요약: 기본 시드만 사용")
+        
+        # 2. 카테고리별 하이브리드 검색
+        hits_dict = {}
+        hits_data_dict = {}
+        
+        for seeds, name in zip(seed_list, name_list):
+            # Seed를 쿼리로 사용 (최대 10개만 사용하여 토큰 절약)
+            query_seeds = seeds[:10] if len(seeds) > 10 else seeds
+            query_text = " ".join(query_seeds)
+            
+            # 하이브리드 검색 수행
+            hits = vector_search.query_hybrid_search(
+                query_text=query_text,
+                restaurant_id=request.restaurant_id,
+                limit=request.limit,
+                min_score=0.0,
+            )
+            
+            # 카테고리별 리스트 초기화
+            hits_dict[name] = []
+            hits_data_dict[name] = []
+            
+            for rank, hit in enumerate(hits):
+                payload = hit.get("payload", {})
+                content = payload.get("content", "")
+                review_id = payload.get("review_id") or payload.get("id") or str(hit.get("id", ""))
+                
+                hits_dict[name].append(content)
+                hits_data_dict[name].append({
+                    "review_id": str(review_id),
+                    "snippet": content,
+                    "rank": rank,
+                })
+        
+        # 3. 새로운 파이프라인으로 요약 생성
+        result = summarize_aspects_new(
+            service_reviews=hits_dict.get("service", []),
+            price_reviews=hits_dict.get("price", []),
+            food_reviews=hits_dict.get("food", []),
+            service_evidence_data=hits_data_dict.get("service", []),
+            price_evidence_data=hits_data_dict.get("price", []),
+            food_evidence_data=hits_data_dict.get("food", []),
+            llm_utils=llm_utils,
+            per_category_max=request.limit,
         )
         
-        # 2. payload 추출
-        all_reviews = [r["payload"] for r in top_k_results]
+        # 4. 응답 형식 변환 (기존 API 형식과 호환)
+        # 새로운 형식: {"service": {...}, "price": {...}, "food": {...}, "overall_summary": {...}}
+        # 기존 형식: {"overall_summary": "...", "positive_aspects": [...], "negative_aspects": [...]}
         
-        # 3. 대표 벡터 기반 검색 결과가 없으면 예외 발생
-        if not all_reviews:
-            raise HTTPException(
-                status_code=404,
-                detail=f"레스토랑 {request.restaurant_id}에 대한 리뷰를 찾을 수 없습니다. "
-                       f"대표 벡터를 계산할 수 없거나 리뷰가 존재하지 않습니다."
-            )
+        # overall_summary 추출
+        overall_summary = result.get("overall_summary", {}).get("summary", "")
+        if not overall_summary:
+            # 카테고리별 summary를 합쳐서 overall_summary 생성
+            summaries = []
+            for cat in ["service", "price", "food"]:
+                cat_summary = result.get(cat, {}).get("summary", "")
+                if cat_summary:
+                    summaries.append(cat_summary)
+            overall_summary = " ".join(summaries) if summaries else "요약할 리뷰가 없습니다."
         
-        # 4. 대표 벡터 기반 결과 사용
-        # LLM이 aspect 추출 시 자동으로 긍정/부정을 구분
-        positive_reviews = all_reviews  # 대표 벡터 기반이므로 대부분 긍정적일 가능성 높음
-        negative_reviews = []  # 부정 리뷰는 별도로 검색하지 않음 (대표 벡터 기반이므로)
+        # positive_aspects와 negative_aspects는 빈 리스트로 설정 (새 파이프라인은 카테고리별 구조 사용)
+        # categories를 CategorySummary 모델로 변환
+        from ...models import CategorySummary
+        categories_dict = {}
+        for cat in ["service", "price", "food"]:
+            cat_data = result.get(cat, {})
+            if cat_data:
+                categories_dict[cat] = CategorySummary(
+                    summary=cat_data.get("summary", ""),
+                    bullets=cat_data.get("bullets", []),
+                    evidence=cat_data.get("evidence", []),
+                )
         
-        # 5. LLM 입력 및 처리
-        # vLLM 직접 사용 모드인지 확인
-        if hasattr(llm_utils, 'use_pod_vllm') and llm_utils.use_pod_vllm:
-            # vLLM 모드: summarize_multiple_restaurants_vllm() 재사용 (OOM 방지 전략 포함)
-            # 단일 레스토랑 요청을 리스트로 감싸서 전달
-            restaurants_data = [{
-                "restaurant_id": request.restaurant_id,
-                "positive_reviews": positive_reviews,
-                "negative_reviews": negative_reviews
-            }]
-            
-            results = await llm_utils.summarize_multiple_restaurants_vllm(
-                restaurants_data=restaurants_data,
-                max_tokens_per_batch=None,  # 동적 계산
-                vector_search=vector_search,  # aspect 검증용
-                validate_aspects=True,  # aspect 검증 활성화
-            )
-            
-            # 결과가 비어있지 않으면 첫 번째 결과 반환
-            if results:
-                result = results[0]
-            else:
-                # 결과가 없는 경우 빈 결과 반환
-                result = {
-                    "restaurant_id": request.restaurant_id,
-                    "overall_summary": "요약할 리뷰가 없습니다.",
-                    "positive_aspects": [],
-                    "negative_aspects": [],
-                    "positive_reviews": positive_reviews,
-                    "negative_reviews": negative_reviews,
-                    "positive_count": len(positive_reviews),
-                    "negative_count": len(negative_reviews),
-                }
-        else:
-            # 기존 모드: 동기 메서드 사용 (aspect 기반)
-            result = llm_utils.summarize_reviews(
-                positive_reviews=positive_reviews,
-                negative_reviews=negative_reviews,
-                vector_search=vector_search,  # aspect 검증용
-                validate_aspects=True,  # aspect 검증 활성화
-            )
-            
-            # restaurant_id 추가
-            result["restaurant_id"] = request.restaurant_id
-        
-        # 6. 응답 검증 (overall_summary 포함 확인)
-        if not result or "overall_summary" not in result:
-            raise HTTPException(
-                status_code=500, 
-                detail="리뷰 요약 실패: overall_summary가 생성되지 않았습니다."
-            )
-        
-        # positive_aspects와 negative_aspects가 없으면 빈 리스트로 설정
-        if "positive_aspects" not in result:
-            result["positive_aspects"] = []
-        if "negative_aspects" not in result:
-            result["negative_aspects"] = []
-        
-        # evidence_review_ids를 문자열로 변환 (Pydantic 검증 오류 방지)
-        for aspect in result.get("positive_aspects", []):
-            if "evidence_review_ids" in aspect and aspect["evidence_review_ids"]:
-                aspect["evidence_review_ids"] = [str(rid) for rid in aspect["evidence_review_ids"]]
-        for aspect in result.get("negative_aspects", []):
-            if "evidence_review_ids" in aspect and aspect["evidence_review_ids"]:
-                aspect["evidence_review_ids"] = [str(rid) for rid in aspect["evidence_review_ids"]]
+        result = {
+            "restaurant_id": request.restaurant_id,
+            "overall_summary": overall_summary,
+            "positive_aspects": [],  # 새 파이프라인은 카테고리별 구조 사용
+            "negative_aspects": [],
+            "positive_reviews": [],  # 새 파이프라인은 카테고리별로 분리
+            "negative_reviews": [],
+            "positive_count": 0,
+            "negative_count": 0,
+            "categories": categories_dict if categories_dict else None,
+        }
         
         # 메트릭 수집
+        total_reviews_count = sum(len(hits_dict.get(cat, [])) for cat in ["service", "price", "food"])
         request_id = metrics.collect_metrics(
             restaurant_id=request.restaurant_id,
             analysis_type="summary",
             start_time=start_time,
             tokens_used=result.get("tokens_used"),
-            batch_size=len(positive_reviews) + len(negative_reviews),
+            batch_size=total_reviews_count,
         )
         
         # 디버그 모드에 따라 응답 반환
@@ -250,11 +246,13 @@ async def summarize_reviews(
                 )
             )
         else:
-            # 일반 모드: 최소 필드만 (aspect 포함)
+            # 일반 모드: 최소 필드만 (aspect + categories 포함)
             return SummaryDisplayResponse(
+                restaurant_id=result["restaurant_id"],
                 overall_summary=result["overall_summary"],
                 positive_aspects=result.get("positive_aspects", []),
                 negative_aspects=result.get("negative_aspects", []),
+                categories=result.get("categories"),
             )
     except RuntimeError as e:
         # 락 획득 실패 (중복 실행 방지)
@@ -288,29 +286,24 @@ async def extract_strengths(
     debug: bool = Depends(get_debug_mode),
 ):
     """
-    구조화된 강점 추출 파이프라인
+    새로운 파이프라인: 통계적 비율 기반 강점 추출 (Kiwi + lift + LLM 설명)
     
     프로세스:
-    1. Step A: 타겟 긍정 근거 후보 수집 (Vector Search / Filter)
-    2. Step B: 강점 후보 생성 (LLM 구조화 출력)
-    3. Step C: 강점별 근거 확장/검증 (Aspect → Qdrant 벡터 검색)
-    4. Step D: 의미 중복 제거 (클러스터링)
-    5. Step E~H: 비교군 기반 차별 강점 계산 (distinct일 때만)
+    1. 레스토랑 리뷰 조회 (VectorSearch)
+    2. Kiwi 명사 bigram → service/price 긍정 비율 계산 (calculate_single_restaurant_ratios)
+    3. 단일 vs 전체 평균 lift 계산 (calculate_strength_lift)
+    4. LLM으로 자연어 설명 생성 (generate_strength_descriptions)
+    5. 양수 lift만 강점으로 반환 (top_k 제한)
     
     Args:
         request: 강점 추출 요청
             - restaurant_id: 타겟 레스토랑 ID
-            - strength_type: 강점 타입 ('representative', 'distinct', 'both')
-            - category_filter: 카테고리 필터 (선택)
-            - region_filter: 지역 필터 (선택)
-            - price_band_filter: 가격대 필터 (선택)
-            - top_k: 반환할 최대 강점 개수
-            - max_candidates: 근거 후보 최대 개수
-            - months_back: 최근 N개월 리뷰만 사용
-            - min_support: 최소 support_count
+            - strength_type: 무시됨 (새 파이프라인은 lift 기반 distinct만 출력)
+            - top_k: 반환할 최대 강점 개수 (기본 10)
     
     Returns:
-        강점 추출 결과 (구조화된 형식)
+        강점 추출 결과 (category_lift, lift_percentage, all_average_ratio, single_restaurant_ratio 포함).
+        category_lift: 카테고리별 lift 퍼센트(service, price). 이 수치를 근거로 LLM 설명 생성.
     """
     start_time = time.time()
     
@@ -435,105 +428,127 @@ async def summarize_reviews_batch(
     request: SummaryBatchRequest,
     llm_utils: LLMUtils = Depends(get_llm_utils),
     vector_search: VectorSearch = Depends(get_vector_search),
+    metrics: MetricsCollector = Depends(get_metrics_collector),
 ):
     """
-    여러 레스토랑의 리뷰를 배치로 요약 (aspect 기반, 비동기 처리)
+    여러 레스토랑의 리뷰를 배치로 요약 (새 파이프라인: 카테고리별 하이브리드 검색 + 요약)
     
     각 레스토랑별로:
-    1. 벡터 검색으로 긍정/부정 리뷰 자동 검색
-    2. 긍정 리뷰에서 aspect 단위 장점 추출
-    3. 부정 리뷰에서 aspect 단위 단점 추출
-    4. LLM이 positive_aspects + negative_aspects를 기반으로 overall_summary 생성
+    1. 기본 시드만 사용 (DEFAULT_SERVICE/PRICE/FOOD_SEEDS, 파일 미사용)
+    2. 카테고리별(service, price, food) 하이브리드 검색 수행
+    3. 각 카테고리별로 LLM 요약 생성 (summary, bullets, evidence)
+    4. overall_summary 생성
     
-    OOM 방지 전략:
-    - 세마포어를 통한 동시 처리 수 제한 (VLLM_MAX_CONCURRENT_BATCHES)
-    - 각 레스토랑은 독립적으로 처리 가능
-    
-    프로세스 (aspect 기반):
-    1. 각 레스토랑별로 벡터 검색 수행 (positive_query, negative_query 사용)
-    2. 각 레스토랑별로:
-       - 긍정 리뷰에서 aspect 단위 장점 추출
-       - 부정 리뷰에서 aspect 단위 단점 추출
-       - LLM이 positive_aspects + negative_aspects를 기반으로 overall_summary 생성
-    3. 모든 레스토랑을 비동기로 병렬 처리
-    4. 레스토랑별로 결과 집계
+    주의사항:
+    - 이 파이프라인은 긍정/부정 aspect를 세지 않습니다
+    - 카테고리별(service/price/food) 하이브리드 검색으로 관련 리뷰를 찾고 요약만 생성합니다
+    - 긍정/부정 분류는 sentiment analysis 파이프라인에서 수행됩니다
     
     Args:
         request: 배치 리뷰 요약 요청
             - restaurants: 레스토랑 데이터 리스트
                 - restaurant_id: 레스토랑 ID
-                - positive_query: 긍정 리뷰 검색 쿼리 (기본값: "맛있다 좋다 만족")
-                - negative_query: 부정 리뷰 검색 쿼리 (기본값: "맛없다 별로 불만")
                 - limit: 각 카테고리당 검색할 최대 리뷰 수 (기본값: 10)
-                - min_score: 최소 유사도 점수 (기본값: 0.0)
-            - max_tokens_per_batch: 배치당 최대 토큰 수 (선택사항)
+                - min_score: 최소 유사도 점수 (기본값: 0.0, 사용 안 함)
     
     Returns:
-        각 레스토랑별 요약 결과 리스트
+        각 레스토랑별 요약 결과 리스트 (categories 기반)
     """
     try:
-        # 각 레스토랑별로 벡터 검색 수행
-        restaurants_data = []
+        results = []
+        
+        # 기본 시드만 사용 (1회만, 배치 공통)
+        seed_list = [DEFAULT_SERVICE_SEEDS, DEFAULT_PRICE_SEEDS, DEFAULT_FOOD_SEEDS]
+        name_list = ["service", "price", "food"]
+        logger.info("요약: 기본 시드만 사용")
+
+        # 각 레스토랑별로 새 파이프라인 적용
         for restaurant_data in request.restaurants:
             restaurant_id = restaurant_data.get("restaurant_id")
-            positive_query = restaurant_data.get("positive_query", "맛있다 좋다 만족")
-            negative_query = restaurant_data.get("negative_query", "맛없다 별로 불만")
             limit = restaurant_data.get("limit", 10)
-            min_score = restaurant_data.get("min_score", 0.0)
             
-            # 벡터 검색으로 긍정/부정 리뷰 검색
-            positive_results = vector_search.query_similar_reviews(
-                query_text=positive_query,
-                restaurant_id=restaurant_id,
-                limit=limit,
-                min_score=min_score,
-            )
-            negative_results = vector_search.query_similar_reviews(
-                query_text=negative_query,
-                restaurant_id=restaurant_id,
-                limit=limit,
-                min_score=min_score,
-            )
+            # 카테고리별 하이브리드 검색
+            hits_dict = {}
+            hits_data_dict = {}
             
-            # payload 추출
-            positive_reviews = [r["payload"] for r in positive_results]
-            negative_reviews = [r["payload"] for r in negative_results]
-            
-            restaurants_data.append({
-                "restaurant_id": restaurant_id,
-                "positive_reviews": positive_reviews,
-                "negative_reviews": negative_reviews,
-            })
-        
-        # vLLM 직접 사용 모드인지 확인
-        if hasattr(llm_utils, 'use_pod_vllm') and llm_utils.use_pod_vllm:
-            results = await llm_utils.summarize_multiple_restaurants_vllm(
-                restaurants_data=restaurants_data,
-                max_tokens_per_batch=request.max_tokens_per_batch,
-                vector_search=vector_search,  # aspect 검증용
-                validate_aspects=True,  # aspect 검증 활성화
-            )
-        else:
-            # 기존 방식: 각 레스토랑을 순차 처리
-            results = []
-            for restaurant_data in restaurants_data:
-                result = llm_utils.summarize_reviews(
-                    positive_reviews=restaurant_data.get("positive_reviews", []),
-                    negative_reviews=restaurant_data.get("negative_reviews", []),
-                    vector_search=vector_search,  # aspect 검증용
-                    validate_aspects=True,  # aspect 검증 활성화
+            for seeds, name in zip(seed_list, name_list):
+                # Seed를 쿼리로 사용 (최대 10개만 사용하여 토큰 절약)
+                query_seeds = seeds[:10] if len(seeds) > 10 else seeds
+                query_text = " ".join(query_seeds)
+                
+                # 하이브리드 검색 수행
+                hits = vector_search.query_hybrid_search(
+                    query_text=query_text,
+                    restaurant_id=restaurant_id,
+                    limit=limit,
+                    min_score=0.0,
                 )
-                result["restaurant_id"] = restaurant_data["restaurant_id"]
-                results.append(result)
-        
-        # evidence_review_ids를 문자열로 변환 (Pydantic 검증 오류 방지)
-        for result in results:
-            for aspect in result.get("positive_aspects", []):
-                if "evidence_review_ids" in aspect and aspect["evidence_review_ids"]:
-                    aspect["evidence_review_ids"] = [str(rid) for rid in aspect["evidence_review_ids"]]
-            for aspect in result.get("negative_aspects", []):
-                if "evidence_review_ids" in aspect and aspect["evidence_review_ids"]:
-                    aspect["evidence_review_ids"] = [str(rid) for rid in aspect["evidence_review_ids"]]
+                
+                # 카테고리별 리스트 초기화
+                hits_dict[name] = []
+                hits_data_dict[name] = []
+                
+                for rank, hit in enumerate(hits):
+                    payload = hit.get("payload", {})
+                    content = payload.get("content", "")
+                    review_id = payload.get("review_id") or payload.get("id") or str(hit.get("id", ""))
+                    
+                    hits_dict[name].append(content)
+                    hits_data_dict[name].append({
+                        "review_id": str(review_id),
+                        "snippet": content,
+                        "rank": rank,
+                    })
+            
+            # 새로운 파이프라인으로 요약 생성
+            result = summarize_aspects_new(
+                service_reviews=hits_dict.get("service", []),
+                price_reviews=hits_dict.get("price", []),
+                food_reviews=hits_dict.get("food", []),
+                service_evidence_data=hits_data_dict.get("service", []),
+                price_evidence_data=hits_data_dict.get("price", []),
+                food_evidence_data=hits_data_dict.get("food", []),
+                llm_utils=llm_utils,
+                per_category_max=limit,
+            )
+            
+            # 응답 형식 변환
+            overall_summary = result.get("overall_summary", {}).get("summary", "")
+            if not overall_summary:
+                # 카테고리별 summary를 합쳐서 overall_summary 생성
+                summaries = []
+                for cat in ["service", "price", "food"]:
+                    cat_summary = result.get(cat, {}).get("summary", "")
+                    if cat_summary:
+                        summaries.append(cat_summary)
+                overall_summary = " ".join(summaries) if summaries else "요약할 리뷰가 없습니다."
+            
+            # categories를 CategorySummary 모델로 변환
+            from ...models import CategorySummary
+            categories_dict = {}
+            for cat in ["service", "price", "food"]:
+                cat_data = result.get(cat, {})
+                if cat_data:
+                    categories_dict[cat] = CategorySummary(
+                        summary=cat_data.get("summary", ""),
+                        bullets=cat_data.get("bullets", []),
+                        evidence=cat_data.get("evidence", []),
+                    )
+            
+            # 새 파이프라인은 긍정/부정 aspect를 세지 않음
+            result_dict = {
+                "restaurant_id": restaurant_id,
+                "overall_summary": overall_summary,
+                "positive_aspects": [],  # 새 파이프라인은 긍정/부정 aspect를 세지 않음
+                "negative_aspects": [],  # 새 파이프라인은 긍정/부정 aspect를 세지 않음
+                "positive_reviews": [],  # 새 파이프라인은 카테고리별로 분리되어 categories에 포함됨
+                "negative_reviews": [],  # 새 파이프라인은 카테고리별로 분리되어 categories에 포함됨
+                "positive_count": 0,  # 새 파이프라인은 긍정/부정 개수를 세지 않음
+                "negative_count": 0,  # 새 파이프라인은 긍정/부정 개수를 세지 않음
+                "categories": categories_dict if categories_dict else None,  # 실제 데이터는 여기에 포함됨
+            }
+            
+            results.append(result_dict)
         
         return SummaryBatchResponse(results=[
             SummaryResponse(**result) for result in results

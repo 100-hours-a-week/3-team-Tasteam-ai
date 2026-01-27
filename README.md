@@ -30,7 +30,9 @@ export OPENAI_API_KEY="your_openai_api_key"
 export OPENAI_MODEL="gpt-4o-mini"
 
 # Qdrant 설정
-export QDRANT_URL="./qdrant_storage"  # 기본값: :memory:
+export QDRANT_URL="./qdrant_db"  # 기본값: ./qdrant_db (on-disk 모드)
+# 또는 메모리 모드: export QDRANT_URL=":memory:"
+# 또는 원격 서버: export QDRANT_URL="http://localhost:6333"
 
 # vLLM 설정 (RunPod Pod 환경)
 export USE_POD_VLLM="true"
@@ -96,5 +98,6 @@ python test_all_task.py --benchmark --save-results results.json
 
 ## 참고 문서
 
-- [API_SPECIFICATION.md](API_SPECIFICATION.md) - API 명세서
-- [ARCHITECTURE.md](ARCHITECTURE.md) - 시스템 아키텍처
+- [PIPELINE_OPERATIONS.md](PIPELINE_OPERATIONS.md) - 파이프라인 동작 (Strength, Summary, Sentiment, Vector)
+- [LLM_SERVICE_STEP/API_SPECIFICATION.md](LLM_SERVICE_STEP/API_SPECIFICATION.md) - API 명세서
+- [LLM_SERVICE_STEP/ARCHITECTURE.md](LLM_SERVICE_STEP/ARCHITECTURE.md) - 시스템 아키텍처

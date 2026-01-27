@@ -10,3 +10,7 @@ metrics.db-wal
 logs/
 package-lock.json
 package.json
+
+# Qdrant on-disk 데이터베이스
+qdrant_db/
+*.qdrant

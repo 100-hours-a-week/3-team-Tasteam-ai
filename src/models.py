@@ -78,6 +78,7 @@ class SentimentAnalysisRequest(BaseModel):
 
 class SentimentAnalysisDisplayResponse(BaseModel):
     """감성 분석 표시용 응답 모델 (최소 필드)"""
+    restaurant_id: int = Field(..., description="레스토랑 ID")
     positive_ratio: int = Field(..., description="긍정 비율 (%) - 정수값")
     negative_ratio: int = Field(..., description="부정 비율 (%) - 정수값")
 
@@ -87,9 +88,11 @@ class SentimentAnalysisResponse(BaseModel):
     restaurant_id: int = Field(..., description="레스토랑 ID")
     positive_count: int = Field(..., description="긍정 리뷰 개수")
     negative_count: int = Field(..., description="부정 리뷰 개수")
+    neutral_count: int = Field(0, description="중립 리뷰 개수")
     total_count: int = Field(..., description="전체 리뷰 개수")
     positive_ratio: int = Field(..., description="긍정 비율 (%) - 정수값")
     negative_ratio: int = Field(..., description="부정 비율 (%) - 정수값")
+    neutral_ratio: int = Field(0, description="중립 비율 (%) - 정수값")
     debug: Optional[DebugInfo] = Field(None, description="디버그 정보")
 
 
@@ -144,11 +147,20 @@ class SummaryAspect(BaseModel):
     evidence_review_ids: List[str] = Field(default_factory=list, description="근거 리뷰 ID 리스트")
 
 
+class CategorySummary(BaseModel):
+    """카테고리별 요약 모델"""
+    summary: str = Field(..., description="카테고리 요약")
+    bullets: List[str] = Field(default_factory=list, description="핵심 포인트 리스트")
+    evidence: List[Dict[str, Any]] = Field(default_factory=list, description="근거 리스트 (review_id, snippet, rank)")
+
+
 class SummaryDisplayResponse(BaseModel):
     """리뷰 요약 표시용 응답 모델 (최소 필드)"""
+    restaurant_id: int = Field(..., description="레스토랑 ID")
     overall_summary: str = Field(..., description="전체 요약")
     positive_aspects: List[SummaryAspect] = Field(default_factory=list, description="긍정 aspect 리스트")
     negative_aspects: List[SummaryAspect] = Field(default_factory=list, description="부정 aspect 리스트")
+    categories: Optional[Dict[str, CategorySummary]] = Field(None, description="카테고리별 요약 (새 파이프라인)")
 
 
 class SummaryResponse(BaseModel):
@@ -157,10 +169,11 @@ class SummaryResponse(BaseModel):
     overall_summary: str = Field(..., description="전체 요약 (positive_aspects + negative_aspects 기반)")
     positive_aspects: List[SummaryAspect] = Field(default_factory=list, description="긍정 aspect 리스트")
     negative_aspects: List[SummaryAspect] = Field(default_factory=list, description="부정 aspect 리스트")
-    positive_reviews: List[ReviewModel] = Field(..., description="긍정 리뷰 메타데이터")
-    negative_reviews: List[ReviewModel] = Field(..., description="부정 리뷰 메타데이터")
-    positive_count: int = Field(..., description="긍정 리뷰 개수")
-    negative_count: int = Field(..., description="부정 리뷰 개수")
+    positive_reviews: List[ReviewModel] = Field(default_factory=list, description="긍정 리뷰 메타데이터")
+    negative_reviews: List[ReviewModel] = Field(default_factory=list, description="부정 리뷰 메타데이터")
+    positive_count: int = Field(0, description="긍정 리뷰 개수")
+    negative_count: int = Field(0, description="부정 리뷰 개수")
+    categories: Optional[Dict[str, CategorySummary]] = Field(None, description="카테고리별 요약 (새 파이프라인)")
     debug: Optional[DebugInfo] = Field(None, description="디버그 정보")
 
 
@@ -220,20 +233,9 @@ class EvidenceSnippet(BaseModel):
 
 
 class StrengthDetail(BaseModel):
-    """강점 상세 정보 모델"""
-    aspect: str = Field(..., description="강점 카테고리 (예: '불맛')")
-    claim: str = Field(..., description="구체적 주장 (1문장)")
-    strength_type: str = Field(..., description="강점 타입: 'representative' 또는 'distinct'")
-    support_count: int = Field(..., description="유효 근거 수 (긍정 필터링 후)")
-    support_count_raw: Optional[int] = Field(None, description="전체 검색 결과 수 (디버깅용)")
-    support_count_valid: Optional[int] = Field(None, description="score 기준 유효 수 (디버깅용)")
-    support_ratio: float = Field(..., description="지원 비율 (0~1)")
-    distinct_score: Optional[float] = Field(None, description="차별성 점수 (distinct일 때만)")
-    closest_competitor_sim: Optional[float] = Field(None, description="가장 유사한 경쟁자 유사도 (distinct일 때만)")
-    closest_competitor_id: Optional[int] = Field(None, description="가장 유사한 경쟁자 ID (distinct일 때만)")
-    evidence: List[EvidenceSnippet] = Field(..., description="근거 스니펫 리스트 (3~5개)")
-    representative_evidence: Optional[str] = Field(None, description="대표 근거 1줄 (요약+대표 장점 섹션용)")
-    final_score: float = Field(..., description="최종 점수")
+    """강점 상세 (Kiwi+lift 파이프라인: category별 lift_percentage만)."""
+    category: str = Field(..., description="카테고리: 'service' | 'price'")
+    lift_percentage: float = Field(..., description="Lift 퍼센트: (단일−전체)/전체×100")
 
 
 class StrengthResponseV2(BaseModel):
@@ -243,6 +245,14 @@ class StrengthResponseV2(BaseModel):
     strengths: List[StrengthDetail] = Field(..., description="강점 리스트")
     total_candidates: int = Field(..., description="근거 후보 총 개수")
     validated_count: int = Field(..., description="검증 통과한 강점 개수")
+    category_lift: Optional[Dict[str, float]] = Field(
+        None,
+        description="카테고리별 lift 퍼센트 (service, price). 통계 근거로 LLM 설명에 사용됨.",
+    )
+    strength_display: Optional[List[str]] = Field(
+        None,
+        description="lift 기반 표시 문장 (서비스/가격 만족도, 최신 파이프라인).",
+    )
     debug: Optional[DebugInfo] = Field(None, description="디버그 정보")
 
 

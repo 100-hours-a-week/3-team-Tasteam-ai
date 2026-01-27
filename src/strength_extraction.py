@@ -5,10 +5,12 @@
 import json
 import logging
 import math
+import os
 import re
 import time
 import asyncio
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Dict, List, Optional, Any, Tuple
 import numpy as np
 
@@ -19,6 +21,41 @@ from .vector_search import VectorSearch
 from qdrant_client import models
 
 logger = logging.getLogger(__name__)
+
+# 불용어 캐시 (모듈 레벨)
+_stopwords_cache = None
+_stopwords_path = None
+
+
+def _get_stopwords() -> Optional[List[str]]:
+    """불용어 리스트 로드 (모듈 레벨 캐싱)"""
+    global _stopwords_cache, _stopwords_path
+    
+    # 캐시 확인
+    if _stopwords_cache is not None:
+        return _stopwords_cache
+    
+    # 불용어 파일: data/ 우선 (프로덕션), hybrid_search/data_preprocessing fallback
+    try:
+        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        stopwords_path = os.path.join(project_root, "data", "stopwords-ko.txt")
+        if not os.path.exists(stopwords_path):
+            stopwords_path = os.path.join(project_root, "hybrid_search", "data_preprocessing", "stopwords-ko.txt")
+
+        if os.path.exists(stopwords_path):
+            with open(stopwords_path, encoding="utf-8") as f:
+                _stopwords_cache = [w.strip() for w in f if w.strip()]
+                _stopwords_path = stopwords_path
+                logger.debug(f"불용어 파일 로드 완료: {stopwords_path} ({len(_stopwords_cache)}개)")
+                return _stopwords_cache
+        else:
+            logger.debug(f"불용어 파일을 찾을 수 없습니다: {stopwords_path}")
+            _stopwords_cache = []
+            return _stopwords_cache
+    except Exception as e:
+        logger.warning(f"불용어 로드 실패: {e}")
+        _stopwords_cache = []
+        return _stopwords_cache
 
 # 일반적인 aspect 필터링 (너무 일반적인 표현은 제거)
 GENERIC_ASPECTS = {
@@ -430,8 +467,10 @@ JSON 형식 (반드시 최소 {min_output}개 이상 출력):
                 
                 sentiment = review.get("sentiment") or review.get("is_recommended")
                 if sentiment is not None:
+                    # sentiment 라벨이 있으면 positive만 포함 (neutral, negative 제외)
                     if sentiment == "positive" or sentiment is True or (isinstance(sentiment, str) and "positive" in sentiment.lower()):
                         filtered_results.append(r)
+                    # neutral이나 negative는 제외
                     continue
                 
                 has_negative = any(keyword in content for keyword in negative_keywords)
@@ -1390,342 +1429,134 @@ claim만 반환하세요 (JSON 형식):"""
         min_support: int = 5,
     ) -> Dict[str, Any]:
         """
-        전체 강점 추출 파이프라인 실행
-        
-        Args:
-            restaurant_id: 레스토랑 ID
-            strength_type: 강점 타입 ('representative', 'distinct', 'both')
-            category_filter: 카테고리 필터
-            region_filter: 지역 필터
-            price_band_filter: 가격대 필터
-            top_k: 반환할 최대 강점 개수
-            max_candidates: 근거 후보 최대 개수
-            months_back: 최근 N개월 리뷰만 사용
-            min_support: 최소 support_count
-        
-        Returns:
-            강점 추출 결과
+        통계적 비율 기반 강점 추출 (Kiwi + lift).
+        레스토랑 리뷰 → Kiwi 명사 bigram → service/price 긍정 비율 → lift.
+        strengths: [{category, lift_percentage}] (lift>0만), strength_display, category_lift.
         """
         start_time = time.time()
         
-        # Step A: 타겟 긍정 근거 후보 수집
-        logger.info(f"강점 추출 시작: 레스토랑 {restaurant_id}, 최대 후보 {max_candidates}개, 최근 {months_back}개월")
-        evidence_candidates = self.collect_positive_evidence_candidates(
-            restaurant_id=restaurant_id,
-            max_candidates=max_candidates,
-            months_back=months_back,
+        from .strength_pipeline import (
+            calculate_strength_lift,
+            calculate_single_restaurant_ratios,
+            format_strength_display,
+            calculate_all_average_ratios_from_reviews,
+            calculate_all_average_ratios_from_file,
         )
-        
-        logger.info(f"Step A 완료: {len(evidence_candidates)}개 근거 후보 수집")
-        
-        if not evidence_candidates:
-            logger.warning(f"레스토랑 {restaurant_id}에 대한 근거 후보가 없습니다.")
+        from .config import Config
+
+        stopwords = _get_stopwords() or []
+        # 전체 평균: strength_in_aspect와 동일한 소스 우선. 1) aspect_data 파일 2) Qdrant 전체 3) Config
+        all_average_ratios = None
+        try:
+            if Config.ALL_AVERAGE_ASPECT_DATA_PATH:
+                project_root = str(Path(__file__).resolve().parents[1])  # src/ 상위 = 프로젝트 루트
+                logger.info(
+                    "전체 평균 ① 파일 시도 (Spark 직접 읽기, strength_in_aspect와 동일): path=%s",
+                    Config.ALL_AVERAGE_ASPECT_DATA_PATH,
+                )
+                all_average_ratios = calculate_all_average_ratios_from_file(
+                    Config.ALL_AVERAGE_ASPECT_DATA_PATH, stopwords=stopwords, project_root=project_root
+                )
+                if all_average_ratios is not None:
+                    logger.info(
+                        "전체 평균 ① 파일 사용 (Spark 직접 읽기): path=%s → service=%.4f, price=%.4f",
+                        Config.ALL_AVERAGE_ASPECT_DATA_PATH,
+                        all_average_ratios.get("service", 0),
+                        all_average_ratios.get("price", 0),
+                    )
+                else:
+                    logger.warning(
+                        "전체 평균 ① 파일: Spark 직접 읽기 실패 또는 파일 없음 (path=%s)",
+                        Config.ALL_AVERAGE_ASPECT_DATA_PATH,
+                    )
+            if all_average_ratios is None:
+                logger.info("전체 평균 ② Qdrant 시도: get_all_reviews_for_all_average(5000)")
+                all_reviews = self.vector_search.get_all_reviews_for_all_average(limit=5000)
+                if all_reviews:
+                    all_average_ratios = calculate_all_average_ratios_from_reviews(all_reviews, stopwords)
+                    logger.info(
+                        "전체 평균 ② Qdrant 사용: 리뷰 %d건 → service=%.4f, price=%.4f",
+                        len(all_reviews), all_average_ratios.get("service", 0), all_average_ratios.get("price", 0),
+                    )
+                else:
+                    logger.warning("전체 평균 ② Qdrant: 조회된 리뷰 없음")
+        except Exception as e:
+            logger.debug(f"전체 평균 계산 건너뜀: {e}")
+        if all_average_ratios is None:
+            all_average_ratios = {
+                "service": Config.ALL_AVERAGE_SERVICE_RATIO,
+                "price": Config.ALL_AVERAGE_PRICE_RATIO,
+            }
+            logger.info(
+                "전체 평균 ③ Config fallback: ALL_AVERAGE_SERVICE_RATIO=%.4f, ALL_AVERAGE_PRICE_RATIO=%.4f",
+                all_average_ratios["service"], all_average_ratios["price"],
+            )
+
+        try:
+            restaurant_reviews = self.vector_search.get_restaurant_reviews(str(restaurant_id))
+        except Exception as e:
+            logger.error(f"레스토랑 리뷰 조회 실패: {e}")
             return {
                 "restaurant_id": restaurant_id,
                 "strength_type": strength_type,
                 "strengths": [],
                 "total_candidates": 0,
                 "validated_count": 0,
+                "category_lift": {"service": 0.0, "price": 0.0},
+                "strength_display": format_strength_display(0.0, 0.0),
+                "processing_time_ms": (time.time() - start_time) * 1000,
             }
-        
-        # Step B: 강점 후보 생성
-        logger.info(f"Step B 시작: {len(evidence_candidates)}개 후보에서 강점 추출")
-        strength_candidates = self.extract_strength_candidates(
-            evidence_candidates=evidence_candidates,
-            max_tokens=4000,
-        )
-        
-        logger.info(f"Step B 완료: {len(strength_candidates)}개 강점 후보 생성")
-        
-        if not strength_candidates:
+
+        if not restaurant_reviews:
+            logger.warning(f"레스토랑 {restaurant_id}에 리뷰가 없습니다.")
             return {
                 "restaurant_id": restaurant_id,
                 "strength_type": strength_type,
                 "strengths": [],
-                "total_candidates": len(evidence_candidates),
+                "total_candidates": 0,
                 "validated_count": 0,
+                "category_lift": {"service": 0.0, "price": 0.0},
+                "strength_display": format_strength_display(0.0, 0.0),
+                "processing_time_ms": (time.time() - start_time) * 1000,
             }
-        
-        # Step C: 강점별 근거 확장/검증 (비동기 병렬 처리)
-        # 총 리뷰 수 조회 (동적 min_support 계산용)
-        all_reviews = self.vector_search.get_restaurant_reviews(str(restaurant_id))
-        total_reviews = len(all_reviews) if all_reviews else None
-        
-        logger.info(f"Step C 시작: {len(strength_candidates)}개 강점 후보 검증 (min_support: {min_support}, 총 리뷰: {total_reviews})")
-        validated_strengths = await self.expand_and_validate_evidence(
-            strength_candidates=strength_candidates,
-            restaurant_id=restaurant_id,
-            min_support=min_support,
-            total_reviews=total_reviews,
+
+        review_texts = [
+            (r.get("content") or r.get("text") or "")
+            for r in restaurant_reviews
+            if (r.get("content") or r.get("text"))
+        ]
+
+        single_restaurant_ratios = calculate_single_restaurant_ratios(
+            reviews=review_texts,
+            stopwords=stopwords,
         )
-        
-        logger.info(f"Step C 완료: {len(validated_strengths)}개 강점 검증 통과")
-        
-        # 검증 통과한 각 강점 상세 로깅
-        for idx, strength in enumerate(validated_strengths, 1):
-            aspect = strength.get("aspect", "")
-            claim = strength.get("claim", "")[:50] + "..." if len(strength.get("claim", "")) > 50 else strength.get("claim", "")
-            support_count = strength.get("support_count", 0)
-            consistency = strength.get("consistency", 0)
-            # consistency가 딕셔너리일 경우를 대비해 숫자로 변환
-            consistency_value = float(consistency) if isinstance(consistency, (int, float)) else 0.0
-            logger.info(
-                f"  검증 통과 강점 {idx}: aspect='{aspect}', claim='{claim}', "
-                f"support_count={support_count}, consistency={consistency_value:.3f}"
-            )
-        
-        if not validated_strengths:
-            return {
-                "restaurant_id": restaurant_id,
-                "strength_type": strength_type,
-                "strengths": [],
-                "total_candidates": len(evidence_candidates),
-                "validated_count": 0,
-            }
-        
-        # Step D: 의미 중복 제거 (Connected Components)
-        merged_strengths = self.merge_similar_strengths(
-            validated_strengths=validated_strengths,
-            threshold_high=0.88,
-            threshold_low=0.82,
-            evidence_overlap_threshold=0.3,
+        lift_dict = calculate_strength_lift(single_restaurant_ratios, all_average_ratios)
+        strength_display = format_strength_display(
+            lift_dict.get("service", 0.0),
+            lift_dict.get("price", 0.0),
         )
-        
-        logger.info(f"Step D 완료: {len(validated_strengths)}개 강점 → {len(merged_strengths)}개로 병합")
-        
-        # Step D-1: Claim 후처리 재생성 (LLM 1회)
-        logger.info(f"Step D-1 시작: {len(merged_strengths)}개 강점의 claim 재생성")
-        merged_strengths = self.regenerate_claims(merged_strengths)
-        logger.info(f"Step D-1 완료: {len(merged_strengths)}개 강점의 claim 재생성 완료")
-        
-        # Step E~H: 비교군 기반 차별 강점 계산 (distinct 또는 both일 때만)
-        if strength_type in ["distinct", "both"]:
-            distinct_strengths = self.calculate_distinct_strengths(
-                target_strengths=merged_strengths,
-                restaurant_id=restaurant_id,
-                category_filter=category_filter,
-                region_filter=region_filter,
-                price_band_filter=price_band_filter,
-                comparison_count=20,
-                alpha=1.0,
-            )
-            
-            # final_score 기준으로 정렬
-            distinct_strengths.sort(key=lambda x: x.get("final_score", 0), reverse=True)
-            
-            if strength_type == "distinct":
-                merged_strengths = distinct_strengths
-            else:  # both
-                # distinct_score 기준으로 strength_type 구분
-                # distinct_score >= 0.3이면 distinct, 그 외는 representative
-                for s in distinct_strengths:
-                    distinct_score = s.get("distinct_score", 0)
-                    if distinct_score is not None and distinct_score >= 0.3:
-                        s["strength_type"] = "distinct"
-                    else:
-                        s["strength_type"] = "representative"
-                        # distinct_score가 낮으면 None으로 표시 (representative로 간주)
-                        if distinct_score is not None and distinct_score < 0.3:
-                            s["distinct_score"] = None
-                            s["closest_competitor_sim"] = None
-                            s["closest_competitor_id"] = None
-                
-                # both일 때는 distinct_strengths만 사용 (중복 제거)
-                merged_strengths = distinct_strengths
-                logger.info(
-                    f"both 모드: {len([s for s in merged_strengths if s.get('strength_type') == 'distinct'])}개 distinct, "
-                    f"{len([s for s in merged_strengths if s.get('strength_type') == 'representative'])}개 representative"
-                )
-        else:
-            # representative만
-            for s in merged_strengths:
-                s["strength_type"] = "representative"
-                s["distinct_score"] = None
-                s["closest_competitor_sim"] = None
-                s["closest_competitor_id"] = None
-                # 제시된 로직: rep_score = log(1 + support_count) * consistency * recency_weight
-                s["final_score"] = (
-                    math.log(1 + s.get("support_count", 0)) *
-                    s.get("consistency", 1.0) *
-                    s.get("recency", 1.0)
-                )
-        
-        # Top-K 선택 및 최종 형식 변환 (쿼터 적용: both 모드일 때만)
-        logger.info(f"Top-K 선택 전: {len(merged_strengths)}개 강점 (top_k={top_k})")
-        
-        if strength_type == "both":
-            # 쿼터 적용: 대표 최소 2개 확보, distinct 최대 3개
-            representative_strengths = [s for s in merged_strengths if s.get("strength_type") == "representative"]
-            distinct_strengths = [s for s in merged_strengths if s.get("strength_type") == "distinct"]
-            
-            # final_score 기준으로 정렬
-            representative_strengths.sort(key=lambda x: x.get("final_score", 0), reverse=True)
-            distinct_strengths.sort(key=lambda x: x.get("final_score", 0), reverse=True)
-            
-            # (3) 대표 후보가 적을 때의 fallback
-            # 대표가 1개뿐이면: "대표 장점" 1개, "차별 포인트" 3개, "추가 장점" 1개
-            if len(representative_strengths) == 1:
-                min_representative = 1
-                max_distinct = min(3, len(distinct_strengths))
-                max_additional = 1
-            else:
-                min_representative = min(2, len(representative_strengths))  # 최소 2개 (가능한 범위 내)
-                max_distinct = min(3, len(distinct_strengths))  # 최대 3개
-                max_additional = top_k - min_representative - max_distinct  # 나머지
-            
-            selected_representative = representative_strengths[:min_representative]
-            selected_distinct = distinct_strengths[:max_distinct]
-            
-            # (2) 같은 타입 중복 방지: 대표 섹션에 aspect가 들어갔으면 차별 섹션의 같은 aspect는 1개만 허용
-            representative_aspects = {s.get("aspect", "").lower() for s in selected_representative}
-            
-            # 차별 강점에서 대표와 같은 aspect 필터링 (최대 1개만 허용)
-            filtered_distinct = []
-            aspect_count_map = {}  # aspect별 카운트
-            
-            for s in selected_distinct:
-                aspect = s.get("aspect", "").lower()
-                if aspect in representative_aspects:
-                    # 대표와 같은 aspect면 카운트 체크
-                    count = aspect_count_map.get(aspect, 0)
-                    if count < 1:  # 최대 1개만 허용
-                        # "맛" 같은 경우 "시그니처 메뉴"로 라벨 변경
-                        if aspect in ["맛", "taste", "맛있다"]:
-                            s["aspect"] = "시그니처 메뉴"
-                            s["original_aspect"] = aspect  # 원본 보존
-                        filtered_distinct.append(s)
-                        aspect_count_map[aspect] = count + 1
-                    # 이미 1개가 있으면 스킵
-                else:
-                    # 대표와 다른 aspect면 그대로 추가
-                    filtered_distinct.append(s)
-            
-            selected_distinct = filtered_distinct
-            
-            # 나머지 슬롯 채우기 (final_score 기준)
-            remaining_slots = top_k - len(selected_representative) - len(selected_distinct)
-            if remaining_slots > 0:
-                # 아직 선택되지 않은 강점들
-                remaining = [
-                    s for s in merged_strengths
-                    if s not in selected_representative and s not in selected_distinct
-                ]
-                remaining.sort(key=lambda x: x.get("final_score", 0), reverse=True)
-                selected_remaining = remaining[:min(remaining_slots, max_additional if len(representative_strengths) == 1 else remaining_slots)]
-            else:
-                selected_remaining = []
-            
-            final_strengths = selected_representative + selected_distinct + selected_remaining
-            # final_score 기준으로 최종 정렬
-            final_strengths.sort(key=lambda x: x.get("final_score", 0), reverse=True)
-            
-            logger.info(
-                f"Top-K 선택 (쿼터 적용): "
-                f"representative {len(selected_representative)}개, "
-                f"distinct {len(selected_distinct)}개 (중복 방지 적용), "
-                f"추가 {len(selected_remaining)}개 → 총 {len(final_strengths)}개"
-            )
-        else:
-            # both가 아니면 기존 방식 (final_score 기준 상위 K개)
-            final_strengths = merged_strengths[:top_k]
-            
-            if len(merged_strengths) > top_k:
-                logger.info(
-                    f"Top-K 선택으로 {len(merged_strengths) - top_k}개 강점 제외됨 "
-                    f"(상위 {top_k}개만 선택)"
-                )
-                # 제외된 강점 로깅
-                for idx, strength in enumerate(merged_strengths[top_k:], top_k + 1):
-                    aspect = strength.get("aspect", "")
-                    claim = strength.get("claim", "")[:50] + "..." if len(strength.get("claim", "")) > 50 else strength.get("claim", "")
-                    final_score = strength.get("final_score", 0)
-                    # final_score가 딕셔너리일 경우를 대비해 숫자로 변환
-                    if isinstance(final_score, (int, float)):
-                        final_score_value = float(final_score)
-                    else:
-                        final_score_value = 0.0
-                    logger.info(
-                        f"  제외된 강점 {idx}: aspect='{aspect}', claim='{claim}', final_score={final_score_value:.3f}"
-                    )
-        
-        # 강점별 상세 로그
-        logger.info(f"강점 추출 완료: 총 {len(final_strengths)}개 강점 추출됨")
-        for idx, strength in enumerate(final_strengths, 1):
-            aspect = strength.get("aspect", "")
-            claim = strength.get("claim", "")[:50] + "..." if len(strength.get("claim", "")) > 50 else strength.get("claim", "")
-            support_count = strength.get("support_count", 0)
-            strength_type_value = strength.get("strength_type", "representative")  # 함수 파라미터와 충돌 방지
-            distinct_score = strength.get("distinct_score")
-            final_score = strength.get("final_score", 0)
-            # final_score와 distinct_score가 딕셔너리일 경우를 대비해 숫자로 변환
-            if isinstance(final_score, (int, float)):
-                final_score_value = float(final_score)
-            else:
-                final_score_value = 0.0
-            if distinct_score is not None and isinstance(distinct_score, (int, float)):
-                distinct_score_value = float(distinct_score)
-            else:
-                distinct_score_value = None
-            
-            log_msg = (
-                f"강점 {idx}: aspect='{aspect}', claim='{claim}', "
-                f"support_count={support_count}, strength_type={strength_type_value}, "
-                f"final_score={final_score_value:.3f}"
-            )
-            if distinct_score_value is not None:
-                log_msg += f", distinct_score={distinct_score_value:.3f}"
-            logger.info(log_msg)
-        
-        # Evidence 스니펫 생성 및 대표 근거 1줄 추출
-        formatted_strengths = []
-        for strength in final_strengths:
-            evidence_reviews = strength.get("evidence_reviews", [])
-            
-            # 대표 근거 1줄 추출 (가장 대표적인 리뷰 1개)
-            representative_evidence = None
-            if evidence_reviews:
-                # 첫 번째 리뷰를 대표 근거로 사용 (이미 정렬되어 있음)
-                first_review = evidence_reviews[0]
-                text = first_review.get("content", first_review.get("text", ""))
-                if text:
-                    # 50자 이내로 제한
-                    representative_evidence = text[:50] + "..." if len(text) > 50 else text
-            
-            evidence_snippets = []
-            for review in evidence_reviews[:5]:
-                text = review.get("content", review.get("text", ""))
-                snippet = text[:100] + "..." if len(text) > 100 else text
-                
-                evidence_snippets.append({
-                    "review_id": str(review.get("review_id") or review.get("id", "")),
-                    "snippet": snippet,
-                    "rating": review.get("rating") or review.get("is_recommended"),
-                    "created_at": str(review.get("created_at", "")),
-                })
-            
-            formatted_strengths.append({
-                "aspect": strength.get("aspect", ""),
-                "claim": strength.get("claim", ""),
-                "strength_type": strength.get("strength_type", "representative"),
-                "support_count": strength.get("support_count", 0),
-                "support_count_raw": strength.get("support_count_raw"),  # 디버깅용
-                "support_count_valid": strength.get("support_count_valid"),  # 디버깅용
-                "support_ratio": round(strength.get("support_ratio", 0), 3),
-                "distinct_score": strength.get("distinct_score"),
-                "closest_competitor_sim": strength.get("closest_competitor_sim"),
-                "closest_competitor_id": strength.get("closest_competitor_id"),
-                "evidence": evidence_snippets,
-                "representative_evidence": representative_evidence,  # 대표 근거 1줄
-                "final_score": round(strength.get("final_score", 0), 3),
+
+        strengths = []
+        for category, lift in lift_dict.items():
+            if lift <= 0:
+                continue
+            strengths.append({
+                "category": category,
+                "lift_percentage": lift,
             })
-        
+
+        strengths.sort(key=lambda x: x["lift_percentage"], reverse=True)
+        strengths = strengths[:top_k]
+
         processing_time = (time.time() - start_time) * 1000
-        
         return {
             "restaurant_id": restaurant_id,
             "strength_type": strength_type,
-            "strengths": formatted_strengths,
-            "total_candidates": len(evidence_candidates),
-            "validated_count": len(validated_strengths),
+            "strengths": strengths,
+            "total_candidates": len(review_texts),
+            "validated_count": len(strengths),
+            "category_lift": lift_dict,
+            "strength_display": strength_display,
             "processing_time_ms": processing_time,
         }
+

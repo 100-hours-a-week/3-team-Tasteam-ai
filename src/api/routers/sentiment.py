@@ -88,9 +88,11 @@ async def analyze_sentiment(
                             restaurant_id=request.restaurant_id,
                             positive_count=0,
                             negative_count=0,
+                            neutral_count=0,
                             total_count=len(request.reviews),
                             positive_ratio=0,
                             negative_ratio=0,
+                            neutral_ratio=0,
                             debug=DebugInfo(
                                 request_id=request_id,
                                 processing_time_ms=(time.time() - start_time) * 1000,
@@ -99,6 +101,7 @@ async def analyze_sentiment(
                     else:
                         # SKIP된 경우에도 기본 응답 반환 (클라이언트 호환성)
                         return SentimentAnalysisDisplayResponse(
+                            restaurant_id=request.restaurant_id,
                             positive_ratio=0,
                             negative_ratio=0,
                         )
@@ -133,6 +136,7 @@ async def analyze_sentiment(
         else:
             # 일반 모드: 최소 필드만
             return SentimentAnalysisDisplayResponse(
+                restaurant_id=result["restaurant_id"],
                 positive_ratio=result["positive_ratio"],
                 negative_ratio=result["negative_ratio"],
             )

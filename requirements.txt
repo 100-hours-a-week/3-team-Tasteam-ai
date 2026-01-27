@@ -41,6 +41,11 @@ psutil>=7.0.0
 # OpenAI: 빠른 검증용 LLM API
 openai>=1.0.0
 
+# 하이브리드 검색 및 새로운 파이프라인
+fastembed>=0.2.0  # Sparse 벡터 임베딩
+kiwipiepy>=0.20.0  # 한국어 형태소 분석
+pyspark>=3.5.0  # 대용량 데이터 처리 (Aspect 추출)
+
 # Evaluation: Ground Truth 평가 스크립트용 (선택적)
 #rouge-score>=0.1.2  # ROUGE 점수 계산 (리뷰 요약 평가)
 #nltk>=3.8.0  # BLEU 점수 계산 (리뷰 요약 평가)

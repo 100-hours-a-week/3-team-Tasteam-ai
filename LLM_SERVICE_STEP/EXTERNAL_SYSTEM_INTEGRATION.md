@@ -143,13 +143,14 @@
 
 ### 3. 외부 시스템별 상세 통합 정보
 
-#### 3.1. RunPod 통합
+#### 3.1. LLM 통합 (Router 패턴: 로컬 큐 + OpenAI API 폴백)
 
 **통합 모듈:** `src/llm_utils.py`
 
 **통합 방식:**
 ```python
-# GPU 서버 + 로컬 vLLM (현재 사용)
+# Router 패턴: 로컬 큐 기본 사용, 오버플로우 시 OpenAI API 폴백
+# 1단계: 로컬 큐 시도 (GPU 서버 + 로컬 vLLM)
 if self.use_pod_vllm:
     from vllm import LLM, SamplingParams
     self.llm = LLM(
@@ -165,12 +166,28 @@ if self.use_pod_vllm:
             prompts,
             sampling_params
         )
+
+# 2단계: 오버플로우/에러 발생 시 OpenAI API 폴백
+if Config.ENABLE_OPENAI_FALLBACK and Config.OPENAI_API_KEY:
+    from openai import OpenAI
+    self.openai_client = OpenAI(api_key=Config.OPENAI_API_KEY)
+    self.openai_model = Config.OPENAI_MODEL  # 기본값: "gpt-4o-mini"
+    self.use_openai_as_fallback = True
 ```
+
+**Router 패턴 동작:**
+1. **기본 경로**: 로컬 큐 (vLLM, RunPod, 또는 로컬 모델) 사용
+2. **폴백 경로**: 로컬 큐 처리 실패 시 자동으로 OpenAI API (`gpt-4o-mini`)로 전환
+   - 큐 오버플로우 (동시 요청 과다)
+   - OOM (Out of Memory) 발생
+   - 네트워크 오류
+   - 기타 예외 상황
 
 **예외 처리:**
 - 재시도 로직 (`max_retries`)
 - OOM 방지 (동적 배치 크기, 세마포어)
 - 에러 로깅 및 메트릭 수집
+- **자동 폴백**: 로컬 큐 실패 시 OpenAI API로 자동 전환
 
 **속도 제한:**
 - 세마포어 기반 동시 처리 수 제한 (`VLLM_MAX_CONCURRENT_BATCHES`: 20)
@@ -179,6 +196,11 @@ if self.use_pod_vllm:
   - Shortest Job First (SJF) 알고리즘 적용
   - 작은 요청 TTFT 30-40% 개선 (2.5초 → 1.8초)
   - SLA 준수율 85% → 92% 향상
+
+**설정:**
+- `ENABLE_OPENAI_FALLBACK=true`: OpenAI API 폴백 활성화
+- `OPENAI_API_KEY`: OpenAI API 키 (필수)
+- `OPENAI_MODEL=gpt-4o-mini`: 폴백 시 사용할 모델 (기본값)
 
 #### 3.2. Qdrant 통합
 
@@ -307,12 +329,14 @@ if Config.USE_GPU and torch.cuda.is_available():
 
 ### 1. 현재 사용 중인 서비스 분석
 
-#### 1.1. LLM 서빙: GPU 서버 + 로컬 vLLM vs RunPod Serverless Endpoint
+#### 1.1. LLM 서빙: Router 패턴 (로컬 큐 + OpenAI API 폴백)
 
-**GPU 서버 + 로컬 vLLM (현재 사용, 권장)**
+**현재 아키텍처: Router 패턴**
+
+**기본 경로: GPU 서버 + 로컬 vLLM (현재 사용, 권장)**
 
 **장점:**
-- **비용 효율성**: GPU 서버 사용 시간만 과금 (Go Watchdog로 idle 시간 최소화)
+- **비용 효율성**: GPU 서버 사용 시간만 과금 (Go Watchdog으로 idle 시간 최소화)
 - **성능**: 네트워크 오버헤드 없음, Continuous Batching 자동 활용
 - **처리량**: 5-10배 향상 (2 req/s → 10 req/s)
 - **지연 시간**: 낮음 (로컬 실행)
@@ -322,35 +346,50 @@ if Config.USE_GPU and torch.cuda.is_available():
 - **초기 설정**: GPU 서버 환경 구성 필요
 - **GPU 메모리**: 모델 로딩에 약 14GB 필요
 - **Cold Start**: GPU 서버 시작 시 모델 로딩 시간 (약 1-2분)
+- **큐 오버플로우**: 동시 요청이 많을 때 처리 지연 또는 실패 가능
 
 **비용 분석:**
 - GPU 서버 시간당 비용: 약 $0.5-1.0 (GPU 사양에 따라)
 - Go Watchdog으로 idle 시간 최소화: 50-70% 비용 절감
 - 예상 월 비용: 트래픽에 따라 $100-500
 
-**RunPod Serverless Endpoint (이전 사용, 현재 미사용)**
+**폴백 경로: OpenAI API (gpt-4o-mini)**
+
+**활성화 조건:**
+- `ENABLE_OPENAI_FALLBACK=true` 설정
+- `OPENAI_API_KEY` 환경 변수 설정
+- 로컬 큐 처리 실패 시 자동 전환
 
 **장점:**
+- **안정성**: 로컬 큐 오버플로우 시 자동 폴백으로 서비스 중단 방지
+- **확장성**: 트래픽 급증 시 자동으로 상용 API로 분산
 - **간편한 설정**: API 키만으로 사용 가능
-- **자동 스케일링**: 트래픽에 따라 자동 확장
-- **Cold Start 최소화**: 엔드포인트가 항상 활성 상태
+- **비용 효율성**: `gpt-4o-mini`는 저렴한 모델 ($0.15/1M 입력 토큰, $0.60/1M 출력 토큰)
 
 **단점:**
-- **비용**: 요청당 과금으로 높은 트래픽 시 비용 증가
-- **성능**: 네트워크 오버헤드로 지연 시간 증가
-- **처리량**: 낮음 (네트워크 병목)
-- **데이터 보안**: 요청 데이터가 외부로 전송됨
+- **비용**: 폴백 사용 시 추가 비용 발생
+- **데이터 보안**: 요청 데이터가 OpenAI로 전송됨
+- **지연 시간**: 네트워크 오버헤드로 약간의 지연
 
 **비용 분석:**
-- 요청당 비용: 약 $0.001-0.01 (모델 및 토큰 수에 따라)
-- 높은 트래픽 시 월 비용: $500-2000+
+- `gpt-4o-mini` 비용: $0.15/1M 입력 토큰, $0.60/1M 출력 토큰
+- 폴백 사용 시 예상 추가 비용: 트래픽에 따라 $10-100/월 (정상 상황에서는 거의 사용 안 함)
 
-**결정: GPU 서버 + 로컬 vLLM 선택**
+**Router 패턴 동작:**
+1. **기본**: 로컬 큐 (vLLM) 사용
+2. **폴백**: 로컬 큐 실패 시 자동으로 OpenAI API (`gpt-4o-mini`)로 전환
+   - 큐 오버플로우 (동시 요청 과다)
+   - OOM (Out of Memory) 발생
+   - 네트워크 오류
+   - 기타 예외 상황
+
+**결정: Router 패턴 (로컬 큐 + OpenAI API 폴백) 선택**
 
 **이유:**
-- 비용 효율성 (Go Watchdog으로 idle 시간 최소화)
-- 성능 우수 (5-10배 향상)
-- 데이터 보안 (로컬 실행)
+- 비용 효율성 (기본적으로 로컬 큐 사용, 폴백 시에만 API 비용 발생)
+- 성능 우수 (기본 경로는 로컬 실행으로 5-10배 향상)
+- 안정성 (폴백으로 서비스 중단 방지)
+- 데이터 보안 (기본 경로는 로컬 실행, 폴백 시에만 외부 전송)
 
 #### 1.2. 벡터 데이터베이스: Qdrant on-disk vs Qdrant Cloud
 
@@ -420,135 +459,6 @@ if Config.USE_GPU and torch.cuda.is_available():
 - 데이터 보안 (로컬 실행)
 - 성능 우수 (GPU 활용)
 
-### 2. 향후 상용 API 도입 고려 사항
-
-#### 2.1. 이미지 생성 API
-
-**시나리오:** 리뷰 이미지 자동 생성, 메뉴 이미지 생성
-
-**후보 API:**
-- **OpenAI DALL-E 3**: $0.04-0.12/이미지
-- **Midjourney**: $10-60/월 (구독)
-- **Stable Diffusion API**: $0.002-0.01/이미지
-
-**비용 분석:**
-- 월 1000개 이미지 생성 시: $40-120 (DALL-E) vs $2-10 (Stable Diffusion)
-
-**Fallback 전략:**
-- 사전 생성한 템플릿 이미지 활용
-- 캐싱: 동일한 프롬프트는 캐시된 이미지 반환
-
-**도입 시 고려사항:**
-- API 호출 제한 (Rate Limiting)
-- 재시도 로직 (Exponential Backoff)
-- 비용 모니터링
-
-#### 2.2. 음성 합성 API (TTS)
-
-**시나리오:** 리뷰 요약 음성 변환
-
-**후보 API:**
-- **OpenAI TTS**: $0.015/1000자
-- **Google Cloud TTS**: $0.004-0.016/1000자
-- **Azure TTS**: $0.01-0.02/1000자
-
-**비용 분석:**
-- 월 10,000개 리뷰 요약 (평균 100자): $15-20
-
-**Fallback 전략:**
-- 캐싱: 동일한 텍스트는 캐시된 음성 반환
-- 선택적 사용: 사용자 요청 시에만 생성
-
-#### 2.3. 영상 분석 API
-
-**시나리오:** 리뷰 영상 자동 분석 (향후 확장 계획)
-
-**후보 API:**
-- **Google Cloud Video Intelligence**: $0.10-0.50/분
-- **AWS Rekognition Video**: $0.10-0.50/분
-
-**비용 분석:**
-- 월 100개 영상 (평균 1분): $10-50
-
-**도입 시 고려사항:**
-- 높은 비용으로 인해 선택적 사용 필요
-- 사전 분석 결과 캐싱
-
-### 3. 상용 API 통합 설계 (향후 도입 시)
-
-#### 3.1. API 호출 모듈 설계
-
-```python
-# src/external_apis/image_generation.py
-class ImageGenerationAPI:
-    """이미지 생성 API 통합 모듈"""
-    
-    def __init__(self, provider: str = "openai"):
-        self.provider = provider
-        self.cache = CacheManager()  # Redis 캐싱
-        self.rate_limiter = RateLimiter()
-    
-    async def generate_image(
-        self,
-        prompt: str,
-        use_cache: bool = True,
-    ) -> str:
-        """이미지 생성 (캐싱 지원)"""
-        # 캐시 확인
-        if use_cache:
-            cached = await self.cache.get(f"image:{prompt}")
-            if cached:
-                return cached
-        
-        # Rate Limiting
-        await self.rate_limiter.acquire()
-        
-        # API 호출 (재시도 로직 포함)
-        try:
-            image_url = await self._call_api_with_retry(prompt)
-            # 캐싱
-            if use_cache:
-                await self.cache.set(f"image:{prompt}", image_url, ttl=86400)
-            return image_url
-        except Exception as e:
-            # Fallback: 사전 생성한 템플릿 이미지
-            return await self._get_fallback_image(prompt)
-    
-    async def _call_api_with_retry(
-        self,
-        prompt: str,
-        max_retries: int = 3,
-    ) -> str:
-        """재시도 로직 포함 API 호출"""
-        for attempt in range(max_retries):
-            try:
-                if self.provider == "openai":
-                    return await self._call_openai_dalle(prompt)
-                elif self.provider == "stable_diffusion":
-                    return await self._call_stable_diffusion(prompt)
-            except RateLimitError:
-                await asyncio.sleep(2 ** attempt)  # Exponential Backoff
-            except Exception as e:
-                logger.error(f"Image generation failed: {e}")
-                if attempt == max_retries - 1:
-                    raise
-        raise Exception("Image generation failed after retries")
-```
-
-#### 3.2. Fallback 전략
-
-**캐싱:**
-- 동일한 프롬프트는 캐시된 결과 반환
-- TTL 설정 (예: 24시간)
-
-**사전 생성 콘텐츠:**
-- 자주 사용되는 템플릿 이미지/음성 사전 생성
-- API 실패 시 템플릿 반환
-
-**비용 제한:**
-- 일일/월별 API 호출 제한 설정
-- 제한 초과 시 Fallback 사용
-
 ---
 
 ## 현재 인터페이스 설계
@@ -567,7 +477,29 @@ class ImageGenerationAPI:
 **인터페이스:**
 ```python
 class LLMUtils:
-    """LLM 관련 유틸리티 클래스"""
+    """LLM 관련 유틸리티 클래스 (Router 패턴: 로컬 큐 + OpenAI API 폴백)"""
+    
+    def _generate_response(
+        self,
+        messages: List[Dict],
+        temperature: float = 0.1,
+        max_new_tokens: int = 50,
+    ) -> str:
+        """
+        Router 패턴: 로컬 큐 기본 사용, 오버플로우 시 OpenAI API 폴백
+        
+        1단계: 로컬 큐 시도 (vLLM, RunPod, 또는 로컬 모델)
+        2단계: 오버플로우/에러 발생 시 OpenAI API (gpt-4o-mini) 폴백
+        """
+        try:
+            # 로컬 큐 사용
+            return self._generate_with_local_queue(messages, temperature, max_new_tokens)
+        except Exception as e:
+            # OpenAI API 폴백
+            if self.use_openai_as_fallback and self.openai_client:
+                logger.warning(f"로컬 큐 처리 실패, OpenAI API로 폴백: {str(e)}")
+                return self._generate_with_openai(messages, temperature, max_new_tokens)
+            raise
     
     async def _generate_with_vllm(
         self,
@@ -583,6 +515,7 @@ class LLMUtils:
 - OOM 방지 (동적 배치 크기, 세마포어)
 - 재시도 로직 (`max_retries`)
 - 에러 로깅 및 메트릭 수집 (MetricsCollector 통합)
+- **자동 폴백**: 로컬 큐 실패 시 OpenAI API (`gpt-4o-mini`)로 자동 전환
 
 **설계된 최적화:**
 - **대표 벡터 TOP-K 방식**: 감성 분석, 요약, 강점 추출에서 컨텍스트 크기 최적화
@@ -590,6 +523,7 @@ class LLMUtils:
 - **동적 배치 크기**: 리뷰 길이에 따른 최적 배치
 - **세마포어 제한**: 동시 처리 수 제한으로 OOM 방지
 - **비동기 큐 방식**: 여러 레스토랑 병렬 처리
+- **Router 패턴**: 로컬 큐 오버플로우 시 자동 폴백으로 서비스 안정성 보장
 
 **속도 제한:**
 - 세마포어 기반 동시 처리 수 제한 (`VLLM_MAX_CONCURRENT_BATCHES`: 20)
@@ -598,6 +532,11 @@ class LLMUtils:
   - Shortest Job First (SJF) 알고리즘 적용
   - 작은 요청 TTFT 30-40% 개선 (2.5초 → 1.8초)
   - SLA 준수율 85% → 92% 향상
+
+**폴백 설정:**
+- `ENABLE_OPENAI_FALLBACK=true`: OpenAI API 폴백 활성화
+- `OPENAI_API_KEY`: OpenAI API 키 (필수)
+- `OPENAI_MODEL=gpt-4o-mini`: 폴백 시 사용할 모델 (기본값, 저렴하고 빠름)
 
 #### 2.2. Vector Search 모듈 (`src/vector_search.py`)
 
@@ -689,55 +628,6 @@ def get_vector_search(
 
 ## 확장성 계획
 
-### 1. 새로운 외부 서비스 추가 시나리오
-
-#### 1.1. 이미지 생성 API 추가
-
-**추가 단계:**
-1. `src/external_apis/image_generation.py` 모듈 생성
-2. `BaseExternalAPI` 상속하여 구현
-3. `src/api/dependencies.py`에 의존성 추가
-4. API Router에 엔드포인트 추가
-
-**코드 예시:**
-```python
-# src/external_apis/image_generation.py
-class ImageGenerationAPI(BaseExternalAPI):
-    """이미지 생성 API"""
-    
-    async def generate_image(self, prompt: str) -> str:
-        return await self.call_with_retry(
-            lambda: self._call_dalle_api(prompt)
-        )
-
-# src/api/dependencies.py
-@lru_cache()
-def get_image_generation_api() -> ImageGenerationAPI:
-    return ImageGenerationAPI()
-
-# src/api/routers/llm.py
-@router.post("/generate-image")
-async def generate_image(
-    request: ImageGenerationRequest,
-    api: ImageGenerationAPI = Depends(get_image_generation_api),
-):
-    return await api.generate_image(request.prompt)
-```
-
-#### 1.2. 음성 합성 API 추가
-
-**추가 단계:**
-1. `src/external_apis/tts.py` 모듈 생성
-2. 캐싱 로직 포함
-3. API Router에 엔드포인트 추가
-
-#### 1.3. 영상 분석 API 추가
-
-**추가 단계:**
-1. `src/external_apis/video_analysis.py` 모듈 생성
-2. 비용 제한 로직 포함
-3. API Router에 엔드포인트 추가
-
 ### 2. 확장성 보장 전략
 
 #### 2.1. 인터페이스 표준화
@@ -821,7 +711,9 @@ class BaseExternalAPI:
 
 ### 1. 현재 아키텍처 비용
 
-#### 1.1. GPU 서버 + 로컬 vLLM
+#### 1.1. Router 패턴 (로컬 큐 + OpenAI API 폴백)
+
+**기본 경로: GPU 서버 + 로컬 vLLM**
 
 **월 비용 추정:**
 - GPU 서버 시간당: $0.5-1.0
@@ -829,11 +721,24 @@ class BaseExternalAPI:
 - 예상 월 사용 시간: 200-500시간
 - **월 비용: $100-500**
 
+**폴백 경로: OpenAI API (gpt-4o-mini)**
+
+**월 비용 추정:**
+- `gpt-4o-mini` 비용: $0.15/1M 입력 토큰, $0.60/1M 출력 토큰
+- 정상 상황에서는 거의 사용 안 함 (로컬 큐가 대부분 처리)
+- 폴백 사용 시 예상 추가 비용: $10-100/월 (트래픽 급증 시에만)
+
+**총 월 비용:**
+- **기본: $100-500** (GPU 서버)
+- **폴백: $10-100** (필요 시에만)
+- **총합: $110-600/월** (트래픽에 따라)
+
 **비용 최적화:**
 - Go Watchdog으로 idle GPU 서버 자동 종료 (GPU 사용률 < 5% 시 자동 종료)
 - **우선순위 큐 (Prefill 비용 기반)**로 처리량 최대화 (20% 향상)
 - **대표 벡터 TOP-K 방식**으로 토큰 사용량 60-80% 감소
 - 동적 배치 크기로 GPU 활용률 향상 (20-30% → 70-90%)
+- **Router 패턴**: 기본적으로 저렴한 로컬 큐 사용, 폴백 시에만 API 비용 발생
 
 #### 1.2. Qdrant on-disk
 
@@ -856,7 +761,7 @@ class BaseExternalAPI:
 #### 2.1. LLM API (예: OpenAI GPT-4)
 
 **비용:**
-- GPT-4: $0.03-0.06/1K 토큰 (입력), $0.06-0.12/1K 토큰 (출력)
+- GPT-4o-mini: $0.03-0.06/1K 토큰 (입력), $0.06-0.12/1K 토큰 (출력)
 - 월 1M 토큰 사용 시: $30-120
 
 **vs GPU 서버:**
@@ -870,50 +775,6 @@ class BaseExternalAPI:
 
 **vs 로컬 SentenceTransformer:**
 - 로컬이 더 비용 효율적 (무료)
-
-#### 2.3. 이미지 생성 API
-
-**비용:**
-- DALL-E 3: $0.04-0.12/이미지
-- 월 1000개 이미지: $40-120
-
-**도입 시 고려사항:**
-- 캐싱으로 중복 생성 방지
-- Fallback 전략으로 비용 제한
-
-### 3. 비용 최적화 전략
-
-#### 3.1. 캐싱
-
-**적용 대상:**
-- 이미지 생성 결과
-- 음성 합성 결과
-- 자주 사용되는 쿼리 결과
-
-**구현:**
-```python
-# Redis 캐싱 (src/cache.py)
-cache_manager = CacheManager()
-cached_result = await cache_manager.get(f"image:{prompt}")
-if cached_result:
-    return cached_result
-```
-
-#### 3.2. Fallback 전략
-
-**사전 생성 콘텐츠:**
-- 자주 사용되는 템플릿 이미지/음성 사전 생성
-- API 실패 시 템플릿 반환
-
-**비용 제한:**
-- 일일/월별 API 호출 제한 설정
-- 제한 초과 시 Fallback 사용
-
-#### 3.3. 선택적 사용
-
-**사용자 요청 시에만 생성:**
-- 이미지/음성 생성은 사용자 요청 시에만 수행
-- 자동 생성은 비용이 높으므로 제한
 
 ---
 
@@ -936,7 +797,6 @@ if cached_result:
 
 **단기 (1-3개월):**
 - 현재 아키텍처 유지
-- 필요 시 이미지 생성/음성 합성 API 추가 (모듈화된 구조로)
 
 **중기 (3-6개월):**
 - 상용 API 도입 시 BaseExternalAPI 패턴 활용
