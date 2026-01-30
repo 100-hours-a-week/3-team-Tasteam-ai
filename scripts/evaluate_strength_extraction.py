@@ -59,26 +59,21 @@ class StrengthExtractionEvaluator:
     def extract_strengths(
         self,
         restaurant_id: int,
-        strength_type: str = "both",
         comparison_restaurant_ids: Optional[List[int]] = None,
     ) -> Dict[str, Any]:
         """
-        강점 추출 API 호출
+        강점 추출 API 호출 (Kiwi+lift 파이프라인)
         
         Args:
             restaurant_id: 레스토랑 ID
-            strength_type: "representative", "distinct", "both"
-            comparison_restaurant_ids: 비교 레스토랑 ID 리스트
+            comparison_restaurant_ids: 비교 레스토랑 ID 리스트 (선택)
             
         Returns:
             강점 추출 결과 딕셔너리
         """
         url = f"{self.base_url}/api/v1/llm/extract/strengths"
         
-        payload = {
-            "restaurant_id": restaurant_id,
-            "strength_type": strength_type,
-        }
+        payload = {"restaurant_id": restaurant_id}
         
         if comparison_restaurant_ids:
             payload["comparison_restaurant_ids"] = comparison_restaurant_ids
@@ -425,10 +420,9 @@ class StrengthExtractionEvaluator:
             gt_representative = ground_truth_strengths.get("representative", [])
             gt_distinct = ground_truth_strengths.get("distinct", [])
             
-            # API 호출 (both 모드)
+            # API 호출 (Kiwi+lift 파이프라인, strength_type 없음)
             result = self.extract_strengths(
                 restaurant_id=restaurant_id,
-                strength_type="both",
                 comparison_restaurant_ids=comparison_restaurant_ids if comparison_restaurant_ids else None,
             )
             
@@ -436,22 +430,16 @@ class StrengthExtractionEvaluator:
                 logger.warning(f"레스토랑 {restaurant_id}: API 호출 실패. 건너뜁니다.")
                 continue
             
-            # 예측 결과 추출
+            # 예측 결과 추출 (신규 API는 category/lift_percentage만 반환)
             predicted_strengths = result.get("strengths", [])
+            # representative/distinct 구분 없이 동일 리스트로 평가
+            predicted_representative = predicted_strengths
+            predicted_distinct = predicted_strengths
             
-            # Representative와 Distinct 분리
-            predicted_representative = [
-                s for s in predicted_strengths
-                if s.get("strength_type") == "representative"
-            ]
-            predicted_distinct = [
-                s for s in predicted_strengths
-                if s.get("strength_type") == "distinct"
-            ]
-            
-            # final_score 기준 정렬
-            predicted_representative.sort(key=lambda x: x.get("final_score", 0.0), reverse=True)
-            predicted_distinct.sort(key=lambda x: x.get("final_score", 0.0), reverse=True)
+            # lift_percentage 또는 final_score 기준 정렬
+            sort_key = lambda x: x.get("lift_percentage", x.get("final_score", 0.0))
+            predicted_representative.sort(key=sort_key, reverse=True)
+            predicted_distinct.sort(key=sort_key, reverse=True)
             
             # Precision@K 계산 (Representative)
             for k in k_values:

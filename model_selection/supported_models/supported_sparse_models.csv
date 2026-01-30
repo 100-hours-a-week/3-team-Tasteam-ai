@@ -1,0 +1,6 @@
+model,description,license,size_in_GB,requires_idf,vocab_size
+Qdrant/bm25,BM25 as sparse embeddings meant to be used with Qdrant,apache-2.0,0.01,True,0
+Qdrant/bm42-all-minilm-l6-v2-attentions,"Light sparse embedding model, which assigns an importance score to each token in the text",apache-2.0,0.09,True,30522
+Qdrant/minicoil-v1,"Sparse embedding model, that resolves semantic meaning of the words, while keeping exact keyword match behavior. Based on jinaai/jina-embeddings-v2-small-en-tokens",apache-2.0,0.09,True,19125
+prithivida/Splade_PP_en_v1,Independent Implementation of SPLADE++ Model for English.,apache-2.0,0.532,,30522
+prithvida/Splade_PP_en_v1,Independent Implementation of SPLADE++ Model for English.,apache-2.0,0.532,,30522

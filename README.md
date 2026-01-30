@@ -66,7 +66,6 @@ uvicorn src.api.main:app --host 0.0.0.0 --port 8001 --reload
 | 배치 리뷰 요약 | POST | `/api/v1/llm/summarize/batch` |
 | 강점 추출 | POST | `/api/v1/llm/extract/strengths` |
 | 벡터 검색 | POST | `/api/v1/vector/search/similar` |
-| 이미지 리뷰 검색 | POST | `/api/v1/vector/search/review-images` |
 | 데이터 업로드 | POST | `/api/v1/vector/upload` |
 | 헬스 체크 | GET | `/health` |
 

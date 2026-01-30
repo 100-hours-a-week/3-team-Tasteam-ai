@@ -207,7 +207,7 @@ def convert_review_to_schema_format(review: Dict) -> Dict:
         result["created_at"] = review["created_at"]
     
     # 나머지 필드 복사
-    for key in ["restaurant_id", "is_recommended", "updated_at", "deleted_at", "version"]:
+    for key in ["restaurant_id", "is_recommended", "updated_at", "version"]:
         if key in review:
             result[key] = review[key]
     
@@ -262,7 +262,7 @@ def convert_schema_to_review(schema_review: Dict) -> Dict:
             result["images"] = {"url": schema_review["images"][0].get("image_url", "")}
     
     # 나머지 필드 복사
-    for key in ["restaurant_id", "subgroup_id", "is_recommended", "updated_at", "deleted_at", "version"]:
+    for key in ["restaurant_id", "subgroup_id", "is_recommended", "updated_at", "version"]:
         if key in schema_review:
             result[key] = schema_review[key]
     

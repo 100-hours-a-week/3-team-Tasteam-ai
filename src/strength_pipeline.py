@@ -32,7 +32,7 @@ def _get_spark() -> "SparkSession":
     if _spark_session is None and SPARK_AVAILABLE:
         _spark_session = (
             SparkSession.builder.appName("strength_pipeline")
-            .master("local[*]")
+            .master("local[6]")
             .config("spark.driver.memory", "2g")
             .config("spark.driver.bindAddress", "127.0.0.1")
             .getOrCreate()

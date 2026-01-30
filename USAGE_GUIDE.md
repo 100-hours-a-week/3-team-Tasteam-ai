@@ -108,13 +108,11 @@ POST /api/llm/summarize
   "limit": 10
 }
 
-# 응답에 categories 필드 추가됨
+# 응답
 {
   "restaurant_id": 123,
   "overall_summary": "...",
-  "positive_aspects": [],
-  "negative_aspects": [],
-  "categories": {  # 새로 추가
+  "categories": {
     "service": {
       "summary": "...",
       "bullets": ["...", "..."],

@@ -1,3 +1,21 @@
+## 메트릭/로그 수집 On/Off (Config)
+
+수집은 **상시가 아니라 Config로 켜고 끕니다.**  
+→ 상세: **[METRICS_LOGGING_CONFIG.md](../METRICS_LOGGING_CONFIG.md)**
+
+| 환경 변수 | 기본값 | 설명 |
+|-----------|--------|------|
+| `METRICS_AND_LOGGING_ENABLE` | `false` | `true`일 때만 메트릭·구조화 로그 수집 (로그 파일 + SQLite) |
+| `METRICS_ENABLE_LOGGING` | `true` | 수집 활성화 시 로그 파일 저장 (`METRICS_AND_LOGGING_ENABLE=true`일 때만 적용) |
+| `METRICS_ENABLE_DB` | `true` | 수집 활성화 시 SQLite 저장 (`METRICS_AND_LOGGING_ENABLE=true`일 때만 적용) |
+| `METRICS_DB_PATH` | `metrics.db` | SQLite 파일 경로 |
+| `METRICS_LOG_DIR` | `logs` | 로그 디렉토리 |
+
+- `METRICS_AND_LOGGING_ENABLE=false`(기본): 수집 안 함 (no-op, 파일/DB 생성 없음).
+- `METRICS_AND_LOGGING_ENABLE=true`: 수집 활성화 후, `METRICS_ENABLE_LOGGING` / `METRICS_ENABLE_DB`로 로그/DB 저장 여부 선택.
+
+---
+
 ## 집계 지표
 
 ### 1. 기본 분석 메트릭 (analysis_metrics 테이블)
@@ -103,7 +121,6 @@ GPU 사용률 (실시간)
 일별/시간대별 통계
 피크 시간대 식별
 트래픽 패턴 분석
-
 **5. 이미지 검색 쿼리 확장 분석**
 쿼리 확장 사용률 (확장된 쿼리 vs 원본 쿼리)
 쿼리 확장 성능 (TTFT, TPS, Prefill/Decode 시간)

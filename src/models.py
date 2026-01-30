@@ -9,8 +9,16 @@ from datetime import datetime
 
 # ==================== 기본 데이터 모델 ( 기반) ====================
 
+class ErrorResponse(BaseModel):
+    """공통 에러 응답 포맷"""
+    code: int = Field(..., description="HTTP status code")
+    message: str = Field(..., description="에러 메시지(요약)")
+    details: Optional[Any] = Field(None, description="에러 상세(검증 오류/추가 정보 등)")
+    request_id: str = Field(..., description="요청 추적용 ID")
+
+
 class ReviewImageModel(BaseModel):
-    """리뷰 이미지 모델 (REVIEW_IMAGE TABLE)"""
+    """리뷰 이미지 모델 (REVIEW_IMAGE TABLE). 스키마에만 존재, API 요청/응답에서는 미사용."""
     id: Optional[int] = Field(None, description="이미지 ID (BIGINT PK)")
     review_id: int = Field(..., description="리뷰 ID (BIGINT FK)")
     image_url: str = Field(..., description="이미지 URL (VARCHAR(500))")
@@ -25,13 +33,11 @@ class ReviewModel(BaseModel):
     group_id: Optional[int] = Field(None, description="그룹 ID (BIGINT FK, 예: 10234, 12034)")
     subgroup_id: Optional[int] = Field(None, description="서브그룹 ID (BIGINT FK, 예: 10234, 12034)")
     content: str = Field(..., description="리뷰 내용 (VARCHAR(1000))")
-    is_recommended: Optional[bool] = Field(None, description="추천 여부 (BOOLEAN)")
-    created_at: Optional[datetime] = Field(None, description="생성 시간 (TIMESTAMP)")
-    updated_at: Optional[datetime] = Field(None, description="수정 시간 (TIMESTAMP)")
-    deleted_at: Optional[datetime] = Field(None, description="삭제 시간 (TIMESTAMP)")
-    
-    # REVIEW_IMAGE 관계
-    images: Optional[List[ReviewImageModel]] = Field(None, description="리뷰 이미지 리스트")
+    is_recommended: Optional[bool] = Field(None, description="추천 여부 (BOOLEAN, 메타)")
+    created_at: Optional[datetime] = Field(None, description="생성 시간 (TIMESTAMP, 메타)")
+    updated_at: Optional[datetime] = Field(None, description="수정 시간 (TIMESTAMP, 메타)")
+    # 스키마에만 존재, API 응답에서는 제외 (member_id와 동일)
+    images: Optional[List[ReviewImageModel]] = Field(None, description="리뷰 이미지 리스트 (스키마만, API 미사용)", exclude=True)
 
 
 class RestaurantModel(BaseModel):
@@ -41,7 +47,6 @@ class RestaurantModel(BaseModel):
     full_address: Optional[str] = Field(None, description="전체 주소 (VARCHAR(255))")
     location: Optional[Dict[str, Any]] = Field(None, description="위치 정보 (geometry(Point,4326))")
     created_at: Optional[datetime] = Field(None, description="생성 시간 (TIMESTAMP)")
-    deleted_at: Optional[datetime] = Field(None, description="삭제 시간 (TIMESTAMP)")
 
 
 class FoodCategoryModel(BaseModel):
@@ -70,10 +75,17 @@ class DebugInfo(BaseModel):
 
 # ==================== Sentiment Analysis ====================
 
+class SentimentReviewInput(BaseModel):
+    """감성 분석용 리뷰 입력 (id, restaurant_id, content)"""
+    id: Optional[int] = Field(None, description="리뷰 ID (선택, LLM 재판정 시 매핑용)")
+    restaurant_id: int = Field(..., description="레스토랑 ID (BIGINT FK)")
+    content: str = Field(..., description="리뷰 내용 (VARCHAR(1000))")
+
+
 class SentimentAnalysisRequest(BaseModel):
     """감성 분석 요청 모델 ( 기반)"""
     restaurant_id: int = Field(..., description="레스토랑 ID (BIGINT FK)")
-    reviews: List[ReviewModel] = Field(..., description="리뷰 리스트 (REVIEW TABLE)")
+    reviews: List[SentimentReviewInput] = Field(..., description="리뷰 리스트 (id 선택, restaurant_id, content)")
 
 
 class SentimentAnalysisDisplayResponse(BaseModel):
@@ -96,17 +108,17 @@ class SentimentAnalysisResponse(BaseModel):
     debug: Optional[DebugInfo] = Field(None, description="디버그 정보")
 
 
+class SentimentRestaurantBatchInput(BaseModel):
+    """배치 감성 분석용 레스토랑 입력 (reviews는 SentimentReviewInput: id 선택, restaurant_id, content)"""
+    restaurant_id: int = Field(..., description="레스토랑 ID")
+    reviews: List[SentimentReviewInput] = Field(default_factory=list, description="리뷰 리스트 (id 선택, restaurant_id, content)")
+
+
 class SentimentAnalysisBatchRequest(BaseModel):
     """배치 감성 분석 요청 모델"""
-    restaurants: List[Dict[str, Any]] = Field(
+    restaurants: List[SentimentRestaurantBatchInput] = Field(
         ...,
-        description="레스토랑 데이터 리스트, 각 항목은 restaurant_id와 reviews를 포함"
-    )
-    max_tokens_per_batch: Optional[int] = Field(
-        None,
-        ge=1000,
-        le=8000,
-        description="배치당 최대 토큰 수 (None이면 동적 계산)"
+        description="레스토랑 데이터 리스트, 각 항목: restaurant_id, reviews(SentimentReviewInput 리스트)"
     )
 
 
@@ -131,10 +143,8 @@ class SummaryVectorSearchRequest(BaseModel):
 
 
 class SummaryRequest(BaseModel):
-    """리뷰 요약 요청 모델 ( 기반)"""
+    """리뷰 요약 요청 모델. 하이브리드 검색 쿼리는 기본 시드(service/price/food)만 사용."""
     restaurant_id: int = Field(..., description="레스토랑 ID")
-    positive_query: Optional[str] = Field("맛있다 좋다 만족", description="긍정 리뷰 검색 쿼리")
-    negative_query: Optional[str] = Field("맛없다 별로 불만", description="부정 리뷰 검색 쿼리")
     limit: int = Field(10, ge=1, le=100, description="각 카테고리당 검색할 최대 리뷰 수")
     min_score: float = Field(0.0, ge=0.0, le=1.0, description="최소 유사도 점수")
 
@@ -158,17 +168,13 @@ class SummaryDisplayResponse(BaseModel):
     """리뷰 요약 표시용 응답 모델 (최소 필드)"""
     restaurant_id: int = Field(..., description="레스토랑 ID")
     overall_summary: str = Field(..., description="전체 요약")
-    positive_aspects: List[SummaryAspect] = Field(default_factory=list, description="긍정 aspect 리스트")
-    negative_aspects: List[SummaryAspect] = Field(default_factory=list, description="부정 aspect 리스트")
     categories: Optional[Dict[str, CategorySummary]] = Field(None, description="카테고리별 요약 (새 파이프라인)")
 
 
 class SummaryResponse(BaseModel):
-    """리뷰 요약 응답 모델 ( 기반)"""
+    """리뷰 요약 응답 모델 (디버그용, positive_reviews 등 포함)"""
     restaurant_id: int = Field(..., description="레스토랑 ID")
-    overall_summary: str = Field(..., description="전체 요약 (positive_aspects + negative_aspects 기반)")
-    positive_aspects: List[SummaryAspect] = Field(default_factory=list, description="긍정 aspect 리스트")
-    negative_aspects: List[SummaryAspect] = Field(default_factory=list, description="부정 aspect 리스트")
+    overall_summary: str = Field(..., description="전체 요약")
     positive_reviews: List[ReviewModel] = Field(default_factory=list, description="긍정 리뷰 메타데이터")
     negative_reviews: List[ReviewModel] = Field(default_factory=list, description="부정 리뷰 메타데이터")
     positive_count: int = Field(0, description="긍정 리뷰 개수")
@@ -178,22 +184,18 @@ class SummaryResponse(BaseModel):
 
 
 class SummaryBatchRequest(BaseModel):
-    """배치 리뷰 요약 요청 모델"""
+    """배치 리뷰 요약 요청 모델. 하이브리드 검색 쿼리는 기본 시드만 사용. limit/min_score는 전체 레스토랑 공통."""
     restaurants: List[Dict[str, Any]] = Field(
         ...,
-        description="레스토랑 데이터 리스트, 각 항목은 restaurant_id, positive_query, negative_query, limit, min_score를 포함"
+        description="레스토랑 데이터 리스트, 각 항목: restaurant_id(필수)."
     )
-    max_tokens_per_batch: Optional[int] = Field(
-        None,
-        ge=1000,
-        le=8000,
-        description="배치당 최대 토큰 수 (None이면 동적 계산)"
-    )
+    limit: int = Field(10, ge=1, le=100, description="각 카테고리당 검색할 최대 리뷰 수 (전체 레스토랑 공통)")
+    min_score: float = Field(0.0, ge=0.0, le=1.0, description="최소 유사도 점수 (전체 레스토랑 공통)")
 
 
 class SummaryBatchResponse(BaseModel):
-    """배치 리뷰 요약 응답 모델"""
-    results: List[SummaryResponse] = Field(..., description="각 레스토랑별 요약 결과")
+    """배치 리뷰 요약 응답 모델 (각 항목은 단일 debug=false와 동일한 SummaryDisplayResponse)"""
+    results: List[SummaryDisplayResponse] = Field(..., description="각 레스토랑별 요약 결과")
 
 
 # ==================== Strength ====================
@@ -212,16 +214,14 @@ class StrengthVectorUploadRequest(BaseModel):
 
 
 class StrengthRequestV2(BaseModel):
-    """강점 추출 요청 모델 V2 (새로운 파이프라인)"""
+    """강점 추출 요청 모델 V2 (Kiwi+lift 파이프라인)"""
     restaurant_id: int = Field(..., description="타겟 레스토랑 ID")
-    strength_type: str = Field("both", description="강점 타입: 'representative', 'distinct', 'both'")
     category_filter: Optional[int] = Field(None, description="카테고리 필터")
     region_filter: Optional[str] = Field(None, description="지역 필터")
     price_band_filter: Optional[str] = Field(None, description="가격대 필터")
     top_k: int = Field(10, ge=1, le=50, description="반환할 최대 강점 개수")
     max_candidates: int = Field(300, ge=50, le=1000, description="근거 후보 최대 개수")
     months_back: int = Field(6, ge=1, le=24, description="최근 N개월 리뷰만 사용")
-    min_support: int = Field(5, ge=1, le=50, description="최소 support_count (희소 환각 방지)")
 
 
 class EvidenceSnippet(BaseModel):
@@ -241,7 +241,6 @@ class StrengthDetail(BaseModel):
 class StrengthResponseV2(BaseModel):
     """강점 추출 응답 모델 V2"""
     restaurant_id: int = Field(..., description="레스토랑 ID")
-    strength_type: str = Field(..., description="요청한 강점 타입")
     strengths: List[StrengthDetail] = Field(..., description="강점 리스트")
     total_candidates: int = Field(..., description="근거 후보 총 개수")
     validated_count: int = Field(..., description="검증 통과한 강점 개수")
@@ -256,31 +255,6 @@ class StrengthResponseV2(BaseModel):
     debug: Optional[DebugInfo] = Field(None, description="디버그 정보")
 
 
-# ==================== Review Image ====================
-
-class ReviewImageSearchRequest(BaseModel):
-    """리뷰 이미지 검색 요청 모델 ( 기반)"""
-    query: str = Field(..., description="검색 쿼리 (예: '분위기 좋다', '데이트하기 좋은')")
-    restaurant_id: Optional[int] = Field(None, description="레스토랑 ID 필터 (선택사항)")
-    limit: int = Field(10, ge=1, le=100, description="반환할 최대 개수")
-    min_score: float = Field(0.0, ge=0.0, le=1.0, description="최소 유사도 점수")
-    expand_query: Optional[bool] = Field(None, description="쿼리 확장 여부 (None: 자동 판단, True: 강제 확장, False: 확장 안함)")
-
-
-class ReviewImageResult(BaseModel):
-    """리뷰 이미지 검색 결과 모델 ( 기반)"""
-    restaurant_id: int = Field(..., description="레스토랑 ID")
-    review_id: int = Field(..., description="리뷰 ID")
-    image_url: str = Field(..., description="이미지 URL")
-    review: ReviewModel = Field(..., description="리뷰 정보")
-
-
-class ReviewImageSearchResponse(BaseModel):
-    """리뷰 이미지 검색 응답 모델 ( 기반)"""
-    results: List[ReviewImageResult] = Field(..., description="검색 결과 리스트")
-    total: int = Field(..., description="총 결과 개수")
-
-
 # ==================== Vector Search (일반) ====================
 
 class VectorSearchRequest(BaseModel):
@@ -289,7 +263,6 @@ class VectorSearchRequest(BaseModel):
     restaurant_id: Optional[int] = Field(None, description="레스토랑 ID 필터")
     limit: int = Field(3, ge=1, le=100, description="반환할 최대 개수")
     min_score: float = Field(0.0, ge=0.0, le=1.0, description="최소 유사도 점수")
-    expand_query: Optional[bool] = Field(None, description="쿼리 확장 여부 (None: 자동 판단, True: 강제 확장, False: 확장 안함)")
 
 
 class VectorSearchResult(BaseModel):
@@ -306,10 +279,27 @@ class VectorSearchResponse(BaseModel):
 
 # ==================== Vector Upload ====================
 
+class VectorUploadReviewInput(BaseModel):
+    """벡터 업로드용 리뷰 입력 (is_recommended, member_id, group_id, subgroup_id, updated_at 미사용)"""
+    id: Optional[int] = Field(None, description="리뷰 ID (BIGINT PK)")
+    restaurant_id: int = Field(..., description="레스토랑 ID (BIGINT FK)")
+    content: str = Field(..., description="리뷰 내용 (VARCHAR(1000))")
+    created_at: Optional[datetime] = Field(None, description="생성 시간 (TIMESTAMP, 메타)")
+    # 스키마에만 존재, API 요청/응답에서는 미사용 (member_id와 동일)
+    images: Optional[List[ReviewImageModel]] = Field(None, description="리뷰 이미지 리스트 (스키마만, API 미사용)", exclude=True)
+
+
+class VectorUploadRestaurantInput(BaseModel):
+    """벡터 업로드용 레스토랑 입력 (full_address, location, created_at 미사용)"""
+    id: Optional[int] = Field(None, description="레스토랑 ID (BIGINT PK)")
+    name: str = Field(..., description="레스토랑 이름 (VARCHAR(100))")
+    reviews: List[VectorUploadReviewInput] = Field(default_factory=list, description="중첩 형식 시 리뷰 리스트")
+
+
 class VectorUploadRequest(BaseModel):
     """벡터 데이터 업로드 요청 모델"""
-    reviews: List[ReviewModel] = Field(..., description="리뷰 리스트")
-    restaurants: Optional[List[RestaurantModel]] = Field(None, description="레스토랑 리스트 (선택사항)")
+    reviews: List[VectorUploadReviewInput] = Field(..., description="리뷰 리스트 (id, restaurant_id, content)")
+    restaurants: Optional[List[VectorUploadRestaurantInput]] = Field(None, description="레스토랑 리스트 (id, name, reviews만, 선택사항)")
 
 
 class VectorUploadResponse(BaseModel):
@@ -321,28 +311,10 @@ class VectorUploadResponse(BaseModel):
 
 # ==================== Review Management ====================
 
-class UpsertReviewRequest(BaseModel):
-    """리뷰 Upsert 요청 모델 ( 기반)"""
-    restaurant: RestaurantModel = Field(..., description="레스토랑 정보")
-    review: ReviewModel = Field(..., description="리뷰 정보 (REVIEW TABLE)")
-    update_version: Optional[int] = Field(None, description="업데이트할 버전 (낙관적 잠금용)")
-
-
-class UpsertReviewResponse(BaseModel):
-    """리뷰 Upsert 응답 모델"""
-    action: str = Field(..., description="수행된 작업: 'inserted', 'updated', 'skipped'")
-    review_id: int = Field(..., description="리뷰 ID")
-    version: int = Field(..., description="새로운 버전 번호")
-    point_id: str = Field(..., description="Point ID")
-    reason: Optional[str] = Field(None, description="skipped인 경우 이유")
-    requested_version: Optional[int] = Field(None, description="요청한 버전 (skipped인 경우)")
-    current_version: Optional[int] = Field(None, description="현재 버전 (skipped인 경우)")
-
-
-class UpsertReviewsBatchRequest(BaseModel):
-    """리뷰 배치 Upsert 요청 모델"""
-    restaurant: RestaurantModel = Field(..., description="레스토랑 정보")
-    reviews: List[ReviewModel] = Field(..., description="리뷰 리스트")
+class UpsertReviewsRequest(BaseModel):
+    """리뷰 Upsert 요청 (upload와 동일 형식: reviews, restaurants)"""
+    reviews: List[VectorUploadReviewInput] = Field(..., description="리뷰 리스트 (id, restaurant_id, content)")
+    restaurants: Optional[List[VectorUploadRestaurantInput]] = Field(None, description="레스토랑 리스트 (id, name, reviews) - restaurant_name 해석 및 중첩 리뷰")
     batch_size: Optional[int] = Field(32, ge=1, le=100, description="벡터 인코딩 배치 크기")
 
 

@@ -1,87 +1,65 @@
 """
-RunPod Pod 서버 API 전체 기능 통합 테스트 스크립트 (다중 모델 지원)
+RunPod Pod / 로컬 FastAPI 서버 API 전체 기능 통합 테스트 스크립트 (다중 모델 지원)
 
-이 스크립트는 RunPod Pod에서 실행 중인 FastAPI 서버(src 기반)를 대상으로 API 테스트를 수행합니다.
-모든 테스트는 HTTP API 호출만 사용하며, hybrid_search/final_pipeline 등 비-src 모듈에 의존하지 않습니다.
-성능 측정, 정확도 측정, 여러 모델 비교를 지원합니다.
+이 스크립트는 RunPod Pod 또는 로컬에서 실행 중인 FastAPI 서버(src 기반)를 대상으로
+HTTP API 호출만으로 테스트를 수행합니다. hybrid_search/final_pipeline 등 비-src 모듈에 의존하지 않습니다.
 
-감성 분석 / 요약 / 강점 추출: src 파이프라인 (카테고리별 하이브리드 요약, Kiwi+lift 강점, HF+LLM 감성 등)
+테스트 대상 API:
+    - 감성 분석: /api/v1/sentiment/analyze, /api/v1/sentiment/analyze/batch
+    - 요약: /api/v1/llm/summarize, /api/v1/llm/summarize/batch
+    - 강점 추출: /api/v1/llm/extract/strengths (Kiwi+lift)
+    - 벡터: /api/v1/vector/upload, /api/v1/vector/search/similar
 
-사용 방법:
-    ========================================
-    1. 모델
-    ========================================
-    
-    # jinsoo1218/runpod_vllm:latest
-    # runpod_env
-    
-    llm:
-    Qwen/Qwen2.5-7B-Instruct
-    meta-llama/Llama-3.1-8B-Instruct
-    google/gemma-2-9b-it
+--benchmark 시 (메트릭 + CPU + GPU 모두 활성화, 기존 동작):
+    - 서버 요청 메트릭: X-Benchmark → logs/debug.log, metrics.db
+    - 서버 CPU 모니터: X-Enable-CPU-Monitor → logs/cpu_usage.log
+    - 서버 GPU 모니터: X-Enable-GPU-Monitor → logs/gpu_usage.log
+    분리 옵션 (각각 따로 켜기):
+    - --benchmark-metrics: 서버 요청 메트릭만 (X-Benchmark)
+    - --benchmark-cpu: 서버 CPU 모니터만 (X-Enable-CPU-Monitor)
+    - --benchmark-gpu: 서버 GPU 모니터만 (X-Enable-GPU-Monitor → logs/gpu_usage.log)
 
-    Embedding:
+사용 예:
+    # 기본 테스트 (BASE_URL 환경 변수 또는 스크립트 내 BASE_URL 확인)
+    python test_all_task.py
 
-    jhgan/ko-sbert-multitask
-    dragonkue/BGE-m3-ko
-    upskyy/bge-m3-korean
-    
-    ========================================
-    2. 성능 측정 모드 (벤치마크)
-    ========================================
-    
-    python test_openai_all.py --benchmark
-    python test_openai_all.py --benchmark --iterations 10
-    
-    ========================================
-    4. 결과 저장
-    ========================================
-    
-    초기 셋팅
-    qwen, kakao-app, sbert, 
-    
-    1. llm 모델 비교
-    python test_openai_all.py --benchmark --iterations 3 --save-results qwen.json
-    python test_openai_all.py --benchmark --iterations 3 --save-results llama.json
-    python test_openai_all.py --benchmark --iterations 3 --save-results gemma.json
-    
-    3. llm 모델 고정, sentiment 모델 비교
-    python test_openai_all.py --benchmark --iterations 3 --save-results qwen_Kakao-app.json
-    python test_openai_all.py --benchmark --iterations 3 --save-results qwen_klue-roberta.json
-    python test_openai_all.py --benchmark --iterations 3 --save-results qwen_kcelectra.json
-    
-    3. llm 모델 고정, sentiment 모델 고정, embedding 모델 비교
-    python test_openai_all.py --benchmark --iterations 3 --save-results qwen_Kakao-app_sbert.json
-    python test_openai_all.py --benchmark --iterations 3 --save-results qwen_Kakao-app_bge-m3-drag.json
-    python test_openai_all.py --benchmark --iterations 3 --save-results qwen_Kakao-app_bge-m3-upsky.json
-    
-    ========================================
-    주요 옵션
-    ========================================
-    
-    --benchmark: 성능 측정 모드 활성화 (처리 시간, TTFT, TPS 등)
-    --compare-models: 여러 모델 비교 모드
-    --models: 비교할 모델명 리스트 (--compare-models와 함께 사용)
-    --provider: LLM 제공자 (openai, local, runpod)
-    --iterations: 성능 측정 반복 횟수 (기본값: 5)
-    --save-results: 결과를 저장할 JSON 파일 경로
-    --generate-report: 모델 비교 리포트 생성
-    
-    ========================================
-    측정 지표
-    ========================================
-    
-    성능 지표:
-    - 처리 시간 (평균, P95, P99)
-    - TTFT (Time To First Token)
-    - TPS (Tokens Per Second)
-    - 처리량 (req/s)
-    
-    정확도 지표:
-    - BLEU Score (요약)
-    - ROUGE Score (요약)
-    - Precision@K (강점 추출)
-    - MAE (감성 분석)
+    # 성능 측정 모드 (메트릭·CPU 모니터링 활성화)
+    python test_all_task.py --benchmark
+    python test_all_task.py --benchmark --iterations 10
+
+    # 특정 테스트만 실행
+    python test_all_task.py --tests sentiment summarize strength
+
+    # 결과 JSON 저장
+    python test_all_task.py --benchmark --save-results result.json
+
+    # 여러 모델 비교
+    python test_all_task.py --compare-models --models "Qwen/Qwen2.5-7B-Instruct" "meta-llama/Llama-3.1-8B-Instruct" \\
+        --benchmark --save-results compare.json
+
+    # 부하테스트
+    python test_all_task.py --load-test --total-requests 500 --concurrent-users 10 --ramp-up 20
+
+    # kr3.tsv에서 테스트 데이터 생성 후 테스트
+    python test_all_task.py --generate-from-kr3 --kr3-sample 500 --kr3-restaurants 10
+
+주요 옵션:
+    --benchmark         성능 측정 전체 (메트릭 + CPU + GPU, 기존 동작)
+    --benchmark-metrics 서버 요청 메트릭만 (X-Benchmark)
+    --benchmark-cpu     서버 CPU 모니터만 (X-Enable-CPU-Monitor)
+    --benchmark-gpu     서버 GPU 모니터만 (logs/gpu_usage.log)
+    --iterations N      벤치마크 반복 횟수 (기본 5)
+    --tests T1 [T2...]  실행할 테스트: all|sentiment|sentiment_batch|summarize|summarize_batch|strength|vector
+    --save-results PATH 결과 JSON 저장 경로
+    --provider P        LLM 제공자: openai|local|runpod
+    --model M           테스트할 LLM 모델명
+    --compare-models    여러 모델 비교 모드 (--models, --ports와 함께)
+    --load-test         부하테스트 (--total-requests, --concurrent-users, --ramp-up)
+    --generate-from-kr3 kr3.tsv 기반 테스트 데이터 생성 (--kr3-sample, --kr3-restaurants)
+
+측정 지표 (--benchmark / QUANTITATIVE_METRICS.md):
+    성능: 처리 시간(평균/P95/P99), TTFT, TPS, 처리량(req/s)
+    정확도: BLEU/ROUGE(요약), Precision@K(강점), MAE(감성)
 """
 
 import os
@@ -113,11 +91,21 @@ try:
 except ImportError:
     METRICS_COLLECTOR_AVAILABLE = False
 
+# --save-results model_info: env 미설정 시 서버 기본값 표시 (src/config.py와 동일)
 try:
-    from scripts.gpu_monitor import GPUMonitor
-    GPU_MONITOR_AVAILABLE = True
+    from src.config import (
+        DEFAULT_LLM_MODEL,
+        DEFAULT_EMBEDDING_MODEL,
+        DEFAULT_SENTIMENT_MODEL,
+        DEFAULT_SPARSE_EMBEDDING_MODEL,
+    )
+    SERVER_DEFAULT_OPENAI_MODEL = "gpt-4o-mini"  # config.Config.OPENAI_MODEL 기본값
 except ImportError:
-    GPU_MONITOR_AVAILABLE = False
+    DEFAULT_LLM_MODEL = ""
+    DEFAULT_EMBEDDING_MODEL = ""
+    DEFAULT_SENTIMENT_MODEL = ""
+    DEFAULT_SPARSE_EMBEDDING_MODEL = "Qdrant/bm25"
+    SERVER_DEFAULT_OPENAI_MODEL = ""
 
 # 색상 출력을 위한 ANSI 코드
 class Colors:
@@ -163,6 +151,9 @@ def print_header(msg: str):
 BASE_URL = "http://localhost:8001"
 API_PREFIX = "/api/v1"
 METRICS_DB_PATH = "metrics.db"
+
+# --benchmark* 시 서버 헤더: X-Benchmark(요청 메트릭), X-Enable-CPU-Monitor(CPU), X-Enable-GPU-Monitor(GPU). main()에서 설정.
+BENCHMARK_HEADERS: Dict[str, str] = {}
 
 # 샘플 데이터 (데이터 생성 후 업데이트됨)
 SAMPLE_RESTAURANT_ID = 1
@@ -232,11 +223,16 @@ def safe_json_response(response, error_msg="응답 처리 실패", allow_404=Fal
         return None
 
 
+def get_request_headers() -> Dict[str, str]:
+    """API 요청 시 사용할 헤더 (X-Benchmark=요청 메트릭, X-Enable-CPU-Monitor=CPU, X-Enable-GPU-Monitor=GPU)"""
+    return dict(BENCHMARK_HEADERS)
+
+
 def check_server_health():
     """서버 헬스 체크 (RunPod Pod 서버용)"""
     try:
         start_time = time.time()
-        response = requests.get(f"{BASE_URL}/health", timeout=10)
+        response = requests.get(f"{BASE_URL}/health", timeout=10, headers=get_request_headers())
         elapsed_time = time.time() - start_time
         result = safe_json_response(response, "헬스 체크 실패")
         if result:
@@ -310,19 +306,10 @@ def generate_test_data(
                         'reviews': []
                     }
                 
-                # 리뷰 추가 (필요한 필드만 추출)
+                # 리뷰 추가 (감성 분석 입력: restaurant_id, content만)
                 review_data = {
-                    'id': review.get('id'),
                     'restaurant_id': review.get('restaurant_id'),
-                    'member_id': review.get('member_id'),
-                    'group_id': review.get('group_id'),
-                    'subgroup_id': review.get('subgroup_id'),
                     'content': review.get('content', ''),
-                    'is_recommended': review.get('is_recommended'),
-                    'created_at': review.get('created_at'),
-                    'updated_at': review.get('updated_at'),
-                    'deleted_at': review.get('deleted_at'),
-                    'images': review.get('images', [])
                 }
                 restaurants_dict[restaurant_id_str]['reviews'].append(review_data)
             
@@ -356,17 +343,8 @@ def generate_test_data(
                 for review in first_restaurant.get('reviews', []):
                     if isinstance(review, dict) and review.get('content'):
                         review_obj = {
-                            'id': review.get('id'),
                             'restaurant_id': review.get('restaurant_id', SAMPLE_RESTAURANT_ID),
-                            'member_id': review.get('member_id'),
-                            'group_id': review.get('group_id'),
-                            'subgroup_id': review.get('subgroup_id'),
                             'content': review.get('content', ''),
-                            'is_recommended': review.get('is_recommended'),
-                            'created_at': review.get('created_at'),
-                            'updated_at': review.get('updated_at'),
-                            'deleted_at': review.get('deleted_at'),
-                            'images': review.get('images', [])
                         }
                         SAMPLE_REVIEWS.append(review_obj)
                 print_info(f"  - 샘플 레스토랑 ID: {SAMPLE_RESTAURANT_ID}")
@@ -484,7 +462,6 @@ def upload_data_to_qdrant(data: Dict[str, Any]):
             "full_address": None,
             "location": None,
             "created_at": None,
-            "deleted_at": None
         }
         all_restaurants.append(restaurant_info)
         
@@ -504,7 +481,7 @@ def upload_data_to_qdrant(data: Dict[str, Any]):
         }
         
         start_time = time.time()
-        response = requests.post(url, json=payload, timeout=300)  # 대용량 데이터를 위해 타임아웃 증가
+        response = requests.post(url, json=payload, timeout=300, headers=get_request_headers())  # 대용량 데이터를 위해 타임아웃 증가
         elapsed_time = time.time() - start_time
         result = safe_json_response(response, "업로드 실패")
         
@@ -526,6 +503,77 @@ def upload_data_to_qdrant(data: Dict[str, Any]):
     except Exception as e:
         print_warning(f"Upload 중 오류: {str(e)}")
         return False
+
+
+# 배치 테스트별 레스토랑 수 (--save-results data_info용)
+BATCH_RESTAURANTS = {"sentiment_batch": 10, "summarize_batch": 2}
+
+
+def _effective_model_info() -> Dict[str, str]:
+    """--save-results용 model_info. env 미설정 시 서버 기본값(src/config.py) 사용."""
+    provider = (os.getenv("LLM_PROVIDER") or "openai").lower()
+    if provider == "openai":
+        llm = (os.getenv("OPENAI_MODEL") or "").strip() or SERVER_DEFAULT_OPENAI_MODEL
+    else:
+        llm = (os.getenv("LLM_MODEL") or "").strip() or DEFAULT_LLM_MODEL
+    dense_emb = (os.getenv("EMBEDDING_MODEL") or "").strip() or DEFAULT_EMBEDDING_MODEL
+    sparse_emb = (os.getenv("SPARSE_EMBEDDING_MODEL") or "").strip() or DEFAULT_SPARSE_EMBEDDING_MODEL
+    return {
+        "llm_provider": provider,
+        "llm_model": llm,
+        "dense_embedding_model": dense_emb,
+        "sparse_embedding_model": sparse_emb,
+        "sentiment_model": (os.getenv("SENTIMENT_MODEL") or "").strip() or DEFAULT_SENTIMENT_MODEL,
+    }
+
+
+def build_data_info(
+    test_data: Optional[Dict[str, Any]] = None,
+    data_source_name: str = "test_data_sample.json",
+    generate_from_kr3: bool = False,
+    kr3_sample: Optional[int] = None,
+    kr3_restaurants: Optional[int] = None,
+    selected_tests: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """
+    --save-results JSON용 데이터 정보 구성.
+    데이터 이름·규모, 단일/배치 구분, 배치 시 처리 레스토랑 수를 반환한다.
+    """
+    data_scale: Dict[str, Any] = {"restaurants": 0, "total_reviews": 0}
+    if test_data and isinstance(test_data, dict) and test_data.get("restaurants"):
+        data_scale["restaurants"] = len(test_data["restaurants"])
+        data_scale["total_reviews"] = sum(
+            len(r.get("reviews", [])) for r in test_data["restaurants"]
+        )
+    if generate_from_kr3:
+        if kr3_sample is not None:
+            data_scale["kr3_sample"] = kr3_sample
+        if kr3_restaurants is not None:
+            data_scale["kr3_restaurants"] = kr3_restaurants
+
+    single_tests = {"sentiment", "summarize", "strength", "vector"}
+    batch_tests = {"sentiment_batch", "summarize_batch"}
+    tests = selected_tests or []
+    has_single = any(t in single_tests for t in tests)
+    has_batch = any(t in batch_tests for t in tests)
+    if has_batch and not has_single:
+        processing_mode = "batch"
+    elif has_single and not has_batch:
+        processing_mode = "single"
+    else:
+        processing_mode = "mixed"
+
+    restaurants_processed_in_batch: Dict[str, int] = {}
+    for t in tests:
+        if t in BATCH_RESTAURANTS:
+            restaurants_processed_in_batch[t] = BATCH_RESTAURANTS[t]
+
+    return {
+        "data_source": "kr3.tsv" if generate_from_kr3 else data_source_name,
+        "data_scale": data_scale,
+        "processing_mode": processing_mode,
+        "restaurants_processed_in_batch": restaurants_processed_in_batch or None,
+    }
 
 
 def calculate_percentile(data: List[float], percentile: float) -> float:
@@ -561,18 +609,7 @@ def measure_performance(
     error_4xx_count = 0
     error_5xx_count = 0
     status_codes = []
-    
-    # GPU 모니터 초기화 (가능한 경우)
-    gpu_monitor = None
-    gpu_metrics_before = None
-    gpu_metrics_after = None
-    if GPU_MONITOR_AVAILABLE:
-        try:
-            gpu_monitor = GPUMonitor(device_index=0)
-            gpu_metrics_before = gpu_monitor.get_metrics()
-        except Exception:
-            pass
-    
+
     # CPU/메모리 메트릭 수집 시작
     if psutil:
         cpu_before = psutil.cpu_percent(interval=None)
@@ -583,17 +620,17 @@ def measure_performance(
     # 워밍업
     for i in range(warmup_iterations):
         try:
-            requests.post(url, json=payload, timeout=timeout)
+            requests.post(url, json=payload, timeout=timeout, headers=get_request_headers())
         except Exception:
             pass
-    
+
     # 실제 측정
     measurement_start_time = time.perf_counter()
     last_successful_response = None  # 정확도 평가를 위해 마지막 성공 응답 저장
     for i in range(num_iterations):
         try:
             start_time = time.perf_counter()
-            response = requests.post(url, json=payload, timeout=timeout)
+            response = requests.post(url, json=payload, timeout=timeout, headers=get_request_headers())
             end_time = time.perf_counter()
             
             latency = end_time - start_time
@@ -651,13 +688,6 @@ def measure_performance(
     else:
         cpu_after, mem_after = None, None
 
-    # GPU 메트릭 수집 종료
-    if gpu_monitor:
-        try:
-            gpu_metrics_after = gpu_monitor.get_metrics()
-        except Exception:
-            pass
-    
     if not latencies:
         # 실패 원인 상세 출력
         print_error(f"성능 측정 실패: 성공한 요청이 없습니다.")
@@ -703,13 +733,6 @@ def measure_performance(
         stats["memory_used_mb"] = mem_after.used / (1024 ** 2)
         stats["memory_total_mb"] = mem_after.total / (1024 ** 2)
     
-    # GPU 메트릭 추가
-    if gpu_metrics_after:
-        stats["gpu_utilization_percent"] = gpu_metrics_after.get("gpu_util_percent", 0)
-        stats["gpu_memory_usage_percent"] = gpu_metrics_after.get("memory_util_percent", 0)
-        stats["gpu_memory_used_mb"] = gpu_metrics_after.get("memory_used_mb", 0)
-        stats["gpu_memory_total_mb"] = gpu_metrics_after.get("memory_total_mb", 0)
-    
     return True, stats
 
 
@@ -753,7 +776,7 @@ def load_test(
         """단일 요청 실행"""
         try:
             start_time = time.perf_counter()
-            response = requests.post(url, json=payload, timeout=timeout)
+            response = requests.post(url, json=payload, timeout=timeout, headers=get_request_headers())
             end_time = time.perf_counter()
             
             latency = end_time - start_time
@@ -770,17 +793,6 @@ def load_test(
         except Exception as e:
             # 에러는 나중에 집계
             return request_id, -1, 0, None
-    
-    # GPU 모니터 초기화
-    gpu_monitor = None
-    gpu_metrics_before = None
-    gpu_metrics_after = None
-    if GPU_MONITOR_AVAILABLE:
-        try:
-            gpu_monitor = GPUMonitor(device_index=0)
-            gpu_metrics_before = gpu_monitor.get_metrics()
-        except Exception:
-            pass
     
     # CPU/메모리 메트릭 수집 시작
     if psutil:
@@ -843,13 +855,6 @@ def load_test(
     else:
         cpu_after, mem_after = None, None
 
-    # GPU 메트릭 수집 종료
-    if gpu_monitor:
-        try:
-            gpu_metrics_after = gpu_monitor.get_metrics()
-        except Exception:
-            pass
-    
     if not latencies:
         print_error(f"부하테스트 실패: 성공한 요청이 없습니다.")
         if status_codes:
@@ -916,14 +921,7 @@ def load_test(
         stats["memory_usage_percent"] = mem_after.percent
         stats["memory_used_mb"] = mem_after.used / (1024 ** 2)
         stats["memory_total_mb"] = mem_after.total / (1024 ** 2)
-    
-    # GPU 메트릭 추가
-    if gpu_metrics_after:
-        stats["gpu_utilization_percent"] = gpu_metrics_after.get("gpu_util_percent", 0)
-        stats["gpu_memory_usage_percent"] = gpu_metrics_after.get("memory_util_percent", 0)
-        stats["gpu_memory_used_mb"] = gpu_metrics_after.get("memory_used_mb", 0)
-        stats["gpu_memory_total_mb"] = gpu_metrics_after.get("memory_total_mb", 0)
-    
+
     return True, stats
 
 
@@ -1247,27 +1245,15 @@ def test_sentiment_analysis(enable_benchmark: bool = False, num_iterations: int 
             "reviews": []  # 빈 리스트 (서버에서 자동 조회)
         }
     else:
-        # ReviewModel 형식으로 변환 (이미 변환되어 있을 수 있음)
+        # SentimentReviewInput 형식 (restaurant_id, content만)
         reviews_list = []
         for review in SAMPLE_REVIEWS:
-            if isinstance(review, dict):
-                # 이미 ReviewModel 형식인지 확인
-                if 'content' in review:
-                    reviews_list.append(review)
-                else:
-                    # 문자열인 경우 ReviewModel 형식으로 변환
-                    reviews_list.append({
-                        'restaurant_id': SAMPLE_RESTAURANT_ID,
-                        'content': str(review),
-                        'is_recommended': None,
-                    })
+            if isinstance(review, dict) and review.get('content'):
+                reviews_list.append({'restaurant_id': review.get('restaurant_id', SAMPLE_RESTAURANT_ID), 'content': review['content']})
+            elif isinstance(review, dict):
+                reviews_list.append({'restaurant_id': SAMPLE_RESTAURANT_ID, 'content': str(review.get('content', ''))})
             elif isinstance(review, str):
-                # 문자열인 경우 ReviewModel 형식으로 변환
-                reviews_list.append({
-                    'restaurant_id': SAMPLE_RESTAURANT_ID,
-                    'content': review,
-                    'is_recommended': None,
-                })
+                reviews_list.append({'restaurant_id': SAMPLE_RESTAURANT_ID, 'content': review})
         
         payload = {
             "restaurant_id": SAMPLE_RESTAURANT_ID,
@@ -1385,7 +1371,7 @@ def test_sentiment_analysis(enable_benchmark: bool = False, num_iterations: int 
         else:
             # 기본 테스트 모드
             start_time = time.time()
-            response = requests.post(url, json=payload, timeout=60)
+            response = requests.post(url, json=payload, timeout=60, headers=get_request_headers())
             elapsed_time = time.time() - start_time
             
             if response.status_code == 200:
@@ -1434,25 +1420,20 @@ def test_sentiment_analysis_batch(enable_benchmark: bool = False, num_iterations
     url = f"{BASE_URL}{API_PREFIX}/sentiment/analyze/batch"
     # 10개 레스토랑 배치 생성 (QUANTITATIVE_METRICS.md 요구사항)
     restaurants_payload = []
-    # ReviewModel 형식으로 변환
+    # SentimentReviewInput 형식 (restaurant_id, content만)
     reviews_list = []
     for review in SAMPLE_REVIEWS:
-        if isinstance(review, dict) and 'content' in review:
-            reviews_list.append(review)
+        if isinstance(review, dict) and review.get('content'):
+            reviews_list.append({'restaurant_id': review.get('restaurant_id', SAMPLE_RESTAURANT_ID), 'content': review['content']})
         elif isinstance(review, str):
-            reviews_list.append({
-                'restaurant_id': SAMPLE_RESTAURANT_ID,
-                'content': review,
-                'is_recommended': None,
-            })
+            reviews_list.append({'restaurant_id': SAMPLE_RESTAURANT_ID, 'content': review})
     
     for i in range(10):
         # 각 레스토랑에 맞게 restaurant_id 업데이트
         restaurant_reviews = []
         for review in reviews_list:
             if isinstance(review, dict):
-                review_copy = review.copy()
-                review_copy['restaurant_id'] = SAMPLE_RESTAURANT_ID + i
+                review_copy = {'restaurant_id': SAMPLE_RESTAURANT_ID + i, 'content': review.get('content', '')}
                 restaurant_reviews.append(review_copy)
         
         restaurants_payload.append({
@@ -1520,7 +1501,7 @@ def test_sentiment_analysis_batch(enable_benchmark: bool = False, num_iterations
         else:
             # 기본 테스트 모드
             start_time = time.time()
-            response = requests.post(url, json=payload, timeout=120)
+            response = requests.post(url, json=payload, timeout=120, headers=get_request_headers())
             elapsed_time = time.time() - start_time
             
             if response.status_code == 200:
@@ -1692,7 +1673,7 @@ def test_summarize(enable_benchmark: bool = False, num_iterations: int = 5):
         else:
             # 기본 테스트 모드 (요약은 recall_seeds·하이브리드·LLM으로 120초 초과 가능)
             start_time = time.time()
-            response = requests.post(url, json=payload, timeout=300)
+            response = requests.post(url, json=payload, timeout=300, headers=get_request_headers())
             elapsed_time = time.time() - start_time
             
             if response.status_code == 200:
@@ -1772,9 +1753,11 @@ def test_summarize_batch(enable_benchmark: bool = False, num_iterations: int = 5
     url = f"{BASE_URL}{API_PREFIX}/llm/summarize/batch"
     payload = {
         "restaurants": [
-            {"restaurant_id": SAMPLE_RESTAURANT_ID, "limit": 10},
-            {"restaurant_id": SAMPLE_RESTAURANT_ID + 1, "limit": 10},
-        ]
+            {"restaurant_id": SAMPLE_RESTAURANT_ID},
+            {"restaurant_id": SAMPLE_RESTAURANT_ID + 1},
+        ],
+        "limit": 10,
+        "min_score": 0.0,
     }
     
     try:
@@ -1877,7 +1860,7 @@ def test_summarize_batch(enable_benchmark: bool = False, num_iterations: int = 5
         else:
             # 기본 테스트 모드
             start_time = time.time()
-            response = requests.post(url, json=payload, timeout=400)
+            response = requests.post(url, json=payload, timeout=400, headers=get_request_headers())
             elapsed_time = time.time() - start_time
             
             if response.status_code == 200:
@@ -2095,7 +2078,7 @@ def test_extract_strengths(enable_benchmark: bool = False, num_iterations: int =
         else:
             # 기본 테스트 모드
             start_time = time.time()
-            response = requests.post(url, json=payload, timeout=1000)
+            response = requests.post(url, json=payload, timeout=1000, headers=get_request_headers())
             elapsed_time = time.time() - start_time
             
             if response.status_code == 200:
@@ -2329,7 +2312,7 @@ def test_vector_search(enable_benchmark: bool = False, num_iterations: int = 5):
         else:
             # 기본 테스트 모드
             start_time = time.time()
-            response = requests.post(url, json=payload, timeout=30)
+            response = requests.post(url, json=payload, timeout=30, headers=get_request_headers())
             elapsed_time = time.time() - start_time
             
             if response.status_code == 200:
@@ -2368,226 +2351,6 @@ def test_vector_search(enable_benchmark: bool = False, num_iterations: int = 5):
                 return False
     except Exception as e:
         print_error(f"벡터 검색 중 오류: {str(e)}")
-        return False
-
-
-def test_review_image_search(enable_benchmark: bool = False, num_iterations: int = 5):
-    """리뷰 이미지 검색 테스트"""
-    print_header("7. 리뷰 이미지 검색 테스트")
-    
-    url = f"{BASE_URL}{API_PREFIX}/vector/search/review-images"
-    payload = {
-        "query": "맛있다 좋다 만족",
-        "restaurant_id": SAMPLE_RESTAURANT_ID,
-        "limit": 5,
-        "min_score": 0.0,
-        "expand_query": None  # 자동 판단
-    }
-    
-    try:
-        if enable_benchmark:
-            # 성능 측정 모드
-            print_info(f"성능 측정 모드: {num_iterations}회 반복 실행 중...")
-            success, stats = measure_performance(url, payload, num_iterations=num_iterations, warmup_iterations=1, timeout=60)
-            
-            if success and stats:
-                print_success(f"리뷰 이미지 검색 성공 (평균 처리 시간: {stats['avg_latency_sec']:.2f}초)")
-                print_info("처리 시간 통계:")
-                print(f"  - 평균: {stats['avg_latency_sec']:.3f}초")
-                print(f"  - P95: {stats['p95_latency_sec']:.3f}초")
-                print(f"  - P99: {stats['p99_latency_sec']:.3f}초")
-                if stats.get("throughput_req_per_sec"):
-                    print(f"  - 처리량: {stats['throughput_req_per_sec']:.2f} req/s")
-                print(f"  - 성공률: {stats['success_rate']:.1f}% ({stats['success_count']}/{stats['total_iterations']})")
-                
-                # 목표값 비교 (QUANTITATIVE_METRICS.md: 평균 2.0초, P95 4.0초, P99 8.0초)
-                target_avg = 2.0
-                target_p95 = 4.0
-                target_p99 = 8.0
-                
-                avg_time = stats['avg_latency_sec']
-                p95_time = stats['p95_latency_sec']
-                p99_time = stats['p99_latency_sec']
-                
-                targets_met = []
-                if avg_time <= target_avg:
-                    targets_met.append(f"평균 ({avg_time:.2f}초 ≤ {target_avg}초)")
-                else:
-                    print_warning(f"  ⚠ 평균 목표 미달성 (목표: {target_avg}초, 실제: {avg_time:.2f}초)")
-                
-                if p95_time <= target_p95:
-                    targets_met.append(f"P95 ({p95_time:.2f}초 ≤ {target_p95}초)")
-                else:
-                    print_warning(f"  ⚠ P95 목표 미달성 (목표: {target_p95}초, 실제: {p95_time:.2f}초)")
-                
-                if p99_time <= target_p99:
-                    targets_met.append(f"P99 ({p99_time:.2f}초 ≤ {target_p99}초)")
-                else:
-                    print_warning(f"  ⚠ P99 목표 미달성 (목표: {target_p99}초, 실제: {p99_time:.2f}초)")
-                
-                if len(targets_met) == 3:
-                    print_success(f"  ✓ 모든 목표 달성: {', '.join(targets_met)}")
-                
-                # SQLite에서 메트릭 조회
-                db_metrics = query_metrics_from_db("image_search", limit=5)
-                if db_metrics:
-                    print_info("SQLite 메트릭 (최근 5개 요청):")
-                    if db_metrics.get("avg_processing_time_ms"):
-                        print(f"  - 평균 처리 시간: {db_metrics['avg_processing_time_ms']:.2f}ms")
-                    if db_metrics.get("avg_tokens_used"):
-                        print(f"  - 평균 토큰 사용량: {db_metrics['avg_tokens_used']:.0f} tokens")
-                
-                # Precision@k / Recall@k 평가 (임베딩 모델 정확도 측정)
-                precision_metrics = None
-                if EVALUATION_AVAILABLE:
-                    try:
-                        ground_truth_path = str(project_root / "scripts" / "Ground_truth_vector_search.json")
-                        if Path(ground_truth_path).exists():
-                            evaluator = PrecisionAtKEvaluator(
-                                base_url=BASE_URL,
-                                ground_truth_path=ground_truth_path
-                            )
-                            
-                            # 이미지 검색 결과에서 review_id 추출
-                            last_response = stats.get("last_successful_response", {})
-                            if last_response and last_response.get("results"):
-                                # 이미지 검색 결과를 벡터 검색 형식으로 변환하여 평가
-                                # 쿼리와 레스토랑 ID를 사용하여 Ground Truth와 매칭
-                                query_text = payload.get("query", "")
-                                restaurant_id = payload.get("restaurant_id")
-                                
-                                # Precision@k 평가 수행 (k=1, 3, 5, 10)
-                                k_values = [1, 3, 5, 10]
-                                
-                                # 이미지 검색 결과에서 review_id 리스트 추출
-                                retrieved_review_ids = []
-                                for result in last_response.get("results", []):
-                                    review_id = result.get("review_id")
-                                    if review_id is not None:
-                                        try:
-                                            retrieved_review_ids.append(int(review_id))
-                                        except (ValueError, TypeError):
-                                            continue
-                                
-                                if retrieved_review_ids and evaluator.ground_truth:
-                                    # Ground Truth에서 해당 쿼리와 레스토랑 ID로 관련 문서 찾기
-                                    queries = evaluator.ground_truth.get("queries", [])
-                                    relevant_ids = set()
-                                    for query_data in queries:
-                                        if (query_data.get("query") == query_text or 
-                                            (restaurant_id and query_data.get("restaurant_id") == restaurant_id)):
-                                            relevant_ids.update(query_data.get("relevant_review_ids", []))
-                                    
-                                    if relevant_ids:
-                                        # Precision@k, Recall@k 계산
-                                        precision_at_k = {}
-                                        recall_at_k = {}
-                                        for k in k_values:
-                                            precision_at_k[f"P@{k}"] = evaluator.calculate_precision_at_k(
-                                                retrieved_ids=retrieved_review_ids,
-                                                relevant_ids=relevant_ids,
-                                                k=k
-                                            )
-                                            recall_at_k[f"R@{k}"] = evaluator.calculate_recall_at_k(
-                                                retrieved_ids=retrieved_review_ids,
-                                                relevant_ids=relevant_ids,
-                                                k=k
-                                            )
-                                        
-                                        if precision_at_k or recall_at_k:
-                                            print_info("Precision@k / Recall@k 평가 (임베딩 모델 정확도):")
-                                            for k in k_values:
-                                                k_key_p = f"P@{k}"
-                                                k_key_r = f"R@{k}"
-                                                precision = precision_at_k.get(k_key_p, 0.0)
-                                                recall = recall_at_k.get(k_key_r, 0.0)
-                                                if isinstance(precision, (int, float)):
-                                                    print(f"  - {k_key_p}: {float(precision):.4f} ({float(precision)*100:.2f}%)")
-                                                if isinstance(recall, (int, float)):
-                                                    print(f"  - {k_key_r}: {float(recall):.4f} ({float(recall)*100:.2f}%)")
-                                        
-                                        precision_metrics = {
-                                            "k_values": k_values,
-                                            "precision_at_k": precision_at_k,
-                                            "recall_at_k": recall_at_k,
-                                            "total_queries": 1,
-                                            "evaluated_queries": 1 if relevant_ids else 0,
-                                        }
-                        else:
-                            print_warning(f"Ground Truth 파일을 찾을 수 없습니다: {ground_truth_path}")
-                    except Exception as e:
-                        print_warning(f"Precision@k / Recall@k 평가 실패: {str(e)}")
-                
-                # JSON 저장용 메트릭 수집
-                test_metrics["리뷰 이미지 검색"] = {
-                    "performance": {
-                        "avg_latency_sec": stats.get("avg_latency_sec"),
-                        "min_latency_sec": stats.get("min_latency_sec"),
-                        "max_latency_sec": stats.get("max_latency_sec"),
-                        "p95_latency_sec": stats.get("p95_latency_sec"),
-                        "p99_latency_sec": stats.get("p99_latency_sec"),
-                        "success_rate": stats.get("success_rate"),
-                        "success_count": stats.get("success_count"),
-                        "total_iterations": stats.get("total_iterations"),
-                        "throughput_req_per_sec": stats.get("throughput_req_per_sec"),
-                        "target_avg_sec": target_avg,
-                        "target_p95_sec": target_p95,
-                        "target_p99_sec": target_p99,
-                        "target_avg_achieved": avg_time <= target_avg,
-                        "target_p95_achieved": p95_time <= target_p95,
-                        "target_p99_achieved": p99_time <= target_p99,
-                    },
-                    "sqlite_metrics": db_metrics if db_metrics else None,
-                    "accuracy": precision_metrics if precision_metrics else None,  # Precision@k / Recall@k 메트릭
-                }
-                
-                return True
-            else:
-                print_error("성능 측정 실패")
-                return False
-        else:
-            # 기본 테스트 모드
-            start_time = time.time()
-            response = requests.post(url, json=payload, timeout=60)
-            elapsed_time = time.time() - start_time
-            
-            if response.status_code == 200:
-                data = response.json()
-                print_success(f"리뷰 이미지 검색 성공 (소요 시간: {elapsed_time:.2f}초)")
-                print(f"  - 검색 결과 수: {len(data.get('results', []))}")
-                print(f"  - 총 결과 수: {data.get('total', 0)}")
-                
-                # 상위 3개 결과 출력
-                for i, result in enumerate(data.get('results', [])[:3], 1):
-                    print(f"  결과 {i}:")
-                    print(f"    - 레스토랑 ID: {result.get('restaurant_id', 'N/A')}")
-                    print(f"    - 리뷰 ID: {result.get('review_id', 'N/A')}")
-                    print(f"    - 이미지 URL: {result.get('image_url', 'N/A')[:50]}...")
-                    review = result.get('review', {})
-                    content = review.get('content', 'N/A')
-                    if isinstance(content, str) and len(content) > 50:
-                        print(f"    - 리뷰 내용: {content[:50]}...")
-                    else:
-                        print(f"    - 리뷰 내용: {content}")
-                
-                # JSON 저장용 메트릭 수집
-                test_metrics["리뷰 이미지 검색"] = {
-                    "performance": {
-                        "elapsed_time_sec": elapsed_time,
-                        "result_count": len(data.get('results', [])),
-                        "total_count": data.get('total', 0),
-                    },
-                    "sqlite_metrics": None,
-                    "accuracy": None,
-                }
-                
-                return True
-            else:
-                print_error(f"리뷰 이미지 검색 실패: {response.status_code}")
-                print(f"  응답: {response.text[:200]}")
-                return False
-    except Exception as e:
-        print_error(f"리뷰 이미지 검색 중 오류: {str(e)}")
         return False
 
 
@@ -2632,7 +2395,7 @@ def run_tests_for_model(
         # 테스트 실행
         selected_tests = tests or ["summarize", "summarize_batch"]
         if "all" in selected_tests:
-            selected_tests = ["sentiment", "sentiment_batch", "summarize", "summarize_batch", "strength", "vector", "image_search"]
+            selected_tests = ["sentiment", "sentiment_batch", "summarize", "summarize_batch", "strength", "vector"]
 
         test_registry = {
             "sentiment": ("감성 분석", lambda: test_sentiment_analysis(enable_benchmark=enable_benchmark, num_iterations=iterations)),
@@ -2641,7 +2404,6 @@ def run_tests_for_model(
             "summarize_batch": ("배치 리뷰 요약", lambda: test_summarize_batch(enable_benchmark=enable_benchmark, num_iterations=iterations)),
             "strength": ("강점 추출", lambda: test_extract_strengths(enable_benchmark=enable_benchmark, num_iterations=iterations)),
             "vector": ("벡터 검색", lambda: test_vector_search(enable_benchmark=enable_benchmark, num_iterations=iterations)),
-            "image_search": ("리뷰 이미지 검색", lambda: test_review_image_search(enable_benchmark=enable_benchmark, num_iterations=iterations)),
         }
 
         results = []
@@ -2715,6 +2477,7 @@ def compare_models(
     tests: Optional[List[str]] = None,
     base_ports: Optional[List[int]] = None,
     test_data: Optional[Dict[str, Any]] = None,
+    data_info: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     여러 모델 비교 테스트
@@ -2763,7 +2526,7 @@ def compare_models(
         try:
             # 서버 연결 확인
             try:
-                response = requests.get(f"{BASE_URL}/health", timeout=5)
+                response = requests.get(f"{BASE_URL}/health", timeout=5, headers=get_request_headers())
                 if response.status_code != 200:
                     print_warning(f"포트 {port}의 서버가 응답하지 않습니다. (상태 코드: {response.status_code})")
             except Exception as e:
@@ -2818,10 +2581,19 @@ def compare_models(
             status = "✓" if success_rate == 100 else "⚠" if success_rate >= 50 else "✗"
             print(f"  {status} {model_name}: {success_rate:.1f}% ({result['success_count']}/{result['total_count']})")
     
-    # 결과 저장 (형식 변환 없이, 반환값 그대로 저장)
+    # 결과 저장 (model_info, data_info 포함 래핑)
     if save_results:
+        model_info = _effective_model_info()
+        model_info["llm_models_compared"] = list(all_results.keys())
+        out = {
+            "timestamp": datetime.now().isoformat(),
+            "model_info": model_info,
+            "results": all_results,
+        }
+        if data_info is not None:
+            out["data_info"] = data_info
         with open(save_results, 'w', encoding='utf-8') as f:
-            json.dump(all_results, f, ensure_ascii=False, indent=2)
+            json.dump(out, f, ensure_ascii=False, indent=2)
         print_success(f"결과 저장 완료: {save_results}")
     
     return all_results
@@ -2842,41 +2614,43 @@ def main():
         epilog="""
 예제:
   # 단일 모델 테스트
-  python test_openai_all.py --model "gpt-4o-mini" --provider openai
-  
+  python test_all_task.py --model "gpt-4o-mini" --provider openai
+
+  # 벤치마크 (메트릭·CPU 모니터링 활성화)
+  python test_all_task.py --benchmark --save-results result.json
+
   # 여러 모델 비교
-  python test_openai_all.py --compare-models \\
-      --models "gpt-4o-mini" "gpt-3.5-turbo" \\
-      --provider openai \\
-      --benchmark \\
-      --save-results results.json
-  
-  # 부하테스트 (baseline(대표 성능) 측정)
+  python test_all_task.py --compare-models --models "gpt-4o-mini" "gpt-3.5-turbo" \\
+      --provider openai --benchmark --save-results results.json
 
-  python test_openai_all.py --load-test \
-      --total-requests 500 \
-      --concurrent-users 5 \
-      --ramp-up 20 \
-      --save-results load_test_baseline_results.json
-      
-# 부하테스트 (stress(한계 확인) 측정)
+  # 부하테스트 (baseline)
+  python test_all_task.py --load-test --total-requests 500 --concurrent-users 5 \\
+      --ramp-up 20 --save-results load_test_baseline_results.json
 
-  python test_openai_all.py --load-test \
-      --total-requests 1000 \
-      --concurrent-users 15 \
-      --ramp-up 30 \
-      --save-results load_test_stress_results.json
-  
-  # 환경 변수 기반 (기존 방식)
-  export LLM_PROVIDER="openai"
-  export OPENAI_MODEL="gpt-4o-mini"
-  python test_openai_all.py --benchmark
+  # 부하테스트 (stress)
+  python test_all_task.py --load-test --total-requests 1000 --concurrent-users 15 \\
+      --ramp-up 30 --save-results load_test_stress_results.json
         """
     )
     parser.add_argument(
         "--benchmark",
         action="store_true",
-        help="성능 측정 모드 활성화 (QUANTITATIVE_METRICS.md 지표 측정)"
+        help="성능 측정 모드 전체 활성화 (메트릭 + CPU 모니터 + GPU 수집, 기존 동작)"
+    )
+    parser.add_argument(
+        "--benchmark-metrics",
+        action="store_true",
+        help="서버 요청 메트릭만 수집 (X-Benchmark → logs + metrics.db)"
+    )
+    parser.add_argument(
+        "--benchmark-cpu",
+        action="store_true",
+        help="서버 CPU 모니터만 수집 (X-Enable-CPU-Monitor → logs/cpu_usage.log)"
+    )
+    parser.add_argument(
+        "--benchmark-gpu",
+        action="store_true",
+        help="서버 GPU 모니터만 수집 (X-Enable-GPU-Monitor → logs/gpu_usage.log)"
     )
     parser.add_argument(
         "--iterations",
@@ -2924,7 +2698,7 @@ def main():
         "--tests",
         nargs="+",
         default=["all"],
-        choices=["all", "sentiment", "sentiment_batch", "summarize", "summarize_batch", "strength", "vector", "image_search"],
+        choices=["all", "sentiment", "sentiment_batch", "summarize", "summarize_batch", "strength", "vector"],
         help="실행할 테스트 선택 (기본값: all). src 기반 API 테스트만 포함.",
     )
     parser.add_argument(
@@ -2969,14 +2743,49 @@ def main():
         help="각 모델별 서버 포트 리스트 (--compare-models와 함께 사용). 예: --ports 8001 8002 8003. 지정하지 않으면 8001부터 자동 할당"
     )
     args = parser.parse_args()
-    
-    print_header("RunPod Pod 서버 API 전체 기능 통합 테스트")
+
+    # 벤치마크 옵션: --benchmark이면 메트릭+CPU+GPU 모두, 개별 플래그로 분리 가능
+    benchmark_metrics = args.benchmark or getattr(args, "benchmark_metrics", False)
+    benchmark_cpu = args.benchmark or getattr(args, "benchmark_cpu", False)
+    benchmark_gpu = args.benchmark or getattr(args, "benchmark_gpu", False)
+
+    if benchmark_metrics:
+        BENCHMARK_HEADERS["X-Benchmark"] = "true"
+    if benchmark_cpu:
+        BENCHMARK_HEADERS["X-Enable-CPU-Monitor"] = "true"
+    if benchmark_gpu:
+        BENCHMARK_HEADERS["X-Enable-GPU-Monitor"] = "true"  # 서버 GPU 로그 (logs/gpu_usage.log)
+
+    # 메트릭/CPU/GPU 중 하나라도 켜져 있으면 벤치마크 모드 (반복·measure_performance 사용)
+    enable_benchmark_mode = args.benchmark or benchmark_metrics or benchmark_cpu or benchmark_gpu
+
+    print_header("API 전체 기능 통합 테스트")
     print_info(f"서버 URL: {BASE_URL}")
-    print_info("RunPod Pod에서 실행 중인 FastAPI 서버를 테스트합니다")
-    
-    if args.benchmark:
-        print_info("성능 측정 모드 활성화 (QUANTITATIVE_METRICS.md 지표 측정)")
-        print_info(f"반복 횟수: {args.iterations}")
+    print_info("FastAPI 서버를 테스트합니다")
+
+    # 현재 테스트 모델 (환경 변수 기준, 서버와 동일한 env 사용 시 일치)
+    mi = _effective_model_info()
+    if mi["llm_provider"] == "openai" and mi["llm_model"]:
+        print_info(f"현재 테스트 모델 — LLM: {mi['llm_model']} (provider=openai)")
+    elif mi["llm_model"]:
+        print_info(f"현재 테스트 모델 — LLM: {mi['llm_model']} (provider={mi['llm_provider']})")
+    else:
+        print_info(f"현재 테스트 모델 — LLM: (미설정, 서버 기본값 사용) provider={mi['llm_provider']}")
+    if mi["sentiment_model"]:
+        print_info(f"  — Sentiment: {mi['sentiment_model']}")
+    print_info(f"  — Dense embedding: {mi['dense_embedding_model']}")
+    print_info(f"  — Sparse embedding: {mi['sparse_embedding_model']}")
+
+    if args.benchmark or benchmark_metrics or benchmark_cpu or benchmark_gpu:
+        print_info("성능 측정 모드 (QUANTITATIVE_METRICS.md 지표 측정)")
+        if benchmark_metrics:
+            print_info("  - 서버 요청 메트릭: X-Benchmark (logs + metrics.db)")
+        if benchmark_cpu:
+            print_info("  - 서버 CPU 모니터: X-Enable-CPU-Monitor (logs/cpu_usage.log)")
+        if benchmark_gpu:
+            print_info("  - 서버 GPU 모니터: X-Enable-GPU-Monitor (logs/gpu_usage.log)")
+        if args.benchmark or benchmark_metrics:
+            print_info(f"  - 반복 횟수: {args.iterations}")
     
     # 환경 변수 설정 (--provider 옵션이 있으면 적용)
     if args.provider:
@@ -3052,19 +2861,10 @@ def main():
             SAMPLE_REVIEWS = []
             for review in first_restaurant.get("reviews", []):
                 if isinstance(review, dict) and review.get('content'):
-                    # ReviewModel 형식으로 변환
+                    # SentimentReviewInput 형식 (restaurant_id, content만)
                     review_obj = {
-                        'id': review.get('id'),
                         'restaurant_id': review.get('restaurant_id', SAMPLE_RESTAURANT_ID),
-                        'member_id': review.get('member_id'),
-                        'group_id': review.get('group_id'),
-                        'subgroup_id': review.get('subgroup_id'),
                         'content': review.get('content', ''),
-                        'is_recommended': review.get('is_recommended'),
-                        'created_at': review.get('created_at'),
-                        'updated_at': review.get('updated_at'),
-                        'deleted_at': review.get('deleted_at'),
-                        'images': review.get('images', [])
                     }
                     SAMPLE_REVIEWS.append(review_obj)
             print_info(f"테스트 레스토랑 ID: {SAMPLE_RESTAURANT_ID}")
@@ -3083,17 +2883,30 @@ def main():
             print_error(f"포트 개수({len(args.ports)})와 모델 개수({len(args.models)})가 일치하지 않습니다.")
             sys.exit(1)
         
+        # data_info 구성 (--save-results용)
+        compare_tests = args.tests or ["summarize", "summarize_batch"]
+        if "all" in compare_tests:
+            compare_tests = ["sentiment", "sentiment_batch", "summarize", "summarize_batch", "strength", "vector"]
+        compare_data_info = build_data_info(
+            test_data=test_data,
+            data_source_name="test_data_sample.json",
+            generate_from_kr3=args.generate_from_kr3,
+            kr3_sample=args.kr3_sample,
+            kr3_restaurants=args.kr3_restaurants,
+            selected_tests=compare_tests,
+        )
         # compare_models() 함수 호출
         comparison_results = compare_models(
             models=args.models,
             provider=args.provider,
-            enable_benchmark=args.benchmark,
+            enable_benchmark=enable_benchmark_mode,
             iterations=args.iterations,
             save_results=args.save_results,
             generate_report=args.generate_report,
             tests=args.tests,
             base_ports=args.ports,
             test_data=test_data,
+            data_info=compare_data_info,
         )
         
         # 결과 요약 출력
@@ -3174,9 +2987,11 @@ def main():
         url = f"{BASE_URL}{API_PREFIX}/llm/summarize/batch"
         payload = {
             "restaurants": [
-                {"restaurant_id": SAMPLE_RESTAURANT_ID, "limit": 10},
-                {"restaurant_id": SAMPLE_RESTAURANT_ID + 1, "limit": 10},
-            ]
+                {"restaurant_id": SAMPLE_RESTAURANT_ID},
+                {"restaurant_id": SAMPLE_RESTAURANT_ID + 1},
+            ],
+            "limit": 10,
+            "min_score": 0.0,
         }
         success, stats = load_test(
             endpoint=url,
@@ -3199,10 +3014,20 @@ def main():
         
         # 결과 저장
         if args.save_results:
+            load_test_data_info = build_data_info(
+                test_data=test_data,
+                data_source_name="test_data_sample.json",
+                generate_from_kr3=args.generate_from_kr3,
+                kr3_sample=args.kr3_sample,
+                kr3_restaurants=args.kr3_restaurants,
+                selected_tests=[],
+            )
             load_test_output = {
                 "timestamp": datetime.now().isoformat(),
                 "server_url": BASE_URL,
                 "load_test_mode": True,
+                "model_info": _effective_model_info(),
+                "data_info": load_test_data_info,
                 "total_requests": args.total_requests,
                 "concurrent_users": args.concurrent_users,
                 "ramp_up_seconds": args.ramp_up,
@@ -3221,16 +3046,15 @@ def main():
     
     selected_tests = args.tests or ["summarize", "summarize_batch"]
     if "all" in selected_tests:
-        selected_tests = ["sentiment", "sentiment_batch", "summarize", "summarize_batch", "strength", "vector", "image_search"]
+        selected_tests = ["sentiment", "sentiment_batch", "summarize", "summarize_batch", "strength", "vector"]
 
     test_registry = {
-        "sentiment": ("감성 분석", lambda: test_sentiment_analysis(enable_benchmark=args.benchmark, num_iterations=args.iterations)),
-        "sentiment_batch": ("배치 감성 분석", lambda: test_sentiment_analysis_batch(enable_benchmark=args.benchmark, num_iterations=args.iterations)),
-        "summarize": ("리뷰 요약", lambda: test_summarize(enable_benchmark=args.benchmark, num_iterations=args.iterations)),
-        "summarize_batch": ("배치 리뷰 요약", lambda: test_summarize_batch(enable_benchmark=args.benchmark, num_iterations=args.iterations)),
-        "strength": ("강점 추출", lambda: test_extract_strengths(enable_benchmark=args.benchmark, num_iterations=args.iterations)),
-        "vector": ("벡터 검색", lambda: test_vector_search(enable_benchmark=args.benchmark, num_iterations=args.iterations)),
-        "image_search": ("리뷰 이미지 검색", lambda: test_review_image_search(enable_benchmark=args.benchmark, num_iterations=args.iterations)),
+        "sentiment": ("감성 분석", lambda: test_sentiment_analysis(enable_benchmark=enable_benchmark_mode, num_iterations=args.iterations)),
+        "sentiment_batch": ("배치 감성 분석", lambda: test_sentiment_analysis_batch(enable_benchmark=enable_benchmark_mode, num_iterations=args.iterations)),
+        "summarize": ("리뷰 요약", lambda: test_summarize(enable_benchmark=enable_benchmark_mode, num_iterations=args.iterations)),
+        "summarize_batch": ("배치 리뷰 요약", lambda: test_summarize_batch(enable_benchmark=enable_benchmark_mode, num_iterations=args.iterations)),
+        "strength": ("강점 추출", lambda: test_extract_strengths(enable_benchmark=enable_benchmark_mode, num_iterations=args.iterations)),
+        "vector": ("벡터 검색", lambda: test_vector_search(enable_benchmark=enable_benchmark_mode, num_iterations=args.iterations)),
     }
 
     for key in selected_tests:
@@ -3248,17 +3072,24 @@ def main():
     
     # JSON 저장용 결과 딕셔너리 구성
     if args.save_results:
+        data_info = build_data_info(
+            test_data=test_data,
+            data_source_name="test_data_sample.json",
+            generate_from_kr3=args.generate_from_kr3,
+            kr3_sample=args.kr3_sample,
+            kr3_restaurants=args.kr3_restaurants,
+            selected_tests=selected_tests,
+        )
         results_dict = {
             "timestamp": datetime.now().isoformat(),
             "server_url": BASE_URL,
-            "benchmark_mode": args.benchmark,
-            "iterations": args.iterations if args.benchmark else None,
-            "model_info": {
-                "llm_provider": "local",  # 결과 저장 시 항상 local로 설정
-                "llm_model": os.getenv("LLM_MODEL", os.getenv("OPENAI_MODEL", "")),
-                "embedding_model": os.getenv("EMBEDDING_MODEL", ""),
-                "sentiment_model": os.getenv("SENTIMENT_MODEL", ""),
-            },
+            "benchmark_mode": enable_benchmark_mode,
+            "benchmark_metrics": benchmark_metrics,
+            "benchmark_cpu": benchmark_cpu,
+            "benchmark_gpu": benchmark_gpu,
+            "iterations": args.iterations if enable_benchmark_mode else None,
+            "model_info": _effective_model_info(),
+            "data_info": data_info,
             "test_results": {},
             "summary": {
                 "total_tests": total,
@@ -3287,11 +3118,12 @@ def main():
     
     print(f"\n{Colors.BOLD}총 {passed}/{total} 테스트 통과{Colors.RESET}")
     
-    if args.benchmark:
+    if enable_benchmark_mode:
         print_info("\n성능 측정 모드로 실행되었습니다.")
-        print_info("더 자세한 메트릭은 SQLite 데이터베이스를 확인하세요:")
-        print_info(f"  sqlite3 {METRICS_DB_PATH}")
-        print_info("\nQUANTITATIVE_METRICS.md의 SQL 쿼리를 사용하여 추가 분석이 가능합니다.")
+        if benchmark_metrics:
+            print_info("더 자세한 메트릭은 SQLite 데이터베이스를 확인하세요:")
+            print_info(f"  sqlite3 {METRICS_DB_PATH}")
+        print_info("QUANTITATIVE_METRICS.md의 SQL 쿼리를 사용하여 추가 분석이 가능합니다.")
     
     # 결과 저장
     if args.save_results and results_dict:

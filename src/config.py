@@ -14,6 +14,9 @@ except ImportError:
 DEFAULT_SENTIMENT_MODEL = "Dilwolf/Kakao_app-kr_sentiment"
 # final_summary_pipeline과 동일: sentence-transformers/paraphrase-multilingual-mpnet-base-v2 (768 dim)
 DEFAULT_EMBEDDING_MODEL = "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"
+DEFAULT_EMBEDDING_DIM = 768  # paraphrase-multilingual-mpnet-base-v2 출력 차원
+# Sparse = BM25 등 (vector_search에서 사용)
+DEFAULT_SPARSE_EMBEDDING_MODEL = "Qdrant/bm25"
 DEFAULT_LLM_MODEL = "Qwen/Qwen2.5-7B-Instruct"
 DEFAULT_SCORE_THRESHOLD = 0.8
 DEFAULT_MAX_RETRIES = 3
@@ -33,6 +36,8 @@ class Config:
     ENABLE_SENTIMENT_SAMPLING: bool = os.getenv("ENABLE_SENTIMENT_SAMPLING", "false").lower() == "true"  # 샘플링 활성화 여부
     SENTIMENT_RECENT_TOP_K: int = int(os.getenv("SENTIMENT_RECENT_TOP_K", "100"))  # 샘플링 시 사용할 최근 리뷰 수 (기본값: 100)
     EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", DEFAULT_EMBEDDING_MODEL)
+    EMBEDDING_DIM: int = int(os.getenv("EMBEDDING_DIM", str(DEFAULT_EMBEDDING_DIM)))
+    SPARSE_EMBEDDING_MODEL: str = os.getenv("SPARSE_EMBEDDING_MODEL", DEFAULT_SPARSE_EMBEDDING_MODEL)
     LLM_MODEL: str = os.getenv("LLM_MODEL", DEFAULT_LLM_MODEL)
     
     # 분석 설정
@@ -89,11 +94,16 @@ class Config:
     VLLM_USE_PRIORITY_QUEUE: bool = os.getenv("VLLM_USE_PRIORITY_QUEUE", "true").lower() == "true"  # 우선순위 큐 사용 여부
     VLLM_PRIORITY_BY_PREFILL_COST: bool = os.getenv("VLLM_PRIORITY_BY_PREFILL_COST", "true").lower() == "true"  # Prefill 비용 기반 우선순위
     
-    # 메트릭 수집 설정
-    METRICS_ENABLE_LOGGING: bool = os.getenv("METRICS_ENABLE_LOGGING", "true").lower() == "true"
-    METRICS_ENABLE_DB: bool = os.getenv("METRICS_ENABLE_DB", "true").lower() == "true"
+    # 메트릭/로그 수집 설정 (상시 수집 비활성화, config로 on/off)
+    METRICS_AND_LOGGING_ENABLE: bool = os.getenv("METRICS_AND_LOGGING_ENABLE", "false").lower() == "true"  # True일 때만 수집
+    METRICS_ENABLE_LOGGING: bool = os.getenv("METRICS_ENABLE_LOGGING", "true").lower() == "true"  # 수집 활성화 시 로그 파일 저장
+    METRICS_ENABLE_DB: bool = os.getenv("METRICS_ENABLE_DB", "true").lower() == "true"  # 수집 활성화 시 SQLite 저장
     METRICS_DB_PATH: str = os.getenv("METRICS_DB_PATH", "metrics.db")
     METRICS_LOG_DIR: str = os.getenv("METRICS_LOG_DIR", "logs")
+    
+    # CPU 모니터링 설정 (실시간 곡선)
+    CPU_MONITOR_ENABLE: bool = os.getenv("CPU_MONITOR_ENABLE", "false").lower() == "true"  # CPU 실시간 추적 on/off
+    CPU_MONITOR_INTERVAL: float = float(os.getenv("CPU_MONITOR_INTERVAL", "1.0"))  # 샘플링 간격 (초)
     
     # LLM 개선 타임아웃 설정
     LLM_POLISH_TIMEOUT_SECONDS: float = float(os.getenv("LLM_POLISH_TIMEOUT_SECONDS", "2.0"))  # LLM 개선 최대 대기 시간 (초)
@@ -105,10 +115,18 @@ class Config:
     ALL_AVERAGE_SERVICE_RATIO: float = float(os.getenv("ALL_AVERAGE_SERVICE_RATIO", "0.60"))  # 전체 평균 서비스 긍정 비율
     ALL_AVERAGE_PRICE_RATIO: float = float(os.getenv("ALL_AVERAGE_PRICE_RATIO", "0.55"))  # 전체 평균 가격 긍정 비율
     # strength_in_aspect와 동일한 '전체' 사용: aspect_data 파일(TSV의 Review 컬럼, JSON의 content)에서 계산
-    ALL_AVERAGE_ASPECT_DATA_PATH: Optional[str] = os.getenv("ALL_AVERAGE_ASPECT_DATA_PATH","/Users/js/tasteam-aicode-gpu-all-python-process-runtime_for_github/data/test_data_sample.json")  # 예: data/kr3.tsv
+    ALL_AVERAGE_ASPECT_DATA_PATH: Optional[str] = os.getenv("ALL_AVERAGE_ASPECT_DATA_PATH","data/test_data_sample.json")  # 예: data/kr3.tsv
     
     # Aspect Seed 파일 경로 (선택적)
     ASPECT_SEEDS_FILE: Optional[str] = os.getenv("ASPECT_SEEDS_FILE")  # Aspect seed JSON 파일 경로
+    
+    # 배치 요약: search_async=aspect 3개 병렬, restaurant_async=음식점 간 병렬
+    BATCH_SEARCH_ASYNC: bool = os.getenv("BATCH_SEARCH_ASYNC", "false").lower() == "true"  # aspect(service/price/food) 서치 병렬
+    BATCH_RESTAURANT_ASYNC: bool = os.getenv("BATCH_RESTAURANT_ASYNC", "false").lower() == "true"  # 음식점 간 병렬
+    BATCH_SEARCH_CONCURRENCY: int = int(os.getenv("BATCH_SEARCH_CONCURRENCY", "50"))  # 검색 동시성 상한
+    BATCH_LLM_CONCURRENCY: int = int(os.getenv("BATCH_LLM_CONCURRENCY", "8"))  # LLM 동시성 상한
+    # LLM 비동기 호출: True면 배치 경로에서 httpx.AsyncClient(진짜 비동기), False면 to_thread(동기 래핑)
+    LLM_ASYNC: bool = os.getenv("LLM_ASYNC", "false").lower() == "true"  # llm_async 방식 on/off
     
     @classmethod
     def get_device(cls):

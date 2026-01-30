@@ -1,30 +1,34 @@
-FROM runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404
+# CPU 전용 이미지 - GPU 없는 환경에서 src 애플리케이션 실행
+#
+# 빌드: docker build -f Dockerfile.cpu -t app-cpu .
+# 실행: docker run -p 8001:8001 app-cpu
+# 포트 변경: docker run -p 8080:8080 -e PORT=8080 app-cpu
+#
+FROM python:3.11-slim-bookworm
 
 ENV PYTHONUNBUFFERED=1
+# config.py에서 GPU 사용 여부를 "USE_GPU#" 환경 변수로 읽음
+ENV "USE_GPU#"=false
 WORKDIR /app
 
-# 시스템 의존성은 베이스 이미지에 이미 포함되어 있음
-# 필요 시 런타임에 설치 가능
+# 시스템 의존성 (빌드 도구, 일부 패키지 컴파일용)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# PyTorch CPU 버전 먼저 설치 (requirements보다 먼저 해야 충돌 방지)
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
 
 COPY requirements.txt /app/
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
-
-# Flash Attention-2 설치 (Phase 1)
-RUN (pip install flash-attn==2.5.6 --no-build-isolation || echo "Flash Attention-2 설치 실패")
-
-# vLLM 설치 (RunPod Pod 환경에서 사용)
-RUN (pip install vllm>=0.3.3 || echo "vLLM 설치 실패 (선택사항)")
-
-# Hugging Face 설정
-ENV HF_HOME=/workspace/models
-ENV HF_HUB_ENABLE_HF_TRANSFER=0
+RUN pip install --no-cache-dir -r requirements.txt
 
 # 애플리케이션 코드 복사
 COPY . /app
 
-# 포트 노출
+# 포트 노출 (app.py 기본값 8001)
 EXPOSE 8001
 
-# RunPod Pod 환경에서 직접 실행
+# CPU 환경에서 실행 (USE_GPU는 기본 false)
 CMD ["python", "app.py"]

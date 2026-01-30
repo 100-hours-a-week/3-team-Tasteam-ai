@@ -11,6 +11,7 @@ import time
 import asyncio
 import requests
 import torch
+import httpx
 import numpy as np
 from typing import Dict, List, Optional, Any, Union, Tuple
 from concurrent.futures import ThreadPoolExecutor
@@ -324,7 +325,82 @@ class LLMUtils:
                     raise
         
         raise Exception("모든 재시도 실패")
-    
+
+    async def _call_runpod_async(self, prompt: str, max_retries: int = Config.MAX_RETRIES) -> str:
+        """
+        RunPod 서버리스 엔드포인트를 httpx.AsyncClient로 비동기 호출.
+        배치 경로에서 Config.LLM_ASYNC=True(llm_async)일 때 사용.
+        """
+        url = f"https://api.runpod.ai/v2/{self.endpoint_id}/run"
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.api_key}",
+        }
+        data = {"input": {"prompt": prompt}}
+
+        for attempt in range(max_retries):
+            try:
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    response = await client.post(url, json=data, headers=headers)
+                    if response.status_code != 200:
+                        logger.warning(
+                            f"RunPod 요청 실패 (시도 {attempt + 1}/{max_retries}): "
+                            f"상태 코드 {response.status_code}, 응답: {response.text[:200]}"
+                        )
+                        if attempt < max_retries - 1:
+                            await asyncio.sleep(2 ** attempt)
+                            continue
+                        raise Exception(f"RunPod 요청 실패: {response.text}")
+
+                    response_json = response.json()
+                    job_id = response_json.get("id")
+                    if not job_id:
+                        raise Exception(f"작업 ID를 받지 못했습니다: {response_json}")
+
+                    logger.debug(f"RunPod 작업 시작: {job_id}")
+                    start_time = time.time()
+                    while True:
+                        status_url = f"https://api.runpod.ai/v2/{self.endpoint_id}/status/{job_id}"
+                        status_response = await client.get(status_url, headers=headers)
+                        if status_response.status_code != 200:
+                            logger.warning(f"상태 확인 실패: {status_response.status_code}")
+                            await asyncio.sleep(self.poll_interval)
+                            continue
+
+                        status_info = status_response.json()
+                        status = status_info.get("status")
+
+                        if status == "COMPLETED":
+                            output = status_info.get("output")
+                            if output:
+                                if isinstance(output, str):
+                                    return output.strip()
+                                if isinstance(output, dict):
+                                    return str(output.get("text", output)).strip()
+                                return str(output).strip()
+                            raise Exception("출력이 없습니다")
+                        if status == "FAILED":
+                            error = status_info.get("error", "알 수 없는 오류")
+                            raise Exception(f"RunPod 작업 실패: {error}")
+                        if time.time() - start_time > self.max_wait_time:
+                            raise Exception(f"시간 초과: {self.max_wait_time}초 동안 완료되지 않았습니다")
+
+                        await asyncio.sleep(self.poll_interval)
+            except httpx.HTTPError as e:
+                logger.warning(f"RunPod 요청 중 오류 (시도 {attempt + 1}/{max_retries}): {str(e)}")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(2 ** attempt)
+                    continue
+                raise
+            except Exception as e:
+                logger.error(f"RunPod 비동기 호출 실패: {str(e)}")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(2 ** attempt)
+                    continue
+                raise
+
+        raise Exception("모든 재시도 실패")
+
     def _fix_truncated_json(self, text: str) -> str:
         """
         잘린 JSON 문자열을 복구합니다.
@@ -421,6 +497,89 @@ class LLMUtils:
                 else:
                     # 폴백 불가능한 경우 원래 에러 발생
                     raise
+
+    async def _generate_with_local_queue_async(
+        self,
+        messages: List[Dict[str, str]],
+        temperature: float = 0.3,
+        max_new_tokens: int = 50,
+    ) -> str:
+        """로컬 큐 비동기: RunPod만 httpx로 지원. vLLM/로컬은 NotImplementedError."""
+        if self.use_runpod:
+            prompt_parts = []
+            for msg in messages:
+                role = msg.get("role", "user")
+                content = msg.get("content", "")
+                if role == "system":
+                    prompt_parts.append(f"System: {content}")
+                elif role == "user":
+                    prompt_parts.append(f"User: {content}")
+                elif role == "assistant":
+                    prompt_parts.append(f"Assistant: {content}")
+            prompt = "\n\n".join(prompt_parts) + "\n\nAssistant:"
+            response = await self._call_runpod_async(prompt)
+            return response.strip()
+        elif self.use_pod_vllm:
+            raise NotImplementedError("llm_async 모드에서 vLLM 직접 사용은 미구현입니다.")
+        else:
+            raise NotImplementedError("llm_async 모드에서는 RunPod 또는 OpenAI만 지원합니다.")
+
+    async def _generate_response_async(
+        self,
+        messages: List[Dict[str, str]],
+        temperature: float = 0.3,
+        max_new_tokens: int = 50,
+    ) -> str:
+        """
+        비동기 LLM 응답 (Config.LLM_ASYNC=True 시 배치에서 사용).
+        OpenAI: AsyncOpenAI 사용. RunPod: httpx.AsyncClient 사용.
+        """
+        if self.use_openai:
+            try:
+                from openai import AsyncOpenAI
+                client = AsyncOpenAI(api_key=Config.OPENAI_API_KEY)
+                response = await client.chat.completions.create(
+                    model=self.openai_model,
+                    messages=messages,
+                    temperature=temperature,
+                    max_tokens=max_new_tokens,
+                    response_format={"type": "json_object"},
+                )
+                if hasattr(response, "usage") and response.usage:
+                    self.last_tokens_used = response.usage.total_tokens
+                else:
+                    self.last_tokens_used = None
+                return response.choices[0].message.content.strip()
+            except Exception as e:
+                self.last_tokens_used = None
+                raise
+        else:
+            try:
+                return await self._generate_with_local_queue_async(
+                    messages, temperature, max_new_tokens
+                )
+            except Exception as e:
+                if self.use_openai_as_fallback and Config.OPENAI_API_KEY:
+                    logger.warning(f"로컬 큐 비동기 실패, OpenAI API로 폴백: {str(e)}")
+                    try:
+                        from openai import AsyncOpenAI
+                        client = AsyncOpenAI(api_key=Config.OPENAI_API_KEY)
+                        response = await client.chat.completions.create(
+                            model=Config.OPENAI_MODEL,
+                            messages=messages,
+                            temperature=temperature,
+                            max_tokens=max_new_tokens,
+                            response_format={"type": "json_object"},
+                        )
+                        if hasattr(response, "usage") and response.usage:
+                            self.last_tokens_used = response.usage.total_tokens
+                        else:
+                            self.last_tokens_used = None
+                        return response.choices[0].message.content.strip()
+                    except Exception as fallback_error:
+                        logger.error(f"OpenAI API 폴백도 실패: {str(fallback_error)}")
+                        raise e
+                raise
     
     def _generate_with_local_queue(
         self,
@@ -820,118 +979,7 @@ class LLMUtils:
         """
         return Config.calculate_dynamic_batch_size(reviews, max_tokens_per_batch)
     
-    async def expand_query_for_dense_search(self, user_query: str) -> str:
-        """
-        LLM을 사용하여 쿼리를 Dense 검색에 적합한 키워드로 확장합니다.
-        
-        예시:
-        - 입력: "데이트하기 좋은"
-        - 출력: "분위기 좋다 로맨틱 조용한 데이트 분위기"
-        
-        Args:
-            user_query: 사용자 검색 쿼리
-            
-        Returns:
-            확장된 쿼리 문자열 (키워드 공백으로 구분)
-        """
-        prompt = f"""사용자 검색 의도: "{user_query}"
-
-이 검색 의도를 리뷰 검색에 적합한 키워드로 확장하세요.
-- 실제 리뷰에 나타날 수 있는 표현 사용
-- 동의어, 유사어 포함
-- 공백으로 구분된 키워드 문자열로 출력
-
-예시:
-- 입력: "데이트하기 좋은"
-- 출력: "분위기 좋다 로맨틱 조용한 분위기 데이트"
-
-- 입력: "가족 모임"
-- 출력: "가족 단체 방문 넓은 자리 아이들 좋아함"
-
-키워드만 출력하세요 (설명 없이):"""
-        
-        try:
-            if self.use_pod_vllm:
-                # vLLM 사용 (비동기)
-                expanded_query, _ = await self._generate_with_vllm(
-                    [prompt],
-                    temperature=0.3,
-                    max_tokens=50
-                )
-                return expanded_query[0].strip()
-            else:
-                # 동기 방식 (RunPod 또는 로컬 모델)
-                messages = [
-                    {
-                        "role": "user",
-                        "content": prompt
-                    }
-                ]
-                response = self._generate_response(
-                    messages,
-                    temperature=0.3,
-                    max_new_tokens=50
-                )
-                return response.strip()
-        except Exception as e:
-            logger.warning(f"쿼리 확장 실패: {e}, 원본 쿼리 사용")
-            return user_query
-    
-    async def expand_query_for_dense_search_with_metrics(
-        self, 
-        user_query: str
-    ) -> Tuple[str, Optional[Dict[str, Any]]]:
-        """
-        LLM을 사용하여 쿼리를 Dense 검색에 적합한 키워드로 확장 + 메트릭 반환
-        
-        Args:
-            user_query: 사용자 검색 쿼리
-            
-        Returns:
-            (확장된 쿼리 문자열, vLLM 메트릭 또는 None)
-        """
-        prompt = f"""사용자 검색 의도: "{user_query}"
-
-이 검색 의도를 리뷰 검색에 적합한 키워드로 확장하세요.
-- 실제 리뷰에 나타날 수 있는 표현 사용
-- 동의어, 유사어 포함
-- 공백으로 구분된 키워드 문자열로 출력
-
-예시:
-- 입력: "데이트하기 좋은"
-- 출력: "분위기 좋다 로맨틱 조용한 분위기 데이트"
-
-- 입력: "가족 모임"
-- 출력: "가족 단체 방문 넓은 자리 아이들 좋아함"
-
-키워드만 출력하세요 (설명 없이):"""
-        
-        try:
-            if self.use_pod_vllm:
-                # vLLM 사용 (비동기) - 메트릭 반환
-                expanded_query, vllm_metrics = await self._generate_with_vllm(
-                    [prompt],
-                    temperature=0.3,
-                    max_tokens=50
-                )
-                return expanded_query[0].strip(), vllm_metrics
-            else:
-                # 동기 방식 (RunPod 또는 로컬 모델) - 메트릭 없음
-                messages = [
-                    {
-                        "role": "user",
-                        "content": prompt
-                    }
-                ]
-                response = self._generate_response(
-                    messages,
-                    temperature=0.3,
-                    max_new_tokens=50
-                )
-                return response.strip(), None
-        except Exception as e:
-            logger.warning(f"쿼리 확장 실패: {e}, 원본 쿼리 사용")
-            return user_query, None
+    # NOTE: Query expansion 기능은 사용하지 않기로 결정되어 제거되었습니다.
     
     def _extract_aspects_from_reviews(
         self,
@@ -1905,7 +1953,6 @@ aspect 추출 시 다음을 고려하세요:
     async def summarize_multiple_restaurants_vllm(
         self,
         restaurants_data: List[Dict[str, Any]],  # [{"restaurant_id": 1, "positive_reviews": [...], "negative_reviews": [...]}, ...]
-        max_tokens_per_batch: Optional[int] = None,
         max_retries: int = Config.MAX_RETRIES,
         vector_search: Optional[Any] = None,  # VectorSearch 타입 (순환 참조 방지)
         validate_aspects: bool = True,  # aspect 검증 여부
@@ -1928,7 +1975,6 @@ aspect 추출 시 다음을 고려하세요:
                 - restaurant_id: 레스토랑 ID
                 - positive_reviews: 긍정 리뷰 리스트 (payload 포함)
                 - negative_reviews: 부정 리뷰 리스트 (payload 포함)
-            max_tokens_per_batch: (호환성 유지용, 현재 사용 안함)
             max_retries: 최대 재시도 횟수
             
         Returns:

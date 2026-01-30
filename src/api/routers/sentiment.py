@@ -33,7 +33,7 @@ async def analyze_sentiment(
     단일 레스토랑의 **전체 리뷰**를 sentiment 모델로 분류하여
     **긍/부정 개수 반환 + 코드에서 직접 비율(%) 산출**합니다.
     
-    - **reviews**: 리뷰 리스트 (REVIEW TABLE)
+    - **reviews**: 리뷰 리스트 (id 선택, restaurant_id, content)
     - **restaurant_id**: 레스토랑 ID (BIGINT FK)
     
     Returns:
@@ -172,8 +172,7 @@ async def analyze_sentiment_batch(
         request: 배치 감성 분석 요청
             - restaurants: 레스토랑 데이터 리스트
                 - restaurant_id: 레스토랑 ID
-                - reviews: 리뷰 딕셔너리 리스트 (REVIEW TABLE)
-            - max_tokens_per_batch: 배치당 최대 토큰 수 (선택사항)
+                - reviews: 리뷰 리스트 (id 선택, restaurant_id, content)
     
     Returns:
         각 레스토랑별 감성 분석 결과 리스트

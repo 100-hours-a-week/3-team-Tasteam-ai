@@ -18,7 +18,6 @@ from .vector_search import (
     prepare_qdrant_points,
     get_restaurant_reviews,
     query_similar_reviews,
-    get_reviews_with_images,
 )
 from .llm_utils import (
     LLMUtils,
@@ -36,7 +35,6 @@ __all__ = [
     "prepare_qdrant_points",
     "get_restaurant_reviews",
     "query_similar_reviews",
-    "get_reviews_with_images",
     "LLMUtils",
     "summarize_reviews",
     "StrengthExtractionPipeline",

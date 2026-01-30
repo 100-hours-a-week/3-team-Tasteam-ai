@@ -191,3 +191,130 @@ def summarize_aspects_new(
         ]
 
     return out
+
+
+async def summarize_aspects_new_async(
+    service_reviews: List[str],
+    price_reviews: List[str],
+    food_reviews: List[str],
+    service_evidence_data: List[Dict] = None,
+    price_evidence_data: List[Dict] = None,
+    food_evidence_data: List[Dict] = None,
+    llm_utils: Optional[Any] = None,
+    per_category_max: int = 8,
+) -> Dict:
+    """
+    summarize_aspects_new의 비동기 버전. Config.LLM_ASYNC=True(llm_async)일 때 배치에서 사용.
+    httpx.AsyncClient / AsyncOpenAI로 LLM 호출.
+    """
+    payload = {
+        "service": _clip(service_reviews, per_category_max),
+        "price": _clip(price_reviews, per_category_max),
+        "food": _clip(food_reviews, per_category_max),
+    }
+
+    instructions = """
+너는 음식점 리뷰 분석가다.
+입력으로 카테고리별 '근거 리뷰 목록'이 주어진다.
+아래 JSON 스키마로만 출력하라(추가 텍스트 금지).
+
+스키마:
+{
+  "service": {"summary": string, "bullets": [string, ...], "evidence": [int, ...]},
+  "price":   {"summary": string, "bullets": [string, ...], "evidence": [int, ...]},
+  "food":    {"summary": string, "bullets": [string, ...], "evidence": [int, ...]},
+  "overall_summary": {"summary": string}
+}
+
+규칙:
+- 각 카테고리 summary: 1문장, 과장 금지
+- bullets: 3~5개, 중복 제거, 구체적으로
+- evidence: 근거로 쓴 리뷰의 인덱스(각 카테고리 리스트에서 0-based)
+- price는 '가격 숫자'가 없으면 '가성비/양/구성/만족감' 같은 우회표현을 근거로 요약하라.
+- overall_summary는 2~3문장으로 종합 요약하라.
+- 근거(입력 리뷰)에 없는 내용은 추측하지 말고 "언급이 적다"라고 표현하라.
+"""
+
+    if not llm_utils:
+        raise ValueError("llm_utils가 필요합니다.")
+
+    try:
+        messages = [
+            {"role": "system", "content": instructions},
+            {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}
+        ]
+        text = await llm_utils._generate_response_async(
+            messages=messages,
+            temperature=0.1,
+            max_new_tokens=1000,
+        )
+    except Exception as e:
+        logger.error(f"LLM 비동기 호출 실패: {e}")
+        return {
+            "service": {"summary": "", "bullets": [], "evidence": []},
+            "price": {"summary": "", "bullets": [], "evidence": []},
+            "food": {"summary": "", "bullets": [], "evidence": []},
+            "overall_summary": {"summary": "요약 생성에 실패했습니다."}
+        }
+
+    try:
+        text = text.strip()
+        if text.startswith("```json"):
+            text = text[7:].strip()
+        elif text.startswith("```"):
+            text = text[3:].strip()
+        if text.endswith("```"):
+            text = text[:-3].strip()
+        json_match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', text, re.DOTALL)
+        if json_match:
+            text = json_match.group(0)
+        out = json.loads(text)
+    except json.JSONDecodeError:
+        try:
+            fix = await llm_utils._generate_response_async(
+                messages=[{"role": "user", "content": f"다음 텍스트를 유효한 JSON으로만 변환: {text}"}],
+                temperature=0.1,
+                max_new_tokens=500,
+            )
+            json_match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', fix, re.DOTALL)
+            if json_match:
+                fix = json_match.group(0)
+            out = json.loads(fix)
+        except Exception as e:
+            logger.error(f"JSON 파싱 실패: {e}")
+            return {
+                "service": {"summary": "", "bullets": [], "evidence": []},
+                "price": {"summary": "", "bullets": [], "evidence": []},
+                "food": {"summary": "", "bullets": [], "evidence": []},
+                "overall_summary": {"summary": "요약 생성에 실패했습니다."}
+            }
+
+    evidence_data_map = {
+        "service": service_evidence_data or [],
+        "price": price_evidence_data or [],
+        "food": food_evidence_data or [],
+    }
+    for cat in ("service", "price", "food"):
+        n = len(payload[cat])
+        ev_indices = out.get(cat, {}).get("evidence", [])
+        if isinstance(ev_indices, list):
+            valid_indices = [i for i in ev_indices if isinstance(i, int) and 0 <= i < n]
+            evidence_data = evidence_data_map[cat]
+            out[cat]["evidence"] = [
+                {"review_id": evidence_data[i]["review_id"], "snippet": evidence_data[i]["snippet"], "rank": evidence_data[i]["rank"]}
+                for i in valid_indices
+                if i < len(evidence_data)
+            ]
+        else:
+            out[cat]["evidence"] = []
+
+    price_ev = out.get("price", {}).get("evidence", [])
+    ev_texts = [ev.get("snippet", "") for ev in price_ev if isinstance(ev, dict)] if price_ev else []
+    if ev_texts and not any(_has_price_signal(t) for t in ev_texts):
+        out["price"]["summary"] = "가격 관련 언급이 많지 않아, 전반적인 만족감/구성(양 등) 중심으로만 해석 가능합니다."
+        out["price"]["bullets"] = [
+            "가격을 직접 언급한 리뷰가 많지 않습니다.",
+            "대신 만족/구성/양(푸짐함) 관련 표현이 간접적으로 나타납니다."
+        ]
+
+    return out
