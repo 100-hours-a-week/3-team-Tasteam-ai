@@ -92,7 +92,7 @@ async def _process_one_restaurant_async(
             data_list.append({"review_id": str(review_id), "snippet": content, "rank": rank})
         return name, contents, data_list
 
-    if Config.BATCH_SEARCH_ASYNC:
+    if Config.SUMMARY_SEARCH_ASYNC:
         search_results = await asyncio.gather(
             *(do_one_search(seeds, name) for seeds, name in zip(seed_list, name_list))
         )
@@ -104,7 +104,7 @@ async def _process_one_restaurant_async(
     hits_data_dict = {name: data_list for name, _, data_list in search_results}
 
     async with llm_sem:
-        if Config.LLM_ASYNC:
+        if Config.SUMMARY_LLM_ASYNC:
             result = await summarize_aspects_new_async(
                 service_reviews=hits_dict.get("service", []),
                 price_reviews=hits_dict.get("price", []),
@@ -146,7 +146,7 @@ async def _batch_summarize_async(
             rd, request, vector_search, llm_utils, seed_list, name_list, search_sem, llm_sem
         )
 
-    if Config.BATCH_RESTAURANT_ASYNC:
+    if Config.SUMMARY_RESTAURANT_ASYNC:
         gathered = await asyncio.gather(
             *(one(rd) for rd in request.restaurants), return_exceptions=True
         )
@@ -519,7 +519,7 @@ async def summarize_reviews_batch(
     """
     여러 레스토랑의 리뷰를 배치로 요약 (새 파이프라인: 카테고리별 하이브리드 검색 + 요약)
     
-    search_async (BATCH_SEARCH_ASYNC): aspect(service/price/food) 서치 병렬 여부. restaurant_async (BATCH_RESTAURANT_ASYNC): 음식점 간 병렬 여부. 둘 다 false면 완전 순차. LLM: LLM_ASYNC=true(llm_async)면 httpx.AsyncClient/AsyncOpenAI, false면 to_thread.
+    search_async (SUMMARY_SEARCH_ASYNC): aspect(service/price/food) 서치 병렬. restaurant_async (SUMMARY_RESTAURANT_ASYNC): 음식점 간 병렬. 둘 다 false면 완전 순차. SUMMARY_LLM_ASYNC=true면 AsyncOpenAI/httpx, false면 to_thread.
     
     각 레스토랑별로:
     1. 기본 시드만 사용 (DEFAULT_SERVICE/PRICE/FOOD_SEEDS, 파일 미사용)
@@ -546,7 +546,7 @@ async def summarize_reviews_batch(
         name_list = ["service", "price", "food"]
         logger.info("요약: 기본 시드만 사용")
 
-        if Config.BATCH_SEARCH_ASYNC or Config.BATCH_RESTAURANT_ASYNC:
+        if Config.SUMMARY_SEARCH_ASYNC or Config.SUMMARY_RESTAURANT_ASYNC:
             results = await _batch_summarize_async(request, vector_search, llm_utils, seed_list, name_list)
             return SummaryBatchResponse(results=[SummaryDisplayResponse(**r) for r in results])
 

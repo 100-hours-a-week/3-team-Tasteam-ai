@@ -106,40 +106,38 @@ async def analyze_sentiment(
                             negative_ratio=0,
                         )
             
-            # 대표 벡터 기반 TOP-K 방식 사용
-        result = analyzer.analyze(
-            reviews=request.reviews,
-            restaurant_id=request.restaurant_id,
-        )
-        
-        # 메트릭 수집
-        request_id = metrics.collect_metrics(
-            restaurant_id=request.restaurant_id,
-            analysis_type="sentiment",
-            start_time=start_time,
-            tokens_used=result.get("tokens_used"),
-            batch_size=len(request.reviews),
-        )
-        
-        # 디버그 모드에 따라 응답 반환
-        if debug:
-            # 디버그 모드: 전체 응답 + 디버그 정보
-            return SentimentAnalysisResponse(
-                **result,
-                debug=DebugInfo(
-                    request_id=request_id,
-                    processing_time_ms=(time.time() - start_time) * 1000,
-                    tokens_used=result.get("tokens_used"),
-                    model_version=result.get("model_version"),
+            # 대표 벡터 기반 TOP-K 방식 사용 (analyze_async: SENTIMENT_CLASSIFIER_USE_THREAD/SENTIMENT_LLM_ASYNC 토글 적용)
+            result = await analyzer.analyze_async(
+                reviews=request.reviews,
+                restaurant_id=request.restaurant_id,
+            )
+
+            # 메트릭 수집
+            request_id = metrics.collect_metrics(
+                restaurant_id=request.restaurant_id,
+                analysis_type="sentiment",
+                start_time=start_time,
+                tokens_used=result.get("tokens_used"),
+                batch_size=len(request.reviews),
+            )
+
+            # 디버그 모드에 따라 응답 반환
+            if debug:
+                return SentimentAnalysisResponse(
+                    **result,
+                    debug=DebugInfo(
+                        request_id=request_id,
+                        processing_time_ms=(time.time() - start_time) * 1000,
+                        tokens_used=result.get("tokens_used"),
+                        model_version=result.get("model_version"),
+                    )
                 )
-            )
-        else:
-            # 일반 모드: 최소 필드만
-            return SentimentAnalysisDisplayResponse(
-                restaurant_id=result["restaurant_id"],
-                positive_ratio=result["positive_ratio"],
-                negative_ratio=result["negative_ratio"],
-            )
+            else:
+                return SentimentAnalysisDisplayResponse(
+                    restaurant_id=result["restaurant_id"],
+                    positive_ratio=result["positive_ratio"],
+                    negative_ratio=result["negative_ratio"],
+                )
     except RuntimeError as e:
         # 락 획득 실패 (중복 실행 방지)
         if "중복 실행 방지" in str(e):

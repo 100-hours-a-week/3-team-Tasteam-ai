@@ -327,7 +327,7 @@ class LLMUtils:
     async def _call_runpod_async(self, prompt: str, max_retries: int = Config.MAX_RETRIES) -> str:
         """
         RunPod 서버리스 엔드포인트를 httpx.AsyncClient로 비동기 호출.
-        배치 경로에서 Config.LLM_ASYNC=True(llm_async)일 때 사용.
+        배치 경로에서 Config.SUMMARY_LLM_ASYNC=True(llm_async)일 때 사용.
         """
         url = f"https://api.runpod.ai/v2/{self.endpoint_id}/run"
         headers = {
@@ -497,22 +497,26 @@ class LLMUtils:
         messages: List[Dict[str, str]],
         temperature: float = 0.3,
         max_new_tokens: int = 50,
+        top_p: Optional[float] = None,
     ) -> str:
         """
-        비동기 LLM 응답 (Config.LLM_ASYNC=True 시 배치에서 사용).
+        비동기 LLM 응답 (Config.SUMMARY_LLM_ASYNC=True 시 배치에서 사용).
         OpenAI: AsyncOpenAI 사용. RunPod: httpx.AsyncClient 사용.
         """
         if self.use_openai:
             try:
                 from openai import AsyncOpenAI
                 client = AsyncOpenAI(api_key=Config.OPENAI_API_KEY)
-                response = await client.chat.completions.create(
-                    model=self.openai_model,
-                    messages=messages,
-                    temperature=temperature,
-                    max_tokens=max_new_tokens,
-                    response_format={"type": "json_object"},
-                )
+                create_kwargs: Dict[str, Any] = {
+                    "model": self.openai_model,
+                    "messages": messages,
+                    "temperature": temperature,
+                    "max_tokens": max_new_tokens,
+                    "response_format": {"type": "json_object"},
+                }
+                if top_p is not None:
+                    create_kwargs["top_p"] = top_p
+                response = await client.chat.completions.create(**create_kwargs)
                 if hasattr(response, "usage") and response.usage:
                     self.last_tokens_used = response.usage.total_tokens
                 else:
@@ -532,13 +536,16 @@ class LLMUtils:
                     try:
                         from openai import AsyncOpenAI
                         client = AsyncOpenAI(api_key=Config.OPENAI_API_KEY)
-                        response = await client.chat.completions.create(
-                            model=Config.OPENAI_MODEL,
-                            messages=messages,
-                            temperature=temperature,
-                            max_tokens=max_new_tokens,
-                            response_format={"type": "json_object"},
-                        )
+                        fallback_kwargs: Dict[str, Any] = {
+                            "model": Config.OPENAI_MODEL,
+                            "messages": messages,
+                            "temperature": temperature,
+                            "max_tokens": max_new_tokens,
+                            "response_format": {"type": "json_object"},
+                        }
+                        if top_p is not None:
+                            fallback_kwargs["top_p"] = top_p
+                        response = await client.chat.completions.create(**fallback_kwargs)
                         if hasattr(response, "usage") and response.usage:
                             self.last_tokens_used = response.usage.total_tokens
                         else:
@@ -710,19 +717,38 @@ class LLMUtils:
         - 출력: 한 문장 해석 (예: "전반적으로 서비스 평가가 좋은 편입니다.")
         - 실패 시 None 반환 → 호출부에서 템플릿 폴백.
         """
+        # comparison_display 전용 금지어 (LLM_RESPONSE_INCONSISTENCY.md)
+        FORBIDDEN_PHRASES = (
+            "리뷰 수", "표본 수", "신뢰", "믿을 수",  # 메타 언급 차단
+            "상당히", "매우", "굉장히", "확실히", "단연",  # 강조 차단
+        )
+
+        def is_valid_interp(s: str) -> bool:
+            s = s.strip()
+            if not s:
+                return False
+            if any(p in s for p in FORBIDDEN_PHRASES):
+                return False
+            INTENSIFIERS = ("상당히", "매우", "굉장히", "확실히", "단연")
+            if any(w in s for w in INTENSIFIERS) and ("높은 비율" in s or "높" in s):
+                return False
+            return True
+
         system_content = (
             "당신은 음식점 비교 해석 문장을 만드는 도우미입니다. "
-            "반드시 다음을 지킵니다: (1) 주어진 숫자를 그대로 사용하고, 숫자 계산이나 새 숫자 생성 금지. "
-            "(2) '최고', '압도적', '완벽' 등 과장 표현 금지. "
-            "(3) 표본 톤에 맞춰 자연스럽게 한 문장만 출력. "
-            "(4) lift는 '만족도가 평균보다 높은 비율'입니다. 가격 lift가 높다 = 가성비/가격에 대한 고객 만족도가 평균보다 높음. "
-            "'가격 상승', '가격 인상', '가격이 올랐다' 등과 혼동 금지. "
-            "반드시 JSON 형식으로만 답하세요: {\"interpretation\": \"한 문장\"}"
+            "반드시 다음을 지킵니다: "
+            "(1) 주어진 숫자를 그대로 사용하고, 숫자 계산이나 새 숫자 생성 금지. "
+            "(2) 과장/강조/확신 표현 금지. 예: '최고', '압도적', '완벽', '상당히', '매우', '굉장히', '확실히', '단연'. "
+            "(3) 리뷰수/표본수/신뢰도 언급 금지. 예: '리뷰 수가', '표본 수가', '신뢰할 수', '충분한 리뷰', '데이터가 많아'. "
+            "(4) 한 문장만 출력. "
+            "(5) lift는 '만족도가 평균보다 높은 비율'이며 가격 lift는 '가격/가성비 만족' 의미. "
+            "(6) 동일 의미 반복 금지. 예: '높은 비율이 높다', '평균보다 높다'를 두 번 말하지 말 것. "
+            "반드시 JSON 형식으로만 답하세요: {\"interpretation\": \"한 문장\"}."
         )
         user_content = (
             f"카테고리: {category}. lift 퍼센트: {round(lift_pct)}% (만족도가 평균보다 이만큼 높음). "
-            f"표본 톤: {tone}. 리뷰 수(표본 수): {n_reviews}. "
-            "위 톤을 반영해 해석 문장 한 문장만 만들어 주세요. 해석 문장 안에 숫자를 넣지 마세요."
+            f"표본 톤: {tone}. "
+            "위 톤을 반영해 해석 문장 한 문장만 만들어 주세요. lift 퍼센트 숫자는 문장에 포함해도 됩니다."
         )
         messages = [
             {"role": "system", "content": system_content},
@@ -731,17 +757,21 @@ class LLMUtils:
         try:
             raw = await self._generate_response_async(
                 messages,
-                temperature=0.3,
+                temperature=0.0,
                 max_new_tokens=80,
+                top_p=0.2,
             )
             if not raw or not raw.strip():
                 return None
             data = json.loads(raw)
             interp = data.get("interpretation") or raw
-            return interp.strip() if isinstance(interp, str) else None
+            if isinstance(interp, str) and is_valid_interp(interp):
+                return interp.strip()
+            return None
         except (json.JSONDecodeError, KeyError, TypeError):
-            # JSON 아님 → 통째로 해석 문장으로 사용
-            return raw.strip() if raw else None
+            if raw and isinstance(raw, str) and is_valid_interp(raw.strip()):
+                return raw.strip()
+            return None
         except Exception as e:
             logger.warning("비교 해석 LLM 실패: %s", e)
             return None

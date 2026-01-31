@@ -200,10 +200,16 @@ class ComparisonPipeline:
             return percent_sentence + f" 전반적으로 {label} 평가가 {tone}입니다."
 
         try:
-            comparison_display = list(await asyncio.gather(
-                _one_line("service", "서비스", lift_dict.get("service", 0.0)),
-                _one_line("price", "가격", lift_dict.get("price", 0.0)),
-            ))
+            if Config.COMPARISON_ASYNC:
+                comparison_display = list(await asyncio.gather(
+                    _one_line("service", "서비스", lift_dict.get("service", 0.0)),
+                    _one_line("price", "가격", lift_dict.get("price", 0.0)),
+                ))
+            else:
+                comparison_display = [
+                    await _one_line("service", "서비스", lift_dict.get("service", 0.0)),
+                    await _one_line("price", "가격", lift_dict.get("price", 0.0)),
+                ]
         except Exception as e:
             logger.warning("비교 해석 LLM 호출 실패, 템플릿 폴백: %s", e)
             comparison_display = format_comparison_display(
