@@ -27,16 +27,27 @@ _spark_session = None
 
 
 def _get_spark() -> "SparkSession":
-    """SparkSession lazy 초기화 (프로세스당 1회)."""
+    """SparkSession lazy 초기화 (프로세스당 1회). SPARK_LOG.md 반영: 진행바·Hadoop WARN 억제."""
     global _spark_session
     if _spark_session is None and SPARK_AVAILABLE:
-        _spark_session = (
+        builder = (
             SparkSession.builder.appName("comparison_pipeline")
             .master("local[6]")
             .config("spark.driver.memory", "2g")
             .config("spark.driver.bindAddress", "127.0.0.1")
-            .getOrCreate()
+            .config("spark.ui.showConsoleProgress", "false")
         )
+        _log4j_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "conf",
+            "log4j2-spark-quiet.properties",
+        )
+        if os.path.exists(_log4j_path):
+            builder = builder.config(
+                "spark.driver.extraJavaOptions",
+                f"-Dlog4j.configurationFile=file:{os.path.abspath(_log4j_path)}",
+            )
+        _spark_session = builder.getOrCreate()
         logger.debug("SparkSession 생성 완료")
     return _spark_session
 
