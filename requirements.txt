@@ -2,7 +2,7 @@
 
 # Core dependencies
 transformers>=4.30.0
-#torch>=2.0.0
+torch>=2.0.0
 sentence-transformers>=2.2.0
 qdrant-client>=1.6.0
 #accelerate>=0.20.0
@@ -22,6 +22,7 @@ pandas>=2.0.0
 # Utilities
 python-dotenv>=1.0.0
 requests>=2.31.0
+httpx>=0.25.0
 psutil>=7.0.0
 
 # GPU Optimization (Phase 1 & 2)

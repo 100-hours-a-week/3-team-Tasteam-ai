@@ -370,7 +370,7 @@ class SentimentAnalyzer:
     
     async def analyze_multiple_restaurants_async(
         self,
-        restaurants_data: List[Dict[str, Any]],  # [{"restaurant_id": 1, "reviews": [...]}, ...]
+        restaurants_data: List[Any],  # List[SentimentRestaurantBatchInput] 또는 [{"restaurant_id", "reviews"}]
     ) -> List[Dict[str, Any]]:
         """
         여러 레스토랑의 리뷰를 sentiment 모델로 분류하여 결과를 반환합니다.
@@ -382,8 +382,8 @@ class SentimentAnalyzer:
 
         results: List[Dict[str, Any]] = []
         for data in restaurants_data:
-            restaurant_id = data.get("restaurant_id")
-            reviews = data.get("reviews", [])
+            restaurant_id = data.restaurant_id if hasattr(data, "restaurant_id") else data.get("restaurant_id")
+            reviews = data.reviews if hasattr(data, "reviews") else data.get("reviews", [])
             
             # 샘플링이 활성화되어 있으면 reviews를 None으로 전달하여 샘플링 로직 적용
             # 샘플링이 비활성화되어 있으면 제공된 reviews를 사용 (없으면 전체 리뷰 조회)

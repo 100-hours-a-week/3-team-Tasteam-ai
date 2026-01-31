@@ -81,7 +81,7 @@ class MetricsCollector:
         
         Args:
             restaurant_id: 레스토랑 ID
-            analysis_type: 분석 타입 ('sentiment', 'summary', 'strength')
+            analysis_type: 분석 타입 ('sentiment', 'summary', 'comparison')
             start_time: 시작 시간 (time.time())
             tokens_used: 사용된 토큰 수
             batch_size: 배치 크기
@@ -218,7 +218,7 @@ class MetricsCollector:
         Args:
             request_id: 요청 ID
             restaurant_id: 레스토랑 ID
-            analysis_type: 분석 타입 ('sentiment', 'summary', 'strength')
+            analysis_type: 분석 타입 ('sentiment', 'summary', 'comparison')
             vllm_metrics: vLLM 메트릭 딕셔너리 (avg_prefill_time_ms, avg_decode_time_ms, total_tokens, tps 등)
         """
         # 로그 파일에 모든 디버그 정보 저장

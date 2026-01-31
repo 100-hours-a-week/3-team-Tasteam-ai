@@ -12,10 +12,14 @@ from ..sentiment_analysis import SentimentAnalyzer
 from ..vector_search import VectorSearch
 from ..llm_utils import LLMUtils
 from ..metrics_collector import MetricsCollector
+from ..cpu_monitor import get_or_create_benchmark_cpu_monitor
+from ..gpu_monitor import get_or_create_benchmark_gpu_monitor
 
 # 의존성 싱글톤 (매 요청 인스턴스 생성 방지 — Encoder/Qdrant는 @lru_cache, 나머지는 모듈 캐시)
 _vector_search_singleton: Optional[VectorSearch] = None
 _sentiment_analyzer_singleton: Optional[SentimentAnalyzer] = None
+_default_metrics_collector: Optional[MetricsCollector] = None
+_benchmark_metrics_collector: Optional[MetricsCollector] = None
 
 
 @lru_cache()
@@ -44,15 +48,56 @@ def get_qdrant_client() -> QdrantClient:
     return QdrantClient(path=qdrant_path)
 
 
-@lru_cache()
-def get_metrics_collector() -> MetricsCollector:
-    """메트릭 수집기 싱글톤"""
-    return MetricsCollector(
-        enable_logging=Config.METRICS_ENABLE_LOGGING,
-        enable_db=Config.METRICS_ENABLE_DB,
-        db_path=Config.METRICS_DB_PATH,
-        log_dir=Config.METRICS_LOG_DIR,
-    )
+def get_metrics_collector(
+    x_benchmark: Optional[str] = Header(None, alias="X-Benchmark"),
+    x_enable_cpu_monitor: Optional[str] = Header(None, alias="X-Enable-CPU-Monitor"),
+    x_enable_gpu_monitor: Optional[str] = Header(None, alias="X-Enable-GPU-Monitor"),
+) -> MetricsCollector:
+    """
+    메트릭 수집기 싱글톤.
+    - X-Benchmark: true 이면 요청 메트릭 수집 활성화 (logs + metrics.db).
+    - X-Enable-CPU-Monitor: true 이면 CPU 모니터링만 활성화 (logs/cpu_usage.log).
+    - X-Enable-GPU-Monitor: true 이면 서버 GPU 모니터링만 활성화 (logs/gpu_usage.log).
+    - 헤더는 독립적: 메트릭만 / CPU만 / GPU만 / 조합 가능.
+    """
+    global _default_metrics_collector, _benchmark_metrics_collector
+
+    _truth = ("true", "1", "yes")
+    want_cpu = x_enable_cpu_monitor and str(x_enable_cpu_monitor).strip().lower() in _truth
+    want_gpu = x_enable_gpu_monitor and str(x_enable_gpu_monitor).strip().lower() in _truth
+    want_metrics = x_benchmark and str(x_benchmark).strip().lower() in _truth
+
+    if want_cpu:
+        get_or_create_benchmark_cpu_monitor()
+    if want_gpu:
+        get_or_create_benchmark_gpu_monitor()
+
+    if want_metrics:
+        if _benchmark_metrics_collector is None:
+            _benchmark_metrics_collector = MetricsCollector(
+                enable_logging=True,
+                enable_db=True,
+                db_path=Config.METRICS_DB_PATH,
+                log_dir=Config.METRICS_LOG_DIR,
+            )
+        return _benchmark_metrics_collector
+
+    if _default_metrics_collector is None:
+        if not Config.METRICS_AND_LOGGING_ENABLE:
+            _default_metrics_collector = MetricsCollector(
+                enable_logging=False,
+                enable_db=False,
+                db_path=Config.METRICS_DB_PATH,
+                log_dir=Config.METRICS_LOG_DIR,
+            )
+        else:
+            _default_metrics_collector = MetricsCollector(
+                enable_logging=Config.METRICS_ENABLE_LOGGING,
+                enable_db=Config.METRICS_ENABLE_DB,
+                db_path=Config.METRICS_DB_PATH,
+                log_dir=Config.METRICS_LOG_DIR,
+            )
+    return _default_metrics_collector
 
 
 @lru_cache()

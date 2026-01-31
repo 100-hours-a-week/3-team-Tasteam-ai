@@ -1,13 +1,11 @@
 """
 벡터 검색 모듈 (FastEmbed 전용: Dense + Sparse)
-- Dense: TextEmbedding('sentence-transformers/paraphrase-multilingual-mpnet-base-v2') (final_summary_pipeline과 동일)
-- Sparse: SparseTextEmbedding('Qdrant/bm25')
+- Dense / Sparse 모델명은 Config.EMBEDDING_MODEL, Config.SPARSE_EMBEDDING_MODEL 사용
 """
 
 import uuid
 import hashlib
 import logging
-import re
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Any, Union
 
@@ -21,13 +19,9 @@ from .review_utils import extract_image_urls, validate_review_data, validate_res
 
 logger = logging.getLogger(__name__)
 
-# final_summary_pipeline과 동일
-DENSE_MODEL_NAME = "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"
-SPARSE_MODEL_NAME = "Qdrant/bm25"
-
 
 class _FastEmbedEncoderAdapter:
-    """FastEmbed Dense 모델을 SentenceTransformer 유사 인터페이스로 노출 (strength_extraction, llm_utils 호환)."""
+    """FastEmbed Dense 모델을 SentenceTransformer 유사 인터페이스로 노출 (comparison, llm_utils 호환)."""
 
     def __init__(self, dense_model: TextEmbedding, dense_dim: int, batch_size: int):
         self._model = dense_model
@@ -65,9 +59,10 @@ class VectorSearch:
             qdrant_client: Qdrant 클라이언트
             collection_name: 컬렉션 이름
         """
-        # FastEmbed Dense (final_summary_pipeline과 동일)
-        self._dense_model = TextEmbedding(DENSE_MODEL_NAME)
-        self._dense_dim = 768  # paraphrase-multilingual-mpnet-base-v2
+        # FastEmbed Dense (Config.EMBEDDING_MODEL)
+        self._dense_model = TextEmbedding(Config.EMBEDDING_MODEL)
+        logger.info(f"Dense 벡터 모델 로드 완료: {Config.EMBEDDING_MODEL}")
+        self._dense_dim = Config.EMBEDDING_DIM
         self.batch_size = Config.get_optimal_batch_size("embedding")
         self.encoder = _FastEmbedEncoderAdapter(self._dense_model, self._dense_dim, self.batch_size)
         
@@ -179,8 +174,11 @@ class VectorSearch:
         # data는 reviews 리스트를 직접 받거나, restaurants 구조를 받을 수 있음
         reviews_list = data.get("reviews", [])
         if not reviews_list and "restaurants" in data:
-            # 기존 형식 지원 (하위 호환성)
             for restaurant in data.get("restaurants", []):
+                if hasattr(restaurant, "model_dump"):
+                    restaurant = restaurant.model_dump()
+                elif hasattr(restaurant, "dict"):
+                    restaurant = restaurant.dict()
                 if not validate_restaurant_data(restaurant):
                     logger.warning(f"레스토랑 정보가 불완전합니다: {restaurant}")
                     continue
@@ -222,26 +220,14 @@ class VectorSearch:
                 return str(dt)
             
             created_at_value = review.get("created_at") or review.get("datetime")
-            updated_at_value = review.get("updated_at")
-            deleted_at_value = review.get("deleted_at")
             
             review_metadata.append({
-                #  컬럼명
                 "id": int(review_id) if review_id and str(review_id).isdigit() else review_id,
-                "restaurant_id": str(restaurant_id) if restaurant_id else None,  # Qdrant 검색을 위해 문자열로 저장
-                "member_id": review.get("member_id") or (int(review.get("user_id")) if review.get("user_id") and str(review.get("user_id")).isdigit() else review.get("user_id")),
-                "group_id": review.get("group_id") or (int(review.get("group")) if review.get("group") and str(review.get("group")).isdigit() else review.get("group")),
-                "subgroup_id": review.get("subgroup_id"),
+                "restaurant_id": str(restaurant_id) if restaurant_id else None,
                 "content": review_text,
-                "is_recommended": review.get("is_recommended"),
                 "created_at": to_iso_string(created_at_value) or datetime.now().isoformat(),
-                "updated_at": to_iso_string(updated_at_value) or datetime.now().isoformat(),
-                "deleted_at": to_iso_string(deleted_at_value),
-                # 하위 호환성을 위한 필드도 유지
                 "review_id": review_id,
                 "restaurant_name": review.get("restaurant_name") or data.get("restaurant_name"),
-                "user_id": review.get("user_id") or review.get("member_id"),
-                "group": review.get("group") or review.get("group_id"),
                 "review": review_text,
                 "datetime": review.get("created_at") or review.get("datetime"),
                 "image_urls": extract_image_urls(review.get("images")),
@@ -254,8 +240,8 @@ class VectorSearch:
         # Sparse 모델 초기화 (한 번만, final_summary_pipeline과 동일)
         try:
             if self._sparse_model is None:
-                self._sparse_model = SparseTextEmbedding(SPARSE_MODEL_NAME)
-                logger.info(f"Sparse 벡터 모델 로드 완료: {SPARSE_MODEL_NAME}")
+                self._sparse_model = SparseTextEmbedding(Config.SPARSE_EMBEDDING_MODEL)
+                logger.info(f"Sparse 벡터 모델 로드 완료: {Config.SPARSE_EMBEDDING_MODEL}")
         except Exception as e:
             logger.warning(f"Sparse 벡터 모델 로드 실패, Dense만 사용: {e}")
             self._sparse_model = None
@@ -484,7 +470,7 @@ class VectorSearch:
 
     def get_all_reviews_for_all_average(self, limit: int = 5000) -> List[Dict]:
         """
-        전체 리뷰 샘플 조회 (강점 추출 시 '전체 평균' 계산용, strength_in_aspect와 동일 데이터 소스 개념).
+        전체 리뷰 샘플 조회 (비교 시 '전체 평균' 계산용, comparison_in_aspect와 동일 데이터 소스 개념).
         filter 없이 scroll하여 limit개 payload 반환.
         """
         try:
@@ -692,11 +678,6 @@ class VectorSearch:
                             weight *= 0.6
                     except Exception:
                         pass  # 날짜 파싱 실패 시 가중치 유지
-                
-                if weight_by_rating and "is_recommended" in record.payload:
-                    # 추천 리뷰에 높은 가중치
-                    if record.payload["is_recommended"]:
-                        weight *= 1.5
                 
                 vectors.append(vector)
                 weights.append(weight)
@@ -1079,101 +1060,6 @@ class VectorSearch:
         
         return unique_strengths
     
-    def query_by_restaurant_vector(
-        self,
-        restaurant_id: Union[int, str],
-        top_k: int = 20,
-        months_back: Optional[int] = None,
-    ) -> List[Dict]:
-        """
-        레스토랑 대표 벡터를 쿼리로 사용하여 TOP-K 리뷰 검색
-        
-        Args:
-            restaurant_id: 레스토랑 ID
-            top_k: 반환할 최대 리뷰 수
-            months_back: 최근 N개월 필터 (선택, None이면 필터링 안함)
-        
-        Returns:
-            검색 결과 리스트 [{"payload": {...}, "score": 0.95}, ...]
-        """
-        try:
-            # 1. 대표 벡터 계산
-            restaurant_vector = self.compute_restaurant_vector(restaurant_id)
-            if restaurant_vector is None:
-                logger.warning(f"레스토랑 {restaurant_id}의 대표 벡터를 계산할 수 없습니다.")
-                return []
-            
-            # 2. 필터 구성
-            filter_conditions = [
-                models.FieldCondition(
-                    key="restaurant_id",
-                    match=models.MatchValue(value=str(restaurant_id))
-                )
-            ]
-            
-            query_filter = models.Filter(must=filter_conditions)
-            
-            # 3. 대표 벡터로 검색 (named 벡터 컬렉션이면 using="dense")
-            qp_kw = {
-                "collection_name": self.collection_name,
-                "query": restaurant_vector.tolist(),
-                "query_filter": query_filter,
-                "limit": top_k * 2,  # 날짜 필터링 전에 더 많이 가져옴
-            }
-            if not self._is_collection_single_vector():
-                qp_kw["using"] = "dense"
-            results = self.client.query_points(**qp_kw).points
-            
-            # 4. 결과 변환
-            candidates = []
-            for r in results:
-                candidates.append({
-                    "payload": r.payload,
-                    "score": float(r.score)
-                })
-            
-            # 5. 날짜 필터링 (클라이언트 측에서 수행)
-            if months_back is not None:
-                from datetime import datetime, timedelta
-                cutoff_date = datetime.now() - timedelta(days=months_back * 30)
-                
-                filtered_candidates = []
-                for candidate in candidates:
-                    created_at_str = candidate["payload"].get("created_at", "")
-                    if created_at_str:
-                        try:
-                            if isinstance(created_at_str, str):
-                                try:
-                                    candidate_date = datetime.fromisoformat(created_at_str.replace('Z', '+00:00'))
-                                except ValueError:
-                                    candidate_date = datetime.now()
-                            else:
-                                candidate_date = created_at_str
-                            
-                            if candidate_date >= cutoff_date:
-                                filtered_candidates.append(candidate)
-                        except (ValueError, TypeError):
-                            # 파싱 실패 시 포함
-                            filtered_candidates.append(candidate)
-                    else:
-                        # created_at이 없으면 포함
-                        filtered_candidates.append(candidate)
-                
-                candidates = filtered_candidates
-            
-            # 6. 날짜 기준 정렬 (최신순)
-            candidates.sort(
-                key=lambda x: x["payload"].get("created_at", ""),
-                reverse=True
-            )
-            
-            # 7. TOP-K만 반환
-            return candidates[:top_k]
-            
-        except Exception as e:
-            logger.error(f"대표 벡터 기반 검색 중 오류: {str(e)}")
-            return []
-    
     def query_similar_reviews(
         self,
         query_text: str,
@@ -1294,7 +1180,7 @@ class VectorSearch:
             # Sparse 벡터 생성 (FastEmbed 사용, 모델 캐싱)
             try:
                 if self._sparse_model is None:
-                    self._sparse_model = SparseTextEmbedding(SPARSE_MODEL_NAME)
+                    self._sparse_model = SparseTextEmbedding(Config.SPARSE_EMBEDDING_MODEL)
                 
                 sparse_emb = next(self._sparse_model.embed([query_text]))
                 
@@ -1389,152 +1275,6 @@ class VectorSearch:
                 use_hybrid=False,
             )
     
-    @staticmethod
-    def _should_expand_query(query: str) -> bool:
-        """
-        쿼리 확장이 필요한지 판단하는 하이브리드 로직
-        
-        단순 키워드: 확장 불필요 (빠른 응답)
-        복잡한 의도: 확장 필요 (검색 품질 향상)
-        
-        Args:
-            query: 사용자 검색 쿼리
-            
-        Returns:
-            확장 필요 여부 (True: 확장 필요, False: 확장 불필요)
-        """
-        # 복잡한 의도 표현 패턴 (확장 필요)
-        complex_patterns = [
-            r"데이트|가족|친구|혼자|모임",  # 상황 표현
-            r"좋은|나쁜|추천|만족|적합",  # 평가 표현
-            r"적합|맞는|어울리는|좋을|나을",  # 적합성 표현
-            r"원하는|원하는|찾는|원하는",  # 욕구 표현
-        ]
-        
-        # 단순 키워드 패턴 (확장 불필요)
-        simple_keywords = [
-            "분위기", "맛", "서비스", "가격", "주차",
-            "로맨틱", "조용한", "시끄러운", "넓은", "좁은",
-        ]
-        
-        # 단순 키워드만 포함된 경우 확장 불필요
-        query_lower = query.lower()
-        is_simple = any(keyword in query_lower for keyword in simple_keywords)
-        if is_simple and len(query.split()) <= 3:
-            return False
-        
-        # 복잡한 패턴이 있으면 확장 필요
-        for pattern in complex_patterns:
-            if re.search(pattern, query, re.IGNORECASE):
-                return True
-        
-        # 기본값: 짧은 쿼리(3단어 이하)이고 패턴이 없으면 확장 불필요
-        if len(query.split()) <= 2:
-            return False
-        
-        # 긴 쿼리는 확장 필요
-        return True
-    
-    async def query_similar_reviews_with_expansion(
-        self,
-        query_text: str,
-        restaurant_id: Optional[Union[int, str]] = None,
-        limit: int = 3,
-        min_score: float = 0.0,
-        food_category_id: Optional[int] = None,
-        expand_query: Optional[bool] = None,  # None: 자동 판단, True: 강제 확장, False: 확장 안함
-        llm_utils: Optional[Any] = None,  # LLMUtils 인스턴스
-    ) -> List[Dict]:
-        """
-        Query Expansion을 지원하는 의미 기반 검색 (하이브리드 접근)
-        
-        Args:
-            query_text: 검색 쿼리 텍스트
-            restaurant_id: 필터링할 레스토랑 ID (None이면 전체)
-            limit: 반환할 최대 개수
-            min_score: 최소 유사도 점수
-            food_category_id: 음식 카테고리 ID 필터 (선택사항)
-            expand_query: 쿼리 확장 여부 (None: 자동 판단, True: 강제 확장, False: 확장 안함)
-            llm_utils: LLMUtils 인스턴스 (확장 시 필요)
-            
-        Returns:
-            검색 결과 리스트 (payload와 score 포함)
-        """
-        original_query = query_text
-        
-        # 쿼리 확장 여부 결정 (하이브리드 로직)
-        should_expand = False
-        if expand_query is None:
-            # 자동 판단
-            should_expand = self._should_expand_query(query_text)
-        elif expand_query:
-            # 강제 확장
-            should_expand = True
-        
-        # 쿼리 확장 실행
-        if should_expand and llm_utils:
-            try:
-                expanded_query = await llm_utils.expand_query_for_dense_search(query_text)
-                if expanded_query and expanded_query != query_text:
-                    logger.info(f"쿼리 확장: '{query_text}' → '{expanded_query}'")
-                    query_text = expanded_query
-                else:
-                    logger.debug(f"쿼리 확장 결과가 원본과 동일, 원본 사용")
-            except Exception as e:
-                logger.warning(f"쿼리 확장 실패, 원본 사용: {e}")
-                # 실패 시 원본 쿼리 사용
-        
-        # 기존 검색 로직 호출
-        return self.query_similar_reviews(
-            query_text=query_text,
-            restaurant_id=restaurant_id,
-            limit=limit,
-            min_score=min_score,
-            food_category_id=food_category_id,
-        )
-    
-    async def get_reviews_with_images(
-        self,
-        query_text: str,
-        limit: int = 10,
-        min_score: float = 0.0,
-        expand_query: Optional[bool] = None,  # None: 자동 판단, True: 강제 확장, False: 확장 안함
-        llm_utils: Optional[Any] = None,  # LLMUtils 인스턴스
-    ) -> List[Dict]:
-        """
-        이미지가 있는 리뷰를 검색합니다 (Query Expansion 지원).
-        
-        Args:
-            query_text: 검색 쿼리 텍스트
-            limit: 반환할 최대 개수
-            min_score: 최소 유사도 점수
-            expand_query: 쿼리 확장 여부 (None: 자동 판단, True: 강제 확장, False: 확장 안함)
-            llm_utils: LLMUtils 인스턴스 (확장 시 필요)
-            
-        Returns:
-            이미지 URL이 있는 리뷰 리스트
-        """
-        results = await self.query_similar_reviews_with_expansion(
-            query_text=query_text,
-            restaurant_id=None,
-            limit=limit,
-            min_score=min_score,
-            expand_query=expand_query,
-            llm_utils=llm_utils,
-        )
-        
-        reviews_with_images = []
-        for result in results:
-            image_urls = result["payload"].get("image_urls", [])
-            if image_urls:  # 이미지가 있는 경우만
-                reviews_with_images.append({
-                    "payload": result["payload"],
-                    "score": result["score"],
-                    "image_urls": image_urls
-                })
-        
-        return reviews_with_images
-    
     def upsert_review(
         self,
         restaurant_id: str,
@@ -1584,19 +1324,16 @@ class VectorSearch:
             current_version = review.get("version", 1)
             new_version = current_version + 1 if update_version is not None else current_version + 1
             
-            # 5. Payload 구성 ( 컬럼명)
+            # 5. Payload 구성 ( 컬럼명, subgroup_id 미사용)
             payload = {
                 #  컬럼명
                 "id": int(review_id) if review_id and str(review_id).isdigit() else review_id,
                 "restaurant_id": int(restaurant_id) if restaurant_id and str(restaurant_id).isdigit() else restaurant_id,
                 "member_id": review.get("member_id") or (int(review.get("user_id")) if review.get("user_id") and str(review.get("user_id")).isdigit() else review.get("user_id")),
                 "group_id": review.get("group_id") or (int(review.get("group")) if review.get("group") and str(review.get("group")).isdigit() else review.get("group")),
-                "subgroup_id": review.get("subgroup_id"),
                 "content": review_text,
-                "is_recommended": review.get("is_recommended"),
                 "created_at": review.get("created_at") or review.get("datetime") or datetime.now().isoformat(),
                 "updated_at": review.get("updated_at") or datetime.now().isoformat(),
-                "deleted_at": review.get("deleted_at"),
                 # 하위 호환성 필드
                 "review_id": review_id,
                 "restaurant_name": restaurant_name,
@@ -1871,272 +1608,189 @@ class VectorSearch:
             logger.error(f"배치 삭제 중 오류: {str(e)}")
             raise
     
-    def upsert_reviews_batch(
+    def upsert_reviews_from_data(
         self,
-        restaurant_id: str,
-        restaurant_name: str,
-        reviews: List[Dict[str, Any]],
+        data: Dict[str, Any],
         batch_size: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         """
-        여러 리뷰를 배치로 upsert합니다. (성능 최적화)
-        
-        배치 처리로 벡터 인코딩과 Qdrant upsert를 효율적으로 수행합니다.
-        단, update_filter는 지원하지 않습니다 (중복 방지만 가능).
+        업로드 형식 {reviews, restaurants}으로 리뷰를 배치 upsert합니다.
+        prepare_points와 동일한 flatten: data["reviews"] + restaurants[].reviews.
+        Payload는 upload와 동일 (id, restaurant_id, content, created_at, review_id, restaurant_name, review, datetime, image_urls, version).
         
         Args:
-            restaurant_id: 레스토랑 ID
-            restaurant_name: 레스토랑 이름
-            reviews: 리뷰 딕셔너리 리스트 (review_id, review, user_id, datetime, group, images, version 등)
-            batch_size: 벡터 인코딩 배치 크기 (None이면 자동으로 최적 크기 사용)
+            data: {"reviews": [...], "restaurants": [{id, name, reviews?}]}
+            batch_size: 벡터 인코딩 배치 크기 (None이면 self.batch_size)
             
         Returns:
-            각 리뷰의 upsert 결과 리스트:
-            [
-                {
-                    "action": "inserted" | "updated",
-                    "review_id": str,
-                    "version": int,
-                    "point_id": str
-                },
-                ...
-            ]
+            [{"action": "inserted"|"updated"|"error", "review_id", "version"?, "point_id"?, "error"?}, ...]
         """
-        if not reviews:
-            return []
-        
+        def _to_dict(obj: Any) -> dict:
+            if hasattr(obj, "model_dump"):
+                return obj.model_dump()
+            if hasattr(obj, "dict"):
+                return obj.dict()
+            return obj if isinstance(obj, dict) else {}
+
+        # 1. 리뷰 목록 flatten (upload와 동일)
+        reviews_list = list(data.get("reviews", []))
+        for rest in data.get("restaurants", []):
+            rest = _to_dict(rest)
+            rid = rest.get("id")
+            for rev in rest.get("reviews", []):
+                rev = _to_dict(rev)
+                if rev.get("restaurant_id") is None and rid is not None:
+                    rev = {**rev, "restaurant_id": rid}
+                reviews_list.append(rev)
+
+        # 2. restaurant id -> name
+        rest_map: Dict[Any, str] = {}
+        for r in data.get("restaurants", []):
+            r = _to_dict(r)
+            rid, name = r.get("id"), r.get("name", "")
+            if rid is not None:
+                rest_map[rid] = name
+                rest_map[str(rid)] = name
+
         if batch_size is None:
             batch_size = self.batch_size
-        
+
         results = []
-        all_points = []
-        point_id_to_review = {}  # point_id -> review 매핑
-        
-        try:
-            # 1. 리뷰 검증 및 텍스트 추출
-            review_texts = []
-            valid_reviews = []
-            
-            for review in reviews:
-                if not validate_review_data(review):
-                    logger.warning(f"리뷰 데이터가 유효하지 않습니다: {review.get('review_id')}")
-                    results.append({
-                        "action": "error",
-                        "review_id": review.get("review_id", "unknown"),
-                        "error": "리뷰 데이터가 유효하지 않습니다."
-                    })
-                    continue
-                
-                # : id 필드 사용
-                review_id = review.get("id") or review.get("review_id")
-                if not review_id:
-                    logger.warning("id (review_id)가 없는 리뷰를 건너뜁니다.")
-                    results.append({
-                        "action": "error",
-                        "review_id": "unknown",
-                        "error": "id (review_id)가 필요합니다."
-                    })
-                    continue
-                
-                # : content 필드
-                review_text = review.get("content") or review.get("review", "")
-                if not review_text:
-                    logger.warning(f"content가 없는 리뷰를 건너뜁니다: {review_id}")
-                    results.append({
-                        "action": "error",
-                        "review_id": review_id,
-                        "error": "content가 필요합니다."
-                    })
-                    continue
-                
-                review_texts.append(review_text)
-                valid_reviews.append(review)
-            
-            if not valid_reviews:
-                return results
-            
-            # 2. 배치로 벡터 인코딩 (Dense + Sparse, 성능 최적화)
-            logger.info(f"총 {len(valid_reviews)}개의 리뷰를 배치로 인코딩합니다 (배치 크기: {batch_size}, 하이브리드: Dense + Sparse)")
-            
-            # Sparse 모델 초기화 (한 번만, final_summary_pipeline과 동일)
-            try:
-                if self._sparse_model is None:
-                    self._sparse_model = SparseTextEmbedding(SPARSE_MODEL_NAME)
-                    logger.info(f"Sparse 벡터 모델 로드 완료: {SPARSE_MODEL_NAME}")
-            except Exception as e:
-                logger.warning(f"Sparse 벡터 모델 로드 실패, Dense만 사용: {e}")
-                self._sparse_model = None
-            
-            all_dense_vectors = []
-            all_sparse_vectors = []
-            for i in range(0, len(review_texts), batch_size):
-                batch_texts = review_texts[i:i + batch_size]
-                try:
-                    # Dense 벡터 배치 인코딩
-                    batch_dense_vectors = self.encoder.encode(batch_texts)
-                    all_dense_vectors.extend(batch_dense_vectors)
-                    
-                    # Sparse 벡터 배치 인코딩
-                    batch_sparse_vectors = []
-                    if self._sparse_model:
-                        try:
-                            for text in batch_texts:
-                                sparse_emb = next(self._sparse_model.embed([text]))
-                                batch_sparse_vectors.append(sparse_emb)
-                        except Exception as e:
-                            logger.warning(f"Sparse 벡터 생성 실패 (배치 {i//batch_size + 1}), Dense만 사용: {e}")
-                            batch_sparse_vectors = [None] * len(batch_texts)
-                    else:
-                        batch_sparse_vectors = [None] * len(batch_texts)
-                    all_sparse_vectors.extend(batch_sparse_vectors)
-                except Exception as e:
-                    logger.error(f"배치 인코딩 중 오류 발생 (배치 {i//batch_size + 1}): {str(e)}")
-                    # 배치 실패 시 개별 처리
-                    for text in batch_texts:
-                        try:
-                            dense_vector = self.encoder.encode(text)
-                            all_dense_vectors.append(dense_vector)
-                            
-                            sparse_emb = None
-                            if self._sparse_model:
-                                try:
-                                    sparse_emb = next(self._sparse_model.embed([text]))
-                                except Exception:
-                                    pass
-                            all_sparse_vectors.append(sparse_emb)
-                        except Exception as e2:
-                            logger.error(f"개별 인코딩 중 오류: {str(e2)}")
-                            all_dense_vectors.append(None)
-                            all_sparse_vectors.append(None)
-            
-            # 3. 포인트 생성
-            for review, dense_vector, sparse_emb in zip(valid_reviews, all_dense_vectors, all_sparse_vectors):
-                if dense_vector is None:
-                    results.append({
-                        "action": "error",
-                        "review_id": review.get("review_id"),
-                        "error": "벡터 인코딩 실패"
-                    })
-                    continue
-                
-                # : id 필드 우선 사용
-                review_id = review.get("id") or review.get("review_id")
-                # restaurant_id와 review_id를 문자열로 변환
-                point_id = self._get_point_id(str(restaurant_id), str(review_id))
-                
-                # 버전 관리
-                current_version = review.get("version", 1)
-                new_version = current_version + 1
-                
-                # Payload 구성 ( 컬럼명)
-                review_text = review.get("content") or review.get("review", "")
-                payload = {
-                    #  컬럼명
-                    "id": int(review_id) if review_id and str(review_id).isdigit() else review_id,
-                    "restaurant_id": int(restaurant_id) if restaurant_id and str(restaurant_id).isdigit() else restaurant_id,
-                    "member_id": review.get("member_id") or (int(review.get("user_id")) if review.get("user_id") and str(review.get("user_id")).isdigit() else review.get("user_id")),
-                    "group_id": review.get("group_id") or (int(review.get("group")) if review.get("group") and str(review.get("group")).isdigit() else review.get("group")),
-                    "subgroup_id": review.get("subgroup_id"),
-                    "content": review_text,
-                    "is_recommended": review.get("is_recommended"),
-                    "created_at": review.get("created_at") or review.get("datetime") or datetime.now().isoformat(),
-                    "updated_at": review.get("updated_at") or datetime.now().isoformat(),
-                    "deleted_at": review.get("deleted_at"),
-                    # 하위 호환성 필드
-                    "review_id": review_id,
-                    "restaurant_name": restaurant_name,
-                    "user_id": review.get("user_id") or review.get("member_id"),
-                    "group": review.get("group") or review.get("group_id"),
-                    "review": review_text,
-                    "datetime": review.get("created_at") or review.get("datetime"),
-                    "image_urls": extract_image_urls(review.get("images")),
-                    "version": new_version,
-                }
-                
-                # 벡터 구성 (하이브리드: Dense + Sparse)
-                if sparse_emb is not None:
-                    vector_dict = {
-                        "dense": dense_vector.tolist(),
-                        "sparse": models.SparseVector(
-                            indices=list(sparse_emb.indices),
-                            values=list(sparse_emb.values),
-                        )
-                    }
-                else:
-                    # Sparse 없으면 Dense만 (하위 호환성)
-                    vector_dict = dense_vector.tolist()
-                
-                # 컬렉션 형식에 맞게 벡터 정규화
-                normalized_vector = self._normalize_vector_for_collection(vector_dict)
-                if normalized_vector is None:
-                    logger.error(f"포인트 {point_id}: 벡터 정규화 실패")
-                    results.append({
-                        "action": "error",
-                        "review_id": review_id,
-                        "error": "벡터 정규화 실패"
-                    })
-                    continue
-                
-                point = models.PointStruct(
-                    id=point_id,
-                    vector=normalized_vector,
-                    payload=payload
-                )
-                
-                all_points.append(point)
-                point_id_to_review[point_id] = {
-                    "review": review,
-                    "new_version": new_version
-                }
-            
-            if not all_points:
-                return results
-            
-            # 4. 배치로 upsert (update_filter 없이 - 중복 방지만)
-            logger.info(f"총 {len(all_points)}개의 포인트를 배치로 upsert합니다.")
-            self.client.upsert(
-                collection_name=self.collection_name,
-                points=all_points
-            )
-            
-            # 5. 결과 확인 (기존 포인트 존재 여부 확인)
-            point_ids = [p.id for p in all_points]
-            existing_points = {}
-            
-            try:
-                retrieved = self.client.retrieve(
-                    collection_name=self.collection_name,
-                    ids=point_ids
-                )
-                for point in retrieved:
-                    existing_points[point.id] = point.payload
-            except Exception as e:
-                logger.warning(f"기존 포인트 조회 중 오류: {str(e)}")
-            
-            # 6. 결과 구성
-            for point_id in point_ids:
-                review_info = point_id_to_review[point_id]
-                review_id = review_info["review"]["review_id"]
-                new_version = review_info["new_version"]
-                
-                existing = point_id in existing_points
-                action = "updated" if existing else "inserted"
-                
-                results.append({
-                    "action": action,
-                    "review_id": review_id,
-                    "version": new_version,
-                    "point_id": point_id
-                })
-                
-                logger.debug(f"리뷰 {review_id}: {action} (version {new_version})")
-            
-            logger.info(f"✅ 배치 upsert 완료: {len(results)}개 리뷰 처리")
+        valid_entries: List[tuple] = []  # (review_dict, restaurant_id, restaurant_name)
+
+        for review in reviews_list:
+            review = _to_dict(review)
+            if not validate_review_data(review):
+                results.append({"action": "error", "review_id": review.get("id") or review.get("review_id") or "unknown", "error": "리뷰 데이터가 유효하지 않습니다."})
+                continue
+            rid = review.get("id") or review.get("review_id")
+            if not rid:
+                results.append({"action": "error", "review_id": "unknown", "error": "id (review_id)가 필요합니다."})
+                continue
+            text = review.get("content") or review.get("review", "")
+            if not text:
+                results.append({"action": "error", "review_id": rid, "error": "content가 필요합니다."})
+                continue
+            restaurant_id = review.get("restaurant_id")
+            restaurant_name = rest_map.get(restaurant_id) or rest_map.get(str(restaurant_id)) if restaurant_id is not None else ""
+            valid_entries.append((review, restaurant_id, restaurant_name or ""))
+
+        if not valid_entries:
             return results
-            
+
+        review_texts = [e[0].get("content") or e[0].get("review", "") for e in valid_entries]
+
+        # 3. 배치 인코딩 (Dense + Sparse)
+        logger.info(f"총 {len(valid_entries)}개 리뷰 배치 인코딩 (batch_size={batch_size}, Dense+Sparse)")
+        try:
+            if self._sparse_model is None:
+                self._sparse_model = SparseTextEmbedding(Config.SPARSE_EMBEDDING_MODEL)
+                logger.info(f"Sparse 벡터 모델 로드: {Config.SPARSE_EMBEDDING_MODEL}")
         except Exception as e:
-            logger.error(f"배치 upsert 중 오류: {str(e)}")
-            raise
+            logger.warning(f"Sparse 로드 실패, Dense만 사용: {e}")
+            self._sparse_model = None
+
+        all_dense, all_sparse = [], []
+        for i in range(0, len(review_texts), batch_size):
+            batch = review_texts[i:i + batch_size]
+            try:
+                dense = self.encoder.encode(batch)
+                if hasattr(dense, "shape") and len(getattr(dense, "shape", ())) == 2:
+                    for j in range(dense.shape[0]):
+                        all_dense.append(dense[j])
+                else:
+                    all_dense.extend(dense if isinstance(dense, (list, tuple)) else [dense])
+                sp = []
+                if self._sparse_model:
+                    for t in batch:
+                        try:
+                            sp.append(next(self._sparse_model.embed([t])))
+                        except Exception:
+                            sp.append(None)
+                else:
+                    sp = [None] * len(batch)
+                all_sparse.extend((sp + [None] * len(batch))[:len(batch)])
+            except Exception as e:
+                logger.error(f"배치 인코딩 오류: {e}")
+                for t in batch:
+                    try:
+                        dv = self.encoder.encode(t)
+                        all_dense.append(dv)
+                        all_sparse.append(next(self._sparse_model.embed([t])) if self._sparse_model else None)
+                    except Exception:
+                        all_dense.append(None)
+                        all_sparse.append(None)
+
+        # 4. 포인트 생성 (upload 형식 payload)
+        all_points = []
+        point_id_to_info: Dict[str, dict] = {}
+
+        def _iso(dt):
+            if dt is None:
+                return None
+            if isinstance(dt, datetime):
+                return dt.isoformat()
+            return dt if isinstance(dt, str) else str(dt)
+
+        for (review, restaurant_id, restaurant_name), dense_vector, sparse_emb in zip(valid_entries, all_dense, all_sparse):
+            if dense_vector is None:
+                results.append({"action": "error", "review_id": review.get("id") or review.get("review_id"), "error": "벡터 인코딩 실패"})
+                continue
+            review_id = review.get("id") or review.get("review_id")
+            point_id = self._get_point_id(str(restaurant_id or ""), str(review_id))
+            review_text = review.get("content") or review.get("review", "")
+            created_at = review.get("created_at") or review.get("datetime") or datetime.now().isoformat()
+            new_version = (review.get("version") or 1) + 1
+
+            payload = {
+                "id": int(review_id) if review_id and str(review_id).isdigit() else review_id,
+                "restaurant_id": str(restaurant_id) if restaurant_id is not None else None,
+                "content": review_text,
+                "created_at": _iso(created_at) if isinstance(created_at, datetime) else (created_at or datetime.now().isoformat()),
+                "review_id": review_id,
+                "restaurant_name": restaurant_name,
+                "review": review_text,
+                "datetime": review.get("created_at") or review.get("datetime"),
+                "image_urls": extract_image_urls(review.get("images")),
+                "version": new_version,
+            }
+
+            if sparse_emb is not None:
+                vector_dict = {"dense": (dense_vector.tolist() if hasattr(dense_vector, "tolist") else dense_vector), "sparse": models.SparseVector(indices=list(sparse_emb.indices), values=list(sparse_emb.values))}
+            else:
+                vector_dict = dense_vector.tolist() if hasattr(dense_vector, "tolist") else dense_vector
+
+            norm = self._normalize_vector_for_collection(vector_dict)
+            if norm is None:
+                results.append({"action": "error", "review_id": review_id, "error": "벡터 정규화 실패"})
+                continue
+
+            all_points.append(models.PointStruct(id=point_id, vector=norm, payload=payload))
+            point_id_to_info[point_id] = {"review_id": review_id, "new_version": new_version}
+
+        if not all_points:
+            return results
+
+        point_ids = [p.id for p in all_points]
+        existing_before = {}
+        try:
+            for p in self.client.retrieve(collection_name=self.collection_name, ids=point_ids):
+                existing_before[p.id] = True
+        except Exception as e:
+            logger.warning(f"기존 포인트 조회 오류: {e}")
+
+        self.client.upsert(collection_name=self.collection_name, points=all_points)
+
+        for pid in point_ids:
+            info = point_id_to_info.get(pid, {})
+            rid = info.get("review_id")
+            ver = info.get("new_version", 1)
+            action = "updated" if pid in existing_before else "inserted"
+            results.append({"action": action, "review_id": rid, "version": ver, "point_id": pid})
+            logger.debug(f"리뷰 {rid}: {action} (v{ver})")
+
+        logger.info(f"배치 upsert 완료: {len(results)}개")
+        return results
     
     def update_reviews_sentiment(
         self,
@@ -2184,17 +1838,10 @@ class VectorSearch:
             point_id = self._get_point_id(restaurant_id, review_id)
             point_ids_to_update.append(point_id)
             
-            # Payload 업데이트 (기존 payload는 유지하고 sentiment만 추가/업데이트)
+            # Payload 업데이트 (기존 payload는 유지하고 sentiment만 추가/업데이트, is_recommended 미사용)
             payload_update = {
                 "sentiment": label,  # "positive", "negative", "neutral"
             }
-            # 하위 호환성을 위해 is_recommended도 설정
-            if label == "positive":
-                payload_update["is_recommended"] = True
-            elif label == "negative":
-                payload_update["is_recommended"] = False
-            # neutral인 경우 is_recommended는 설정하지 않음 (기존 값 유지)
-            
             payloads_to_update.append(payload_update)
         
         if not point_ids_to_update:
@@ -2299,31 +1946,6 @@ def query_similar_reviews(
     """
     vector_search = VectorSearch(qdrant_client=qdrant_client, collection_name=collection_name)
     return vector_search.query_similar_reviews(query_text, restaurant_id, limit, min_score)
-
-
-def get_reviews_with_images(
-    qdrant_client: QdrantClient,
-    query_text: str,
-    collection_name: str = Config.COLLECTION_NAME,
-    limit: int = 10,
-    min_score: float = 0.0,
-) -> List[Dict]:
-    """
-    이미지가 있는 리뷰를 검색하는 편의 함수.
-    FastEmbed 기반 VectorSearch 사용 (encoder 인자 제거).
-    
-    Args:
-        qdrant_client: Qdrant 클라이언트
-        query_text: 검색 쿼리 텍스트
-        collection_name: 컬렉션 이름
-        limit: 반환할 최대 개수
-        min_score: 최소 유사도 점수
-        
-    Returns:
-        이미지 URL이 있는 리뷰 리스트
-    """
-    vector_search = VectorSearch(qdrant_client=qdrant_client, collection_name=collection_name)
-    return vector_search.get_reviews_with_images(query_text, limit, min_score)
 
 
 # ==================== Phase 1: 대표 벡터 기반 비교군 선정 ====================

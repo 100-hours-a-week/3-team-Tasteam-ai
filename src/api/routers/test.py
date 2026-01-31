@@ -79,7 +79,6 @@ async def generate_test_data(
     **응답 형식:**
     - `SentimentAnalysisBatchRequest` 형식
     - `restaurants`: 레스토랑별 리뷰 데이터 리스트
-    - `max_tokens_per_batch`: 기본값 4000
     
     **참고:**
     - 생성된 데이터는 바로 `/api/v1/sentiment/analyze/batch` 엔드포인트에 사용할 수 있습니다.
