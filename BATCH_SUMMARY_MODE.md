@@ -8,8 +8,8 @@
 
 | 설정 | 의미 | true일 때 | false(기본)일 때 |
 |------|------|-----------|------------------|
-| **search_async** (BATCH_SEARCH_ASYNC) | **aspect(service/price/food) 서치** 병렬 여부 | 레스토랑 1개 안에서 서치 3개를 `gather`로 병렬 | 서치 3개 순차 (service → price → food) |
-| **restaurant_async** (BATCH_RESTAURANT_ASYNC) | **음식점 간** 병렬 여부 | 여러 레스토랑을 `gather`로 동시 처리 | 레스토랑을 for 루프로 순차 처리 |
+| **search_async** (SUMMARY_SEARCH_ASYNC) | **aspect(service/price/food) 서치** 병렬 여부 | 레스토랑 1개 안에서 서치 3개를 `gather`로 병렬 | 서치 3개 순차 (service → price → food) |
+| **restaurant_async** (SUMMARY_RESTAURANT_ASYNC) | **음식점 간** 병렬 여부 | 여러 레스토랑을 `gather`로 동시 처리 | 레스토랑을 for 루프로 순차 처리 |
 
 - **둘 다 false**: 완전 순차 (기존 sync for 루프).
 - **둘 중 하나라도 true**: 비동기 경로 사용 (세마포어로 동시성 제한).
@@ -22,35 +22,35 @@
 
 | 설정 | 환경 변수 | 기본값 | 설명 |
 |------|-----------|--------|------|
-| **BATCH_SEARCH_ASYNC** (search_async) | `BATCH_SEARCH_ASYNC` | `false` | aspect(service/price/food) 서치 병렬 |
-| **BATCH_RESTAURANT_ASYNC** (restaurant_async) | `BATCH_RESTAURANT_ASYNC` | `false` | 음식점 간 병렬 |
+| **SUMMARY_SEARCH_ASYNC** (search_async) | `SUMMARY_SEARCH_ASYNC` | `false` | aspect(service/price/food) 서치 병렬 |
+| **SUMMARY_RESTAURANT_ASYNC** (restaurant_async) | `SUMMARY_RESTAURANT_ASYNC` | `false` | 음식점 간 병렬 |
 | **BATCH_SEARCH_CONCURRENCY** | `BATCH_SEARCH_CONCURRENCY` | `50` | 검색 동시 실행 상한 (비동기 경로에서 사용) |
 | **BATCH_LLM_CONCURRENCY** | `BATCH_LLM_CONCURRENCY` | `8` | LLM 동시 실행 상한 (비동기 경로에서 사용) |
-| **LLM_ASYNC** (llm_async) | `LLM_ASYNC` | `false` | `true`면 배치에서 LLM을 **진짜 비동기**로 호출 (httpx.AsyncClient / AsyncOpenAI). `false`면 `to_thread`로 동기 래핑 |
+| **SUMMARY_LLM_ASYNC** (llm_async) | `SUMMARY_LLM_ASYNC` | `false` | **Summary 배치** LLM: `true`=AsyncOpenAI/httpx.AsyncClient, `false`=asyncio.to_thread |
 
 예시 (`.env` 또는 환경 변수):
 
 ```bash
 # 완전 순차 (기본)
-BATCH_SEARCH_ASYNC=false
-BATCH_RESTAURANT_ASYNC=false
+SUMMARY_SEARCH_ASYNC=false
+SUMMARY_RESTAURANT_ASYNC=false
 
 # aspect만 병렬 (음식점은 순차)
-BATCH_SEARCH_ASYNC=true
-BATCH_RESTAURANT_ASYNC=false
+SUMMARY_SEARCH_ASYNC=true
+SUMMARY_RESTAURANT_ASYNC=false
 
 # 음식점만 병렬 (aspect는 순차)
-BATCH_SEARCH_ASYNC=false
-BATCH_RESTAURANT_ASYNC=true
+SUMMARY_SEARCH_ASYNC=false
+SUMMARY_RESTAURANT_ASYNC=true
 
 # 둘 다 병렬
-BATCH_SEARCH_ASYNC=true
-BATCH_RESTAURANT_ASYNC=true
+SUMMARY_SEARCH_ASYNC=true
+SUMMARY_RESTAURANT_ASYNC=true
 BATCH_SEARCH_CONCURRENCY=50
 BATCH_LLM_CONCURRENCY=8
 
-# LLM도 비동기(llm_async) 사용
-LLM_ASYNC=true
+# Summary 배치 LLM 비동기
+SUMMARY_LLM_ASYNC=true
 ```
 
 ---
@@ -61,10 +61,10 @@ LLM_ASYNC=true
 
 | 단계 | 음식점 간 | 벡터 검색 | LLM | 설정 예 |
 |------|-----------|-----------|-----|--------|
-| **1** | 동기 | 동기 | 동기 | `BATCH_SEARCH_ASYNC=false`, `BATCH_RESTAURANT_ASYNC=false`, `LLM_ASYNC=false` |
-| **2** | 동기 | 비동기 | 동기 | `BATCH_SEARCH_ASYNC=true`, `BATCH_RESTAURANT_ASYNC=false`, `LLM_ASYNC=false` |
-| **3** | 동기 | 비동기 | 비동기 | `BATCH_SEARCH_ASYNC=true`, `BATCH_RESTAURANT_ASYNC=false`, `LLM_ASYNC=true` |
-| **4** | 비동기 | 비동기 | 비동기 | `BATCH_SEARCH_ASYNC=true`, `BATCH_RESTAURANT_ASYNC=true`, `LLM_ASYNC=true` |
+| **1** | 동기 | 동기 | 동기 | `SUMMARY_SEARCH_ASYNC=false`, `SUMMARY_RESTAURANT_ASYNC=false`, `SUMMARY_LLM_ASYNC=false` |
+| **2** | 동기 | 비동기 | 동기 | `SUMMARY_SEARCH_ASYNC=true`, `SUMMARY_RESTAURANT_ASYNC=false`, `SUMMARY_LLM_ASYNC=false` |
+| **3** | 동기 | 비동기 | 비동기 | `SUMMARY_SEARCH_ASYNC=true`, `SUMMARY_RESTAURANT_ASYNC=false`, `SUMMARY_LLM_ASYNC=true` |
+| **4** | 비동기 | 비동기 | 비동기 | `SUMMARY_SEARCH_ASYNC=true`, `SUMMARY_RESTAURANT_ASYNC=true`, `SUMMARY_LLM_ASYNC=true` |
 
 ---
 
@@ -112,7 +112,7 @@ LLM_ASYNC=true
 
 ## 4. search_async=false, restaurant_async=false (완전 순차)
 
-- `Config.BATCH_SEARCH_ASYNC`와 `Config.BATCH_RESTAURANT_ASYNC`가 **둘 다 False**일 때 이 경로로 동작합니다.
+- `Config.SUMMARY_SEARCH_ASYNC`와 `Config.SUMMARY_RESTAURANT_ASYNC`가 **둘 다 False**일 때 이 경로로 동작합니다.
 - `request.restaurants`를 `for` 루프로 순회합니다.
 - 각 레스토랑에 대해:
   1. service → price → food 순으로 `query_hybrid_search` 3회 **순차** 호출
@@ -124,13 +124,13 @@ LLM_ASYNC=true
 
 ## 5. search_async 또는 restaurant_async 중 하나라도 true (비동기 경로)
 
-- **진입 조건**: `Config.BATCH_SEARCH_ASYNC or Config.BATCH_RESTAURANT_ASYNC`이면 `_batch_summarize_async` 사용.
+- **진입 조건**: `Config.SUMMARY_SEARCH_ASYNC or Config.SUMMARY_RESTAURANT_ASYNC`이면 `_batch_summarize_async` 사용.
 - **restaurant_async**: `True`면 `asyncio.gather(*(one(rd) for rd in restaurants))`로 음식점 병렬, `False`면 `for rd in restaurants: await one(rd)`로 음식점 순차.
 - **레스토랑 1개 처리** (`_process_one_restaurant_async`):
   1. **서치 3개**: **search_async=true**면 `asyncio.gather(do_one_search(service), do_one_search(price), do_one_search(food))`. **search_async=false**면 `for (seeds, name): await do_one_search(seeds, name)` 순차.
-  2. **요약 1회**: `Config.LLM_ASYNC`에 따라 분기.
-     - **LLM_ASYNC=true (llm_async)**: `await summarize_aspects_new_async(...)` — RunPod은 `httpx.AsyncClient`, OpenAI는 `AsyncOpenAI`로 **진짜 비동기** 호출.
-     - **LLM_ASYNC=false (기본)**: `asyncio.to_thread(summarize_aspects_new, ...)` — 동기 함수를 스레드에서 실행.
+  2. **요약 1회**: `Config.SUMMARY_LLM_ASYNC`에 따라 분기.
+     - **SUMMARY_LLM_ASYNC=true**: `await summarize_aspects_new_async(...)` — RunPod은 `httpx.AsyncClient`, OpenAI는 `AsyncOpenAI`로 **진짜 비동기** 호출.
+     - **SUMMARY_LLM_ASYNC=false (기본)**: `asyncio.to_thread(summarize_aspects_new, ...)` — 동기 함수를 스레드에서 실행.
   3. `_build_category_result`로 응답용 dict 생성 후 반환.
 - Qdrant 호출은 동기이므로 `asyncio.to_thread`로 실행. LLM은 **llm_async** 켜면 httpx/AsyncOpenAI, 끄면 to_thread.
 - **llm_async 지원**: RunPod(httpx.AsyncClient), OpenAI(AsyncOpenAI). vLLM 직접/로컬은 llm_async 시 NotImplementedError.
@@ -151,22 +151,22 @@ LLM_ASYNC=true
 
 ## 7. 관련 파일
 
-- `src/config.py`: `BATCH_SEARCH_ASYNC`, `BATCH_RESTAURANT_ASYNC`, `BATCH_SEARCH_CONCURRENCY`, `BATCH_LLM_CONCURRENCY`, `LLM_ASYNC`
-- `src/api/routers/llm.py`: 배치 엔드포인트 분기, `_batch_summarize_async`, `_process_one_restaurant_async`, `_build_category_result` (LLM_ASYNC 분기)
+- `src/config.py`: `SUMMARY_SEARCH_ASYNC`, `SUMMARY_RESTAURANT_ASYNC`, `BATCH_SEARCH_CONCURRENCY`, `BATCH_LLM_CONCURRENCY`, `SUMMARY_LLM_ASYNC`
+- `src/api/routers/llm.py`: 배치 엔드포인트 분기, `_batch_summarize_async`, `_process_one_restaurant_async`, `_build_category_result` (SUMMARY_LLM_ASYNC 분기)
 - `src/llm_utils.py`: `_call_runpod_async`, `_generate_with_local_queue_async`, `_generate_response_async` (httpx / AsyncOpenAI)
 - `src/summary_pipeline.py`: `summarize_aspects_new_async`
-- `.env.example`: 배치·LLM_ASYNC 관련 환경 변수 예시 주석
+- `.env.example`: 배치·SUMMARY_LLM_ASYNC 관련 환경 변수 예시 주석
 
 ---
 
-## 8. llm_async (LLM_ASYNC) 요약
+## 8. llm_async (SUMMARY_LLM_ASYNC) 요약
 
-- **off (기본)**: 배치에서 요약은 `asyncio.to_thread(summarize_aspects_new, ...)` — 동기 LLM을 스레드에서 실행.
-- **on**: 배치에서 요약은 `await summarize_aspects_new_async(...)` — `_generate_response_async`가 RunPod이면 `httpx.AsyncClient`, OpenAI면 `AsyncOpenAI`로 비동기 호출. vLLM 직접/로컬은 미지원(NotImplementedError).
+- **off (기본)**: Summary 배치에서 요약은 `asyncio.to_thread(summarize_aspects_new, ...)` — 동기 LLM을 스레드에서 실행.
+- **on**: Summary 배치에서 요약은 `await summarize_aspects_new_async(...)` — `_generate_response_async`가 RunPod이면 `httpx.AsyncClient`, OpenAI면 `AsyncOpenAI`로 비동기 호출. vLLM 직접/로컬은 미지원(NotImplementedError).
 
 ---
 
 ## 9. 참고: async_batch.md
 
 설계 배경(서치/LLM 세마포어 분리, `to_thread` 사용, 음식점 간 병렬)은 `async_batch.md`에 정리되어 있습니다.  
-현재 구현은 **search_async**(BATCH_SEARCH_ASYNC)로 aspect 서치 병렬/순차, **restaurant_async**(BATCH_RESTAURANT_ASYNC)로 음식점 간 병렬/순차를 각각 제어하고, 요약은 `LLM_ASYNC`에 따라 **llm_async**(httpx/AsyncOpenAI) 또는 **to_thread(동기)** 로 선택합니다.
+현재 구현은 **search_async**(SUMMARY_SEARCH_ASYNC)로 aspect 서치 병렬/순차, **restaurant_async**(SUMMARY_RESTAURANT_ASYNC)로 음식점 간 병렬/순차를 각각 제어하고, 요약은 `SUMMARY_LLM_ASYNC`에 따라 **llm_async**(httpx/AsyncOpenAI) 또는 **to_thread(동기)** 로 선택합니다.

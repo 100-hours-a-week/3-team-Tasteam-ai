@@ -2,7 +2,10 @@
 감성 분석 모듈 ()
 """
 
+import asyncio
+import json
 import logging
+import os
 from typing import Dict, List, Optional, Any, Tuple, Union
 
 from .config import Config
@@ -77,37 +80,24 @@ class SentimentAnalyzer:
             return "negative"
         return None  # 알 수 없는 경우 None 반환 (score 기반 판정에서 처리)
     
-    def _classify_contents(
-        self, 
+    def _classify_with_hf_only(
+        self,
         content_list: List[str],
         reviews: Optional[List[Union[Dict, Any]]] = None,
-    ) -> Tuple[int, int, int, int, List[Optional[str]]]:
-        """
-        새로운 파이프라인: HuggingFace 모델로 1차 분류 후, negative만 LLM으로 재판정
-        
-        Args:
-            content_list: 리뷰 텍스트 리스트
-            reviews: 리뷰 딕셔너리 리스트 (sentiment 라벨 부여용, 선택)
-        
-        Returns:
-            (positive_count, negative_count, neutral_count, total_count, sentiment_labels)
-            sentiment_labels: 각 리뷰의 sentiment 라벨 리스트 ("positive", "negative", "neutral", None)
-        """
+    ) -> Tuple[int, int, int, int, List[Optional[str]], List[Dict[str, Any]]]:
+        """HuggingFace 1차 분류만 (LLM 없음). Returns: (pos, neg, neu, total, labels, neg_for_llm)."""
         if not content_list:
-            return 0, 0, 0, 0, []
-        
+            return 0, 0, 0, 0, [], []
+
         pipe = self._get_sentiment_pipeline()
-        
         positive_count = 0
         negative_count = 0
         neutral_count = 0
         total_count = len(content_list)
         sentiment_labels: List[Optional[str]] = []
-        
-        # 1차 분류: HuggingFace 모델로 전체 리뷰 분류
+        negative_reviews_for_llm: List[Dict[str, Any]] = []
         batch_size = getattr(Config, "LLM_BATCH_SIZE", 10)
-        negative_reviews_for_llm = []  # LLM 재판정 대상
-        
+
         for i in range(0, len(content_list), batch_size):
             batch = content_list[i : i + batch_size]
             batch_indices = list(range(i, min(i + batch_size, len(content_list))))
@@ -145,90 +135,150 @@ class SentimentAnalyzer:
                             "review": review_obj
                         })
                         negative_count += 1
-        
-        # 2차 분류: Negative로 분류된 리뷰만 LLM으로 재판정
-        if negative_reviews_for_llm:
+
+        return positive_count, negative_count, neutral_count, total_count, sentiment_labels, negative_reviews_for_llm
+
+    def _apply_llm_reclassify_sync(
+        self,
+        negative_reviews_for_llm: List[Dict[str, Any]],
+        sentiment_labels: List[Optional[str]],
+        positive_count: int,
+        negative_count: int,
+        neutral_count: int,
+    ) -> Tuple[int, int, int, List[Optional[str]]]:
+        """LLM 재판정 (동기)."""
+        from openai import OpenAI
+        client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        llm_input = "\n".join([
+            f'{item["review"].get("id") if item["review"] else item["index"]}\t{item["content"]}'
+            for item in negative_reviews_for_llm
+        ])
+        response = client.chat.completions.create(
+            model=Config.OPENAI_MODEL,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a sentiment classification engine.\n"
+                        "Each input line is formatted as: id<TAB>review.\n"
+                        "Classify sentiment as one of: positive, negative, neutral.\n"
+                        "Return ONLY a valid JSON array like:\n"
+                        '[{"id":105,"sentiment":"positive"}]'
+                    )
+                },
+                {"role": "user", "content": llm_input}
+            ],
+            temperature=0
+        )
+        raw = response.choices[0].message.content.strip()
+        raw = raw[raw.find("["): raw.rfind("]")+1]
+        results = json.loads(raw)
+        sentiment_map = {x["id"]: x["sentiment"] for x in results}
+        for item in negative_reviews_for_llm:
+            idx = item["index"]
+            review_id = item["review"].get("id") if item["review"] else idx
+            if review_id in sentiment_map:
+                new_sentiment = sentiment_map[review_id]
+                sentiment_labels[idx] = new_sentiment
+                if new_sentiment == "positive":
+                    positive_count += 1
+                    negative_count -= 1
+                elif new_sentiment == "neutral":
+                    neutral_count += 1
+                    negative_count -= 1
+        logger.info(f"LLM 재판정 완료: {len(negative_reviews_for_llm)}개 리뷰 중 {len(results)}개 재분류")
+        return positive_count, negative_count, neutral_count, sentiment_labels
+
+    async def _apply_llm_reclassify_async(
+        self,
+        negative_reviews_for_llm: List[Dict[str, Any]],
+        sentiment_labels: List[Optional[str]],
+        positive_count: int,
+        negative_count: int,
+        neutral_count: int,
+    ) -> Tuple[int, int, int, List[Optional[str]]]:
+        """LLM 재판정 (비동기)."""
+        from openai import AsyncOpenAI
+        client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        llm_input = "\n".join([
+            f'{item["review"].get("id") if item["review"] else item["index"]}\t{item["content"]}'
+            for item in negative_reviews_for_llm
+        ])
+        response = await client.chat.completions.create(
+            model=Config.OPENAI_MODEL,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a sentiment classification engine.\n"
+                        "Each input line is formatted as: id<TAB>review.\n"
+                        "Classify sentiment as one of: positive, negative, neutral.\n"
+                        "Return ONLY a valid JSON array like:\n"
+                        '[{"id":105,"sentiment":"positive"}]'
+                    )
+                },
+                {"role": "user", "content": llm_input}
+            ],
+            temperature=0
+        )
+        raw = response.choices[0].message.content.strip()
+        raw = raw[raw.find("["): raw.rfind("]")+1]
+        results = json.loads(raw)
+        sentiment_map = {x["id"]: x["sentiment"] for x in results}
+        for item in negative_reviews_for_llm:
+            idx = item["index"]
+            review_id = item["review"].get("id") if item["review"] else idx
+            if review_id in sentiment_map:
+                new_sentiment = sentiment_map[review_id]
+                sentiment_labels[idx] = new_sentiment
+                if new_sentiment == "positive":
+                    positive_count += 1
+                    negative_count -= 1
+                elif new_sentiment == "neutral":
+                    neutral_count += 1
+                    negative_count -= 1
+        logger.info(f"LLM 재판정 완료: {len(negative_reviews_for_llm)}개 리뷰 중 {len(results)}개 재분류")
+        return positive_count, negative_count, neutral_count, sentiment_labels
+
+    @staticmethod
+    def _assign_labels_to_reviews(
+        reviews: Optional[List[Union[Dict, Any]]],
+        sentiment_labels: List[Optional[str]],
+    ) -> None:
+        """리뷰 객체에 sentiment 라벨 부여 (in-place)."""
+        if reviews is None or len(reviews) != len(sentiment_labels):
+            return
+        for i, (review, label) in enumerate(zip(reviews, sentiment_labels)):
+            if not label:
+                continue
+            if hasattr(review, 'model_dump'):
+                review_dict = review.model_dump()
+                review_dict["sentiment"] = label
+                reviews[i] = review_dict
+            elif hasattr(review, 'dict'):
+                review_dict = review.dict()
+                review_dict["sentiment"] = label
+                reviews[i] = review_dict
+            elif isinstance(review, dict):
+                review["sentiment"] = label
+
+    def _classify_contents(
+        self,
+        content_list: List[str],
+        reviews: Optional[List[Union[Dict, Any]]] = None,
+    ) -> Tuple[int, int, int, int, List[Optional[str]]]:
+        """HuggingFace 1차 분류 + LLM 재판정 (동기, analyze/배치용)."""
+        pos, neg, neu, total, labels, neg_for_llm = self._classify_with_hf_only(content_list, reviews)
+        if neg_for_llm:
             try:
-                import os
-                import json
-                from openai import OpenAI
-                
-                openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-                
-                # LLM 입력 문자열 생성
-                llm_input = "\n".join([
-                    f'{item["review"].get("id") if item["review"] else item["index"]}\t{item["content"]}'
-                    for item in negative_reviews_for_llm
-                ])
-                
-                # LLM 호출
-                response = openai_client.chat.completions.create(
-                    model="gpt-4o-mini",
-                    messages=[
-                        {
-                            "role": "system",
-                            "content": (
-                                "You are a sentiment classification engine.\n"
-                                "Each input line is formatted as: id<TAB>review.\n"
-                                "Classify sentiment as one of: positive, negative, neutral.\n"
-                                "Return ONLY a valid JSON array like:\n"
-                                '[{"id":105,"sentiment":"positive"}]'
-                            )
-                        },
-                        {"role": "user", "content": llm_input}
-                    ],
-                    temperature=0
+                pos, neg, neu, labels = self._apply_llm_reclassify_sync(
+                    neg_for_llm, labels, pos, neg, neu
                 )
-                
-                raw = response.choices[0].message.content.strip()
-                raw = raw[raw.find("["): raw.rfind("]")+1]  # JSON 방어
-                results = json.loads(raw)
-                
-                # id -> sentiment 맵 생성
-                sentiment_map = {x["id"]: x["sentiment"] for x in results}
-                
-                # Negative로 분류된 리뷰들의 sentiment 업데이트
-                for item in negative_reviews_for_llm:
-                    idx = item["index"]
-                    review_id = item["review"].get("id") if item["review"] else idx
-                    
-                    if review_id in sentiment_map:
-                        new_sentiment = sentiment_map[review_id]
-                        sentiment_labels[idx] = new_sentiment
-                        
-                        # 카운트 조정
-                        if new_sentiment == "positive":
-                            positive_count += 1
-                            negative_count -= 1
-                        elif new_sentiment == "neutral":
-                            neutral_count += 1
-                            negative_count -= 1
-                        # negative는 그대로 유지
-                
-                logger.info(f"LLM 재판정 완료: {len(negative_reviews_for_llm)}개 리뷰 중 {len(results)}개 재분류")
             except Exception as e:
                 logger.warning(f"LLM 재판정 실패: {e}. 1차 분류 결과를 사용합니다.")
-        
-        # 리뷰 객체에 sentiment 라벨 부여
-        # ReviewModel (Pydantic)인 경우 딕셔너리로 변환 후 수정
-        if reviews is not None and len(reviews) == len(sentiment_labels):
-            for i, (review, label) in enumerate(zip(reviews, sentiment_labels)):
-                if label:  # positive, negative, neutral 모두 부여
-                    # Pydantic 모델인 경우 딕셔너리로 변환
-                    if hasattr(review, 'model_dump'):
-                        review_dict = review.model_dump()
-                        review_dict["sentiment"] = label
-                        reviews[i] = review_dict
-                    elif hasattr(review, 'dict'):
-                        review_dict = review.dict()
-                        review_dict["sentiment"] = label
-                        reviews[i] = review_dict
-                    elif isinstance(review, dict):
-                        review["sentiment"] = label
-                    # Pydantic 모델이고 수정이 필요한 경우는 이미 처리됨
-        
-        return positive_count, negative_count, neutral_count, total_count, sentiment_labels
-    
+        self._assign_labels_to_reviews(reviews, labels)
+        return pos, neg, neu, total, labels
+
     def analyze(
         self,
         reviews: Optional[List[Union[Dict, Any]]] = None,
@@ -359,14 +409,111 @@ class SentimentAnalyzer:
     
     async def analyze_async(
         self,
-        reviews: List[Union[Dict, Any]],
-        restaurant_id: int,
+        reviews: Optional[List[Union[Dict, Any]]] = None,
+        restaurant_id: Optional[int] = None,
     ) -> Dict:
         """
-        비동기 엔드포인트 호환을 위한 wrapper.
+        비동기 엔드포인트용. SENTIMENT_CLASSIFIER_USE_THREAD/SENTIMENT_LLM_ASYNC에 따라 분기.
+        기본값(둘 다 false)이면 analyze() 호출.
         """
-        # 현재 구현은 sync지만, 엔드포인트는 async라 wrapper 유지
-        return self.analyze(reviews=reviews, restaurant_id=restaurant_id)
+        if not Config.SENTIMENT_CLASSIFIER_USE_THREAD and not Config.SENTIMENT_LLM_ASYNC:
+            return self.analyze(reviews=reviews, restaurant_id=restaurant_id)
+
+        # 토글이 켜진 경우: 비동기/스레드 격리 경로
+        if restaurant_id is None:
+            return {
+                "restaurant_id": None,
+                "positive_count": 0,
+                "negative_count": 0,
+                "neutral_count": 0,
+                "total_count": 0,
+                "positive_ratio": 0,
+                "negative_ratio": 0,
+                "neutral_ratio": 0,
+            }
+        if reviews is None:
+            if not self.vector_search:
+                return {
+                    "restaurant_id": restaurant_id,
+                    "positive_count": 0,
+                    "negative_count": 0,
+                    "neutral_count": 0,
+                    "total_count": 0,
+                    "positive_ratio": 0,
+                    "negative_ratio": 0,
+                    "neutral_ratio": 0,
+                }
+            if Config.ENABLE_SENTIMENT_SAMPLING:
+                limit = Config.SENTIMENT_RECENT_TOP_K
+                reviews = self.vector_search.get_recent_restaurant_reviews(restaurant_id=restaurant_id, limit=limit)
+            else:
+                reviews = self.vector_search.get_restaurant_reviews(str(restaurant_id))
+        if not reviews:
+            return {
+                "restaurant_id": restaurant_id,
+                "positive_count": 0,
+                "negative_count": 0,
+                "neutral_count": 0,
+                "total_count": 0,
+                "positive_ratio": 0,
+                "negative_ratio": 0,
+                "neutral_ratio": 0,
+            }
+        reviews_dict = []
+        for r in reviews:
+            if hasattr(r, 'model_dump'):
+                reviews_dict.append(r.model_dump())
+            elif hasattr(r, 'dict'):
+                reviews_dict.append(r.dict())
+            elif isinstance(r, dict):
+                reviews_dict.append(r)
+        content_list = extract_content_list(reviews_dict)
+        if not content_list:
+            return {
+                "restaurant_id": restaurant_id,
+                "positive_count": 0,
+                "negative_count": 0,
+                "neutral_count": 0,
+                "total_count": len(reviews),
+                "positive_ratio": 0,
+                "negative_ratio": 0,
+                "neutral_ratio": 0,
+            }
+        logger.info(f"총 {len(content_list)}개의 리뷰를 sentiment 모델로 분류합니다 (restaurant_id: {restaurant_id}).")
+        if Config.SENTIMENT_CLASSIFIER_USE_THREAD:
+            hf_result = await asyncio.to_thread(
+                self._classify_with_hf_only, content_list, reviews_dict
+            )
+        else:
+            hf_result = self._classify_with_hf_only(content_list, reviews_dict)
+        pos, neg, neu, total, labels, neg_for_llm = hf_result
+        if neg_for_llm:
+            try:
+                if Config.SENTIMENT_LLM_ASYNC:
+                    pos, neg, neu, labels = await self._apply_llm_reclassify_async(
+                        neg_for_llm, labels, pos, neg, neu
+                    )
+                else:
+                    pos, neg, neu, labels = self._apply_llm_reclassify_sync(
+                        neg_for_llm, labels, pos, neg, neu
+                    )
+            except Exception as e:
+                logger.warning(f"LLM 재판정 실패: {e}. 1차 분류 결과를 사용합니다.")
+        self._assign_labels_to_reviews(reviews_dict, labels)
+        total_with_sentiment = pos + neg
+        positive_ratio = int(round((pos / total_with_sentiment) * 100)) if total_with_sentiment > 0 else 0
+        negative_ratio = int(round((neg / total_with_sentiment) * 100)) if total_with_sentiment > 0 else 0
+        neutral_ratio = int(round((neu / total) * 100)) if total > 0 else 0
+        return {
+            "restaurant_id": restaurant_id,
+            "positive_count": pos,
+            "negative_count": neg,
+            "neutral_count": neu,
+            "total_count": total,
+            "positive_ratio": positive_ratio,
+            "negative_ratio": negative_ratio,
+            "neutral_ratio": neutral_ratio,
+        }
     
     async def analyze_multiple_restaurants_async(
         self,

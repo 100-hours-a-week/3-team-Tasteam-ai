@@ -113,7 +113,8 @@
 
 5. **comparison_display**
    - `format_comparison_display(lift_service, lift_price, n_reviews)`
-   - 수치(lift %)는 코드 고정 생성. 해석은 표본 수별 톤 적용.  
+   - 수치(lift %)는 코드 고정 생성. 해석은 표본 수별 톤 적용.
+   - `COMPARISON_ASYNC=true`면 service/price LLM 병렬(asyncio.gather), `false`(기본)면 순차 호출.  
    - 퍼센트 + 해석: `"서비스 만족도는 평균보다 약 N% 높아요. 전반적으로 서비스 평가가 {tone}입니다."`  
    - 표본 톤: n≥50 → "좋은 편", 20≤n<50 → "상대적으로 좋은 편(표본 중간)", n<20 → "경향이 보이나 표본이 적어요"
 
@@ -322,6 +323,12 @@
 | `COLLECTION_NAME` | 리뷰 컬렉션 이름 |
 | `QDRANT_URL` | `:memory:`, `http://...`, on-disk 경로 |
 | `ALL_AVERAGE_ASPECT_DATA_PATH` | Comparison 전체 평균용 파일 (TSV/JSON) |
+| `COMPARISON_ASYNC` | Comparison LLM: true면 service/price 병렬(asyncio.gather), false면 순차(기본값) |
+| `SUMMARY_SEARCH_ASYNC` | Summary 배치: aspect(service/price/food) 서치 병렬 |
+| `SUMMARY_RESTAURANT_ASYNC` | Summary 배치: 음식점 간 병렬 |
+| `SUMMARY_LLM_ASYNC` | Summary 배치: LLM 호출. true=AsyncOpenAI/httpx, false=to_thread |
+| `SENTIMENT_CLASSIFIER_USE_THREAD` | Sentiment: true면 HF 분류기 asyncio.to_thread(블로킹 격리), false면 메인 스레드(기본값) |
+| `SENTIMENT_LLM_ASYNC` | Sentiment: true면 LLM 재판정 AsyncOpenAI, false면 동기(기본값) |
 | `ALL_AVERAGE_SERVICE_RATIO`, `ALL_AVERAGE_PRICE_RATIO` | 전체 평균 폴백 |
 | `ASPECT_SEEDS_FILE` | Summary aspect seed JSON (선택) |
 | `SKIP_MIN_INTERVAL_SECONDS` | SKIP 최소 간격(초) |
@@ -336,8 +343,8 @@
 |-----|------------|------------|
 | `POST /api/v1/llm/comparison` | Comparison | `ComparisonPipeline.compare` → `comparison_pipeline` (비율, lift, format_comparison_display). `comparisons`: `[{category, lift_percentage}]` |
 | `POST /api/v1/llm/summarize` | Summary | **기본 시드만** (`DEFAULT_*_SEEDS`) → `query_hybrid_search` → `summarize_aspects_new` |
-| `POST /api/v1/llm/summarize/batch` | Summary (배치) | BATCH_SEARCH_ASYNC(aspect 병렬), BATCH_RESTAURANT_ASYNC(음식점 간 병렬). 시드 1회 로드. 상세: [BATCH_SUMMARY_MODE.md](BATCH_SUMMARY_MODE.md) |
-| `POST /api/v1/sentiment/analyze` | Sentiment | `SentimentAnalyzer.analyze` → `_classify_contents` (HF + LLM 재판정) |
+| `POST /api/v1/llm/summarize/batch` | Summary (배치) | SUMMARY_SEARCH_ASYNC(aspect 병렬), SUMMARY_RESTAURANT_ASYNC(음식점 간 병렬). 시드 1회 로드. 상세: [BATCH_SUMMARY_MODE.md](BATCH_SUMMARY_MODE.md) |
+| `POST /api/v1/sentiment/analyze` | Sentiment | `analyze_async` → `_classify_with_hf_only` + LLM 재판정. SENTIMENT_CLASSIFIER_USE_THREAD(to_thread), SENTIMENT_LLM_ASYNC 분기 |
 | `POST /api/v1/sentiment/analyze/batch` | Sentiment (배치) | `analyze_multiple_restaurants_async` → `analyze` |
 | `POST /api/v1/vector/search/similar` | Vector | `query_similar_reviews` (Dense, named일 때 `using="dense"`) |
 | `POST /api/v1/vector/upload` | Vector | `prepare_points`, `upload_collection`, `upsert_restaurant_vector` |
@@ -428,7 +435,7 @@
 
 - 요청: `restaurants` 배열(각 항목: `restaurant_id`), **`limit`**(선택, 전체 공통, 기본 10), **`min_score`**(선택, 전체 공통, 기본 0.0).
 - 응답: **`results` 배열**. 각 요소는 **SummaryDisplayResponse** 형식(단일 debug=false와 동일).
-- **배치 (Config)**: `BATCH_SEARCH_ASYNC`=aspect(service/price/food) 서치 병렬, `BATCH_RESTAURANT_ASYNC`=음식점 간 병렬. 둘 다 false면 완전 순차. 동시성: `BATCH_SEARCH_CONCURRENCY`, `BATCH_LLM_CONCURRENCY`. 자세한 내용은 [BATCH_SUMMARY_MODE.md](BATCH_SUMMARY_MODE.md) 참고.
+- **배치 (Config)**: `SUMMARY_SEARCH_ASYNC`=aspect(service/price/food) 서치 병렬, `SUMMARY_RESTAURANT_ASYNC`=음식점 간 병렬. 둘 다 false면 완전 순차. `SUMMARY_LLM_ASYNC`=LLM 호출 비동기(to_thread vs AsyncOpenAI). 동시성: `BATCH_SEARCH_CONCURRENCY`, `BATCH_LLM_CONCURRENCY`. 자세한 내용은 [BATCH_SUMMARY_MODE.md](BATCH_SUMMARY_MODE.md) 참고.
 
 ```json
 // 요청 (restaurants + limit/min_score는 전체 레스토랑에 일괄 적용)

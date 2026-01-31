@@ -204,7 +204,7 @@ async def summarize_aspects_new_async(
     per_category_max: int = 8,
 ) -> Dict:
     """
-    summarize_aspects_new의 비동기 버전. Config.LLM_ASYNC=True(llm_async)일 때 배치에서 사용.
+    summarize_aspects_new의 비동기 버전. Config.SUMMARY_LLM_ASYNC=True(llm_async)일 때 배치에서 사용.
     httpx.AsyncClient / AsyncOpenAI로 LLM 호출.
     """
     payload = {
