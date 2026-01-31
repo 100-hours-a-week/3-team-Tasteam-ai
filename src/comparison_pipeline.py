@@ -1,6 +1,6 @@
 """
-Strength 파이프라인 모듈 (프로덕션 전용, src 자체 로직).
-통계적 비율 기반 차별점 계산 및 LLM 설명 생성.
+Comparison 파이프라인 모듈 (프로덕션 전용, src 자체 로직).
+통계적 비율 기반 다른 음식점들과의 비교 및 LLM 설명 생성.
 - final_pipeline / hybrid_search.final_pipeline 미의존.
 - Spark 사용. 비-Spark(Kiwi만) 대체 구현 없음.
 """
@@ -31,7 +31,7 @@ def _get_spark() -> "SparkSession":
     global _spark_session
     if _spark_session is None and SPARK_AVAILABLE:
         _spark_session = (
-            SparkSession.builder.appName("strength_pipeline")
+            SparkSession.builder.appName("comparison_pipeline")
             .master("local[6]")
             .config("spark.driver.memory", "2g")
             .config("spark.driver.bindAddress", "127.0.0.1")
@@ -416,16 +416,44 @@ def calculate_single_restaurant_ratios(
     return {"service": round(out["service"], 2), "price": round(out["price"], 2)}
 
 
-def format_strength_display(lift_service: float, lift_price: float) -> List[str]:
+def _tone_by_sample(n_reviews: int) -> str:
     """
-    lift 퍼센트 → strength_display 템플릿 리스트.
-    multiple = 1 + lift/100, "판교 평균의 {multiple:.2f}배 수준".
+    표본 수에 따른 해석 톤. (과장 방지, 표본 작으면 톤 다운)
+    - n ≥ 50: "좋은 편"
+    - 20 ≤ n < 50: "상대적으로 좋은 편(표본 중간)"
+    - n < 20: "경향이 보이나 표본이 적어요"
     """
-    multiple_service = 1 + lift_service / 100
-    multiple_price = 1 + lift_price / 100
+    if n_reviews >= 50:
+        logger.info("표본 리뷰수 n=%d >= 50이므로 톤 '좋은 편' 사용", n_reviews)
+        return "좋은 편"
+    if n_reviews >= 20:
+        logger.info("표본 리뷰수 20 <= n=%d < 50이므로 톤 '상대적으로 좋은 편' 사용", n_reviews)
+        return "상대적으로 좋은 편(표본 중간)"
+    logger.info("표본 리뷰수 n=%d < 20이므로 톤 '경향이 보이나 표본이 적어요' 사용", n_reviews)
+    return "경향이 보이나 표본이 적어요"
+
+
+def format_comparison_display(
+    lift_service: float,
+    lift_price: float,
+    n_reviews: int,
+) -> List[str]:
+    """
+    퍼센트 + 해석 형식. 수치(lift %)는 코드 고정 생성, 해석은 표본 수별 톤 적용.
+    - lift > 0: "서비스 만족도는 평균보다 약 N% 높아요. 전반적으로 서비스 평가가 {tone}입니다."
+    - lift <= 0: "서비스 만족도는 평균과 비슷합니다."
+    """
+    tone = _tone_by_sample(n_reviews)
+
+    def _line(category_label: str, category_eval: str, lift: float) -> str:
+        if lift <= 0:
+            return f"{category_label} 만족도는 평균과 비슷합니다."
+        pct = round(lift)
+        return f"{category_label} 만족도는 평균보다 약 {pct}% 높아요. 전반적으로 {category_eval} 평가가 {tone}입니다."
+
     return [
-        f"이 음식점의 서비스 만족도는 판교 평균의 {multiple_service:.2f}배 수준입니다.",
-        f"이 음식점의 가격 만족도는 판교 평균의 {multiple_price:.2f}배 수준입니다.",
+        _line("서비스", "서비스", lift_service),
+        _line("가격", "가격", lift_price),
     ]
 
 
@@ -570,7 +598,7 @@ def calculate_all_average_ratios_from_reviews(
     return _spark_calculate_ratios(rdd, stopwords)
 
 
-def calculate_strength_lift(
+def calculate_comparison_lift(
     single_restaurant_ratios: Dict[str, float],
     all_average_ratios: Dict[str, float],
 ) -> Dict[str, float]:
@@ -611,7 +639,7 @@ def _default_description(category: str, lift: float) -> str:
     return f"이 음식점의 {category_name} 긍정 평가 비율은 전체 평균과 유사합니다"
 
 
-def generate_strength_descriptions(
+def generate_comparison_descriptions(
     lift_dict: Dict[str, float],
     llm_utils: Optional[Any] = None,
     single_restaurant_ratios: Optional[Dict[str, float]] = None,

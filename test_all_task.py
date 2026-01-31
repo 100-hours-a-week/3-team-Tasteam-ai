@@ -7,7 +7,7 @@ HTTP API 호출만으로 테스트를 수행합니다. hybrid_search/final_pipel
 테스트 대상 API:
     - 감성 분석: /api/v1/sentiment/analyze, /api/v1/sentiment/analyze/batch
     - 요약: /api/v1/llm/summarize, /api/v1/llm/summarize/batch
-    - 강점 추출: /api/v1/llm/extract/strengths (Kiwi+lift)
+    - 비교: /api/v1/llm/comparison (Kiwi+lift)
     - 벡터: /api/v1/vector/upload, /api/v1/vector/search/similar
 
 --benchmark 시 (메트릭 + CPU + GPU 모두 활성화, 기존 동작):
@@ -28,7 +28,7 @@ HTTP API 호출만으로 테스트를 수행합니다. hybrid_search/final_pipel
     python test_all_task.py --benchmark --iterations 10
 
     # 특정 테스트만 실행
-    python test_all_task.py --tests sentiment summarize strength
+    python test_all_task.py --tests sentiment summarize comparison
 
     # 결과 JSON 저장
     python test_all_task.py --benchmark --save-results result.json
@@ -49,7 +49,7 @@ HTTP API 호출만으로 테스트를 수행합니다. hybrid_search/final_pipel
     --benchmark-cpu     서버 CPU 모니터만 (X-Enable-CPU-Monitor)
     --benchmark-gpu     서버 GPU 모니터만 (logs/gpu_usage.log)
     --iterations N      벤치마크 반복 횟수 (기본 5)
-    --tests T1 [T2...]  실행할 테스트: all|sentiment|sentiment_batch|summarize|summarize_batch|strength|vector
+    --tests T1 [T2...]  실행할 테스트: all|sentiment|sentiment_batch|summarize|summarize_batch|comparison|vector
     --save-results PATH 결과 JSON 저장 경로
     --provider P        LLM 제공자: openai|local|runpod
     --model M           테스트할 LLM 모델명
@@ -59,7 +59,7 @@ HTTP API 호출만으로 테스트를 수행합니다. hybrid_search/final_pipel
 
 측정 지표 (--benchmark / QUANTITATIVE_METRICS.md):
     성능: 처리 시간(평균/P95/P99), TTFT, TPS, 처리량(req/s)
-    정확도: BLEU/ROUGE(요약), Precision@K(강점), MAE(감성)
+    정확도: BLEU/ROUGE(요약), Precision@K(비교), MAE(감성)
 """
 
 import os
@@ -159,7 +159,7 @@ BENCHMARK_HEADERS: Dict[str, str] = {}
 SAMPLE_RESTAURANT_ID = 1
 SAMPLE_REVIEWS = []
 
-# 강점 추출: strength_in_aspect와 맞추기 위해 restaurant_id=4 우선 사용 (test_data_sample에 4가 있으면)
+# 비교: comparison_in_aspect와 맞추기 위해 restaurant_id=4 우선 사용 (test_data_sample에 4가 있으면)
 STRENGTH_TARGET_RESTAURANT_ID: Optional[int] = None
 
 # 테스트 메트릭 수집용 전역 딕셔너리 (JSON 저장용)
@@ -306,8 +306,9 @@ def generate_test_data(
                         'reviews': []
                     }
                 
-                # 리뷰 추가 (감성 분석 입력: restaurant_id, content만)
+                # 리뷰 추가 (Qdrant 업로드 시 point_id 구분을 위해 id 필수)
                 review_data = {
+                    'id': review.get('id'),
                     'restaurant_id': review.get('restaurant_id'),
                     'content': review.get('content', ''),
                 }
@@ -336,7 +337,7 @@ def generate_test_data(
             if data.get('restaurants'):
                 first_restaurant = data['restaurants'][0]
                 SAMPLE_RESTAURANT_ID = first_restaurant.get('restaurant_id', 1)
-                # strength_in_aspect와 맞추기: restaurant_id=4가 있으면 강점 추출에서 4 사용
+                # comparison_in_aspect와 맞추기: restaurant_id=4가 있으면 비교에서 4 사용
                 STRENGTH_TARGET_RESTAURANT_ID = 4 if any((r.get('restaurant_id') or 0) == 4 for r in data.get('restaurants', [])) else None
                 # ReviewModel 형식으로 변환
                 SAMPLE_REVIEWS = []
@@ -551,7 +552,7 @@ def build_data_info(
         if kr3_restaurants is not None:
             data_scale["kr3_restaurants"] = kr3_restaurants
 
-    single_tests = {"sentiment", "summarize", "strength", "vector"}
+    single_tests = {"sentiment", "summarize", "comparison", "vector"}
     batch_tests = {"sentiment_batch", "summarize_batch"}
     tests = selected_tests or []
     has_single = any(t in single_tests for t in tests)
@@ -1050,7 +1051,7 @@ def evaluate_accuracy(
     정확도 평가 (Ground Truth 비교)
     
     Args:
-        analysis_type: 분석 타입 ('sentiment', 'summary', 'strength')
+        analysis_type: 분석 타입 ('sentiment', 'summary', 'comparison')
         restaurant_id: 레스토랑 ID
         api_result: API 호출 결과
         ground_truth_path: Ground Truth 파일 경로
@@ -1145,7 +1146,7 @@ def evaluate_accuracy(
                     "rougeL": rouge_scores.get("rougeL", 0),
                 }
         
-        elif analysis_type == "strength":
+        elif analysis_type == "comparison":
             evaluator = StrengthExtractionEvaluator(
                 base_url=BASE_URL,
                 ground_truth_path=ground_truth_path
@@ -1165,7 +1166,7 @@ def evaluate_accuracy(
                 return None
             
             # Precision@K, Recall@K 계산 (k=1, 3, 5, 10)
-            predicted_strengths = api_result.get("strengths", [])
+            predicted_strengths = api_result.get("comparisons", api_result.get("strengths", []))
             gt_strengths = gt_restaurant.get("ground_truth_strengths", {})
             gt_all = gt_strengths.get("representative", []) + gt_strengths.get("distinct", [])
             
@@ -1894,9 +1895,9 @@ def test_summarize_batch(enable_benchmark: bool = False, num_iterations: int = 5
         return False
 
 
-def test_extract_strengths(enable_benchmark: bool = False, num_iterations: int = 5):
+def test_comparison(enable_benchmark: bool = False, num_iterations: int = 5):
     """
-    강점 추출 테스트 (src 파이프라인: Kiwi + service/price 비율 + lift_percentage)
+    다른 음식점과의 비교 테스트 (src 파이프라인: Kiwi + service/price 비율 + lift_percentage)
     
     입력:
         {
@@ -1905,18 +1906,18 @@ def test_extract_strengths(enable_benchmark: bool = False, num_iterations: int =
         }
     
     출력:
-        strengths: [{ category, lift_percentage }], category_lift (카테고리별 lift %)
+        comparisons: [{ category, lift_percentage }], category_lift (카테고리별 lift %)
         예시:
-        ✓ 강점 추출 성공 (소요 시간: 3.45초)
+        ✓ 비교 성공 (소요 시간: 3.45초)
           레스토랑 1:
-            * 추출된 강점 수: 2개
+            * 비교 항목 수: 2개
             * service: lift 20%
             * price: lift 15%
     """
-    print_header("5. 강점 추출 테스트")
+    print_header("5. 비교 테스트 (다른 음식점들과의 비교)")
     
-    url = f"{BASE_URL}{API_PREFIX}/llm/extract/strengths"
-    # strength_in_aspect와 맞추기: test_data에 4가 있으면 4, 없으면 SAMPLE_RESTAURANT_ID
+    url = f"{BASE_URL}{API_PREFIX}/llm/comparison"
+    # comparison_in_aspect와 맞추기: test_data에 4가 있으면 4, 없으면 SAMPLE_RESTAURANT_ID
     rid = STRENGTH_TARGET_RESTAURANT_ID if STRENGTH_TARGET_RESTAURANT_ID is not None else SAMPLE_RESTAURANT_ID
     payload = {
         "restaurant_id": rid,
@@ -1930,7 +1931,7 @@ def test_extract_strengths(enable_benchmark: bool = False, num_iterations: int =
             success, stats = measure_performance(url, payload, num_iterations=num_iterations, warmup_iterations=1, timeout=180)
             
             if success and stats:
-                print_success(f"강점 추출 성공 (평균 처리 시간: {stats['avg_latency_sec']:.2f}초)")
+                print_success(f"비교 성공 (평균 처리 시간: {stats['avg_latency_sec']:.2f}초)")
                 print_info("처리 시간 통계:")
                 print(f"  - 평균: {stats['avg_latency_sec']:.3f}초")
                 print(f"  - P95: {stats['p95_latency_sec']:.3f}초")
@@ -1940,7 +1941,7 @@ def test_extract_strengths(enable_benchmark: bool = False, num_iterations: int =
                 print(f"  - 성공률: {stats['success_rate']:.1f}% ({stats['success_count']}/{stats['total_iterations']})")
                 
                 # SQLite에서 메트릭 조회
-                db_metrics = query_metrics_from_db("strength", limit=5)
+                db_metrics = query_metrics_from_db("comparison", limit=5)
                 if db_metrics:
                     print_info("SQLite 메트릭 (최근 5개 요청):")
                     if db_metrics.get("avg_processing_time_ms"):
@@ -1990,7 +1991,7 @@ def test_extract_strengths(enable_benchmark: bool = False, num_iterations: int =
                 accuracy_metrics = None
                 ground_truth_path = str(project_root / "scripts" / "Ground_truth_strength.json")
                 accuracy_metrics = evaluate_accuracy(
-                    analysis_type="strength",
+                    analysis_type="comparison",
                     restaurant_id=rid,
                     api_result=stats.get("last_successful_response", {}),
                     ground_truth_path=ground_truth_path
@@ -2049,7 +2050,7 @@ def test_extract_strengths(enable_benchmark: bool = False, num_iterations: int =
                         print_warning(f"  ⚠ 목표 미달성 (목표: {target_accuracy}, 실제: {float(precision_at_5_value):.4f})")
                 
                 # JSON 저장용 메트릭 수집
-                test_metrics["강점 추출"] = {
+                test_metrics["비교"] = {
                     "performance": {
                         "avg_latency_sec": stats.get("avg_latency_sec"),
                         "min_latency_sec": stats.get("min_latency_sec"),
@@ -2083,40 +2084,40 @@ def test_extract_strengths(enable_benchmark: bool = False, num_iterations: int =
             
             if response.status_code == 200:
                 data = response.json()
-                print_success(f"강점 추출 성공 (소요 시간: {elapsed_time:.2f}초)")
+                print_success(f"비교 성공 (소요 시간: {elapsed_time:.2f}초)")
                 restaurant_id = data.get('restaurant_id', 'N/A')
-                strengths = data.get('strengths', [])
+                comparisons = data.get('comparisons', data.get('strengths', []))
                 
                 print(f"    레스토랑 {restaurant_id}:")
                 category_lift = data.get('category_lift') or {}
-                print(f"      * 추출된 강점 수: {len(strengths)}개")
+                print(f"      * 비교 항목 수: {len(comparisons)}개")
                 if category_lift:
                     parts = [f"{k}: {v}%" for k, v in category_lift.items()]
                     print(f"      * 카테고리별 lift: {', '.join(parts)}")
-                strength_display = data.get('strength_display') or []
-                if strength_display:
-                    print(f"      * strength_display (판교 평균 N배):")
-                    for s in strength_display:
+                comparison_display = data.get('comparison_display', data.get('strength_display', []))
+                if comparison_display:
+                    print(f"      * comparison_display (전체 평균 대비):")
+                    for s in comparison_display:
                         print(f"        - {s}")
                 
-                if strengths:
-                    for strength in strengths:
-                        category = strength.get('category', strength.get('aspect', 'N/A'))
-                        lift_percentage = strength.get('lift_percentage')
+                if comparisons:
+                    for comp in comparisons:
+                        category = comp.get('category', comp.get('aspect', 'N/A'))
+                        lift_percentage = comp.get('lift_percentage')
                         if lift_percentage is not None:
                             print(f"      * {category}: lift {lift_percentage}%")
                         else:
                             print(f"      * {category}")
                 else:
                     if category_lift:
-                        print(f"      * 강점(양수 lift): 없음 — 전체 평균 대비 양수인 카테고리 없음")
+                        print(f"      * 비교 항목(양수 lift): 없음 — 전체 평균 대비 양수인 카테고리 없음")
                     else:
-                        print(f"      * 강점: 없음")
+                        print(f"      * 비교 항목: 없음")
                 
                 # 정확도 평가 (Ground Truth 비교, 기본 모드에서도 수행)
                 ground_truth_path = str(project_root / "scripts" / "Ground_truth_strength.json")
                 accuracy_metrics = evaluate_accuracy(
-                    analysis_type="strength",
+                    analysis_type="comparison",
                     restaurant_id=rid,
                     api_result=data,
                     ground_truth_path=ground_truth_path
@@ -2168,11 +2169,11 @@ def test_extract_strengths(enable_benchmark: bool = False, num_iterations: int =
                 
                 return True
             else:
-                print_error(f"강점 추출 실패: {response.status_code}")
+                print_error(f"비교 실패: {response.status_code}")
                 print(f"  응답: {response.text[:200]}")
                 return False
     except Exception as e:
-        print_error(f"강점 추출 중 오류: {str(e)}")
+        print_error(f"비교 중 오류: {str(e)}")
         return False
 
 
@@ -2395,14 +2396,14 @@ def run_tests_for_model(
         # 테스트 실행
         selected_tests = tests or ["summarize", "summarize_batch"]
         if "all" in selected_tests:
-            selected_tests = ["sentiment", "sentiment_batch", "summarize", "summarize_batch", "strength", "vector"]
+            selected_tests = ["sentiment", "sentiment_batch", "summarize", "summarize_batch", "comparison", "vector"]
 
         test_registry = {
             "sentiment": ("감성 분석", lambda: test_sentiment_analysis(enable_benchmark=enable_benchmark, num_iterations=iterations)),
             "sentiment_batch": ("배치 감성 분석", lambda: test_sentiment_analysis_batch(enable_benchmark=enable_benchmark, num_iterations=iterations)),
             "summarize": ("리뷰 요약", lambda: test_summarize(enable_benchmark=enable_benchmark, num_iterations=iterations)),
             "summarize_batch": ("배치 리뷰 요약", lambda: test_summarize_batch(enable_benchmark=enable_benchmark, num_iterations=iterations)),
-            "strength": ("강점 추출", lambda: test_extract_strengths(enable_benchmark=enable_benchmark, num_iterations=iterations)),
+            "comparison": ("비교", lambda: test_comparison(enable_benchmark=enable_benchmark, num_iterations=iterations)),
             "vector": ("벡터 검색", lambda: test_vector_search(enable_benchmark=enable_benchmark, num_iterations=iterations)),
         }
 
@@ -2698,7 +2699,7 @@ def main():
         "--tests",
         nargs="+",
         default=["all"],
-        choices=["all", "sentiment", "sentiment_batch", "summarize", "summarize_batch", "strength", "vector"],
+        choices=["all", "sentiment", "sentiment_batch", "summarize", "summarize_batch", "comparison", "vector"],
         help="실행할 테스트 선택 (기본값: all). src 기반 API 테스트만 포함.",
     )
     parser.add_argument(
@@ -2855,7 +2856,7 @@ def main():
             global SAMPLE_RESTAURANT_ID, SAMPLE_REVIEWS, STRENGTH_TARGET_RESTAURANT_ID
             first_restaurant = data["restaurants"][0]
             SAMPLE_RESTAURANT_ID = first_restaurant.get("restaurant_id", 1)
-            # strength_in_aspect와 맞추기: restaurant_id=4가 있으면 강점 추출에서 4 사용
+            # comparison_in_aspect와 맞추기: restaurant_id=4가 있으면 비교에서 4 사용
             STRENGTH_TARGET_RESTAURANT_ID = 4 if any((r.get("restaurant_id") or 0) == 4 for r in data.get("restaurants", [])) else None
             # 리뷰 객체를 ReviewModel 형식으로 저장 (API가 ReviewModel 리스트를 기대)
             SAMPLE_REVIEWS = []
@@ -2886,7 +2887,7 @@ def main():
         # data_info 구성 (--save-results용)
         compare_tests = args.tests or ["summarize", "summarize_batch"]
         if "all" in compare_tests:
-            compare_tests = ["sentiment", "sentiment_batch", "summarize", "summarize_batch", "strength", "vector"]
+            compare_tests = ["sentiment", "sentiment_batch", "summarize", "summarize_batch", "comparison", "vector"]
         compare_data_info = build_data_info(
             test_data=test_data,
             data_source_name="test_data_sample.json",
@@ -3046,14 +3047,14 @@ def main():
     
     selected_tests = args.tests or ["summarize", "summarize_batch"]
     if "all" in selected_tests:
-        selected_tests = ["sentiment", "sentiment_batch", "summarize", "summarize_batch", "strength", "vector"]
+        selected_tests = ["sentiment", "sentiment_batch", "summarize", "summarize_batch", "comparison", "vector"]
 
     test_registry = {
         "sentiment": ("감성 분석", lambda: test_sentiment_analysis(enable_benchmark=enable_benchmark_mode, num_iterations=args.iterations)),
         "sentiment_batch": ("배치 감성 분석", lambda: test_sentiment_analysis_batch(enable_benchmark=enable_benchmark_mode, num_iterations=args.iterations)),
         "summarize": ("리뷰 요약", lambda: test_summarize(enable_benchmark=enable_benchmark_mode, num_iterations=args.iterations)),
         "summarize_batch": ("배치 리뷰 요약", lambda: test_summarize_batch(enable_benchmark=enable_benchmark_mode, num_iterations=args.iterations)),
-        "strength": ("강점 추출", lambda: test_extract_strengths(enable_benchmark=enable_benchmark_mode, num_iterations=args.iterations)),
+        "comparison": ("비교", lambda: test_comparison(enable_benchmark=enable_benchmark_mode, num_iterations=args.iterations)),
         "vector": ("벡터 검색", lambda: test_vector_search(enable_benchmark=enable_benchmark_mode, num_iterations=args.iterations)),
     }
 

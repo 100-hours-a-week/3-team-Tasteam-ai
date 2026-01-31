@@ -196,7 +196,7 @@
 **구현 위치**: `src/models.py`
 - `StrengthDetail`: 강점 상세 정보 모델
 - `EvidenceSnippet`: 근거 스니펫 모델
-- `StrengthResponseV2`: 최종 응답 모델
+- `StrengthResponse`: 최종 응답 모델
 
 ---
 
@@ -235,7 +235,7 @@
 ✅ Step D: 의미 중복 제거 (클러스터링)
 ✅ Step E~H: 비교군 기반 차별 강점 계산
 ✅ API 엔드포인트: `POST /api/v1/llm/extract/strengths/v2`
-✅ 모델 정의: `StrengthRequestV2`, `StrengthResponseV2`, `StrengthDetail`, `EvidenceSnippet`
+✅ 모델 정의: `StrengthRequest`, `StrengthResponse`, `StrengthDetail`, `EvidenceSnippet`
 
 ### 향후 개선 사항
 

@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 
 class _FastEmbedEncoderAdapter:
-    """FastEmbed Dense 모델을 SentenceTransformer 유사 인터페이스로 노출 (strength_extraction, llm_utils 호환)."""
+    """FastEmbed Dense 모델을 SentenceTransformer 유사 인터페이스로 노출 (comparison, llm_utils 호환)."""
 
     def __init__(self, dense_model: TextEmbedding, dense_dim: int, batch_size: int):
         self._model = dense_model
@@ -470,7 +470,7 @@ class VectorSearch:
 
     def get_all_reviews_for_all_average(self, limit: int = 5000) -> List[Dict]:
         """
-        전체 리뷰 샘플 조회 (강점 추출 시 '전체 평균' 계산용, strength_in_aspect와 동일 데이터 소스 개념).
+        전체 리뷰 샘플 조회 (비교 시 '전체 평균' 계산용, comparison_in_aspect와 동일 데이터 소스 개념).
         filter 없이 scroll하여 limit개 payload 반환.
         """
         try:
@@ -1059,101 +1059,6 @@ class VectorSearch:
                 unique_strengths.append(target_strength)
         
         return unique_strengths
-    
-    def query_by_restaurant_vector(
-        self,
-        restaurant_id: Union[int, str],
-        top_k: int = 20,
-        months_back: Optional[int] = None,
-    ) -> List[Dict]:
-        """
-        레스토랑 대표 벡터를 쿼리로 사용하여 TOP-K 리뷰 검색
-        
-        Args:
-            restaurant_id: 레스토랑 ID
-            top_k: 반환할 최대 리뷰 수
-            months_back: 최근 N개월 필터 (선택, None이면 필터링 안함)
-        
-        Returns:
-            검색 결과 리스트 [{"payload": {...}, "score": 0.95}, ...]
-        """
-        try:
-            # 1. 대표 벡터 계산
-            restaurant_vector = self.compute_restaurant_vector(restaurant_id)
-            if restaurant_vector is None:
-                logger.warning(f"레스토랑 {restaurant_id}의 대표 벡터를 계산할 수 없습니다.")
-                return []
-            
-            # 2. 필터 구성
-            filter_conditions = [
-                models.FieldCondition(
-                    key="restaurant_id",
-                    match=models.MatchValue(value=str(restaurant_id))
-                )
-            ]
-            
-            query_filter = models.Filter(must=filter_conditions)
-            
-            # 3. 대표 벡터로 검색 (named 벡터 컬렉션이면 using="dense")
-            qp_kw = {
-                "collection_name": self.collection_name,
-                "query": restaurant_vector.tolist(),
-                "query_filter": query_filter,
-                "limit": top_k * 2,  # 날짜 필터링 전에 더 많이 가져옴
-            }
-            if not self._is_collection_single_vector():
-                qp_kw["using"] = "dense"
-            results = self.client.query_points(**qp_kw).points
-            
-            # 4. 결과 변환
-            candidates = []
-            for r in results:
-                candidates.append({
-                    "payload": r.payload,
-                    "score": float(r.score)
-                })
-            
-            # 5. 날짜 필터링 (클라이언트 측에서 수행)
-            if months_back is not None:
-                from datetime import datetime, timedelta
-                cutoff_date = datetime.now() - timedelta(days=months_back * 30)
-                
-                filtered_candidates = []
-                for candidate in candidates:
-                    created_at_str = candidate["payload"].get("created_at", "")
-                    if created_at_str:
-                        try:
-                            if isinstance(created_at_str, str):
-                                try:
-                                    candidate_date = datetime.fromisoformat(created_at_str.replace('Z', '+00:00'))
-                                except ValueError:
-                                    candidate_date = datetime.now()
-                            else:
-                                candidate_date = created_at_str
-                            
-                            if candidate_date >= cutoff_date:
-                                filtered_candidates.append(candidate)
-                        except (ValueError, TypeError):
-                            # 파싱 실패 시 포함
-                            filtered_candidates.append(candidate)
-                    else:
-                        # created_at이 없으면 포함
-                        filtered_candidates.append(candidate)
-                
-                candidates = filtered_candidates
-            
-            # 6. 날짜 기준 정렬 (최신순)
-            candidates.sort(
-                key=lambda x: x["payload"].get("created_at", ""),
-                reverse=True
-            )
-            
-            # 7. TOP-K만 반환
-            return candidates[:top_k]
-            
-        except Exception as e:
-            logger.error(f"대표 벡터 기반 검색 중 오류: {str(e)}")
-            return []
     
     def query_similar_reviews(
         self,

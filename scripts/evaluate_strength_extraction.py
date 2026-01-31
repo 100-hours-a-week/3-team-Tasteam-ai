@@ -71,7 +71,7 @@ class StrengthExtractionEvaluator:
         Returns:
             강점 추출 결과 딕셔너리
         """
-        url = f"{self.base_url}/api/v1/llm/extract/strengths"
+        url = f"{self.base_url}/api/v1/llm/comparison"
         
         payload = {"restaurant_id": restaurant_id}
         

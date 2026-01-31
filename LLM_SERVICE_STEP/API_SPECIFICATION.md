@@ -577,7 +577,7 @@
 - **차별 강점 (distinct)**: Step A~H 모두 실행 (Step A~D + 비교군 기반 차별점 계산)
 - **Both**: 대표 강점 + 차별 강점 모두 반환 (representative와 distinct를 합쳐서 반환)
 
-#### 응답: `StrengthResponseV2`
+#### 응답: `StrengthResponse`
 
 ```json
 {

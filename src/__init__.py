@@ -19,12 +19,9 @@ from .vector_search import (
     get_restaurant_reviews,
     query_similar_reviews,
 )
-from .llm_utils import (
-    LLMUtils,
-    summarize_reviews,
-)
-from .strength_extraction import (
-    StrengthExtractionPipeline,
+from .llm_utils import LLMUtils
+from .comparison import (
+    ComparisonPipeline,
 )
 
 __all__ = [
@@ -36,7 +33,6 @@ __all__ = [
     "get_restaurant_reviews",
     "query_similar_reviews",
     "LLMUtils",
-    "summarize_reviews",
-    "StrengthExtractionPipeline",
+    "ComparisonPipeline",
 ]
 

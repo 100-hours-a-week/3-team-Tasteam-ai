@@ -1,7 +1,8 @@
 """
-강점 추출 파이프라인 모듈 (Kiwi + lift 기반)
+다른 음식점과의 비교 모듈 (Kiwi + lift 기반)
 """
 
+import asyncio
 import logging
 import os
 import time
@@ -50,8 +51,8 @@ def _get_stopwords() -> Optional[List[str]]:
         return _stopwords_cache
 
 
-class StrengthExtractionPipeline:
-    """강점 추출 파이프라인 클래스 (Kiwi + lift)"""
+class ComparisonPipeline:
+    """다른 음식점과의 비교 (Kiwi + lift)"""
 
     def __init__(
         self,
@@ -68,27 +69,23 @@ class StrengthExtractionPipeline:
 
     # ==================== 전체 파이프라인 실행 ====================
 
-    async def extract_strengths(
+    async def compare(
         self,
         restaurant_id: int,
-        category_filter: Optional[int] = None,
-        region_filter: Optional[str] = None,
-        price_band_filter: Optional[str] = None,
         top_k: int = 10,
-        max_candidates: int = 300,
-        months_back: int = 6,
     ) -> Dict[str, Any]:
         """
-        통계적 비율 기반 강점 추출 (Kiwi + lift).
+        통계적 비율 기반 다른 음식점과의 비교 (Kiwi + lift).
         레스토랑 리뷰 → Kiwi 명사 bigram → service/price 긍정 비율 → lift.
-        strengths: [{category, lift_percentage}] (lift>0만), strength_display, category_lift.
+        comparisons: [{category, lift_percentage}] (lift>0만), comparison_display, category_lift.
         """
         start_time = time.time()
 
-        from .strength_pipeline import (
-            calculate_strength_lift,
+        from .comparison_pipeline import (
+            calculate_comparison_lift,
             calculate_single_restaurant_ratios,
-            format_strength_display,
+            format_comparison_display,
+            _tone_by_sample,
             calculate_all_average_ratios_from_reviews,
             calculate_all_average_ratios_from_file,
         )
@@ -100,7 +97,7 @@ class StrengthExtractionPipeline:
             if Config.ALL_AVERAGE_ASPECT_DATA_PATH:
                 project_root = str(Path(__file__).resolve().parents[1])  # src/ 상위 = 프로젝트 루트
                 logger.info(
-                    "전체 평균 ① 파일 시도 (Spark 직접 읽기, strength_in_aspect와 동일): path=%s",
+                    "전체 평균 ① 파일 시도 (Spark 직접 읽기, comparison_in_aspect와 동일): path=%s",
                     Config.ALL_AVERAGE_ASPECT_DATA_PATH,
                 )
                 all_average_ratios = calculate_all_average_ratios_from_file(
@@ -147,11 +144,11 @@ class StrengthExtractionPipeline:
             logger.error(f"레스토랑 리뷰 조회 실패: {e}")
             return {
                 "restaurant_id": restaurant_id,
-                "strengths": [],
+                "comparisons": [],
                 "total_candidates": 0,
                 "validated_count": 0,
                 "category_lift": {"service": 0.0, "price": 0.0},
-                "strength_display": format_strength_display(0.0, 0.0),
+                "comparison_display": format_comparison_display(0.0, 0.0, 0),
                 "processing_time_ms": (time.time() - start_time) * 1000,
             }
 
@@ -159,11 +156,11 @@ class StrengthExtractionPipeline:
             logger.warning(f"레스토랑 {restaurant_id}에 리뷰가 없습니다.")
             return {
                 "restaurant_id": restaurant_id,
-                "strengths": [],
+                "comparisons": [],
                 "total_candidates": 0,
                 "validated_count": 0,
                 "category_lift": {"service": 0.0, "price": 0.0},
-                "strength_display": format_strength_display(0.0, 0.0),
+                "comparison_display": format_comparison_display(0.0, 0.0, 0),
                 "processing_time_ms": (time.time() - start_time) * 1000,
             }
 
@@ -177,31 +174,63 @@ class StrengthExtractionPipeline:
             reviews=review_texts,
             stopwords=stopwords,
         )
-        lift_dict = calculate_strength_lift(single_restaurant_ratios, all_average_ratios)
-        strength_display = format_strength_display(
-            lift_dict.get("service", 0.0),
-            lift_dict.get("price", 0.0),
-        )
+        lift_dict = calculate_comparison_lift(single_restaurant_ratios, all_average_ratios)
+        n_reviews = len(review_texts)
 
-        strengths = []
+        logger.info(
+            "표본(단일 음식점) restaurant_id=%s service=%.4f, price=%.4f | lift service=%.2f%%, price=%.2f%%",
+            restaurant_id,
+            single_restaurant_ratios.get("service", 0),
+            single_restaurant_ratios.get("price", 0),
+            lift_dict.get("service", 0),
+            lift_dict.get("price", 0),
+        )
+        tone = _tone_by_sample(n_reviews)
+
+        async def _one_line(category: str, label: str, lift: float) -> str:
+            if lift <= 0:
+                return f"{label} 만족도는 평균과 비슷합니다."
+            pct = round(lift)
+            percent_sentence = f"{label} 만족도는 평균보다 약 {pct}% 높아요."
+            interp = await self.llm_utils.generate_comparison_interpretation_async(
+                label, lift, tone, n_reviews
+            )
+            if interp:
+                return percent_sentence + " " + interp
+            return percent_sentence + f" 전반적으로 {label} 평가가 {tone}입니다."
+
+        try:
+            comparison_display = list(await asyncio.gather(
+                _one_line("service", "서비스", lift_dict.get("service", 0.0)),
+                _one_line("price", "가격", lift_dict.get("price", 0.0)),
+            ))
+        except Exception as e:
+            logger.warning("비교 해석 LLM 호출 실패, 템플릿 폴백: %s", e)
+            comparison_display = format_comparison_display(
+                lift_dict.get("service", 0.0),
+                lift_dict.get("price", 0.0),
+                n_reviews,
+            )
+
+        comparisons = []
         for category, lift in lift_dict.items():
             if lift <= 0:
                 continue
-            strengths.append({
+            comparisons.append({
                 "category": category,
                 "lift_percentage": lift,
             })
 
-        strengths.sort(key=lambda x: x["lift_percentage"], reverse=True)
-        strengths = strengths[:top_k]
+        comparisons.sort(key=lambda x: x["lift_percentage"], reverse=True)
+        comparisons = comparisons[:top_k]
 
         processing_time = (time.time() - start_time) * 1000
         return {
             "restaurant_id": restaurant_id,
-            "strengths": strengths,
+            "comparisons": comparisons,
             "total_candidates": len(review_texts),
-            "validated_count": len(strengths),
+            "validated_count": len(comparisons),
             "category_lift": lift_dict,
-            "strength_display": strength_display,
+            "comparison_display": comparison_display,
             "processing_time_ms": processing_time,
         }

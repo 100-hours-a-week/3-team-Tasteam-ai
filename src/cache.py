@@ -364,7 +364,7 @@ def acquire_lock(
     
     Args:
         restaurant_id: 레스토랑 ID
-        analysis_type: 분석 타입 ('sentiment', 'summary', 'strength')
+        analysis_type: 분석 타입 ('sentiment', 'summary', 'comparison')
         ttl: 락 TTL (초 단위, 기본값: 1시간)
         timeout: 락 획득 대기 시간 (초 단위, 기본값: 0 = 즉시 반환)
     

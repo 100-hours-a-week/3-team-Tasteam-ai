@@ -1,6 +1,6 @@
 # 파이프라인 동작 문서 (API 기반)
 
-**Strength**, **Summary**, **Sentiment**, **Vector** 파이프라인의 API·입력·출력·처리 단계를 정리한 문서입니다.
+**Comparison**, **Summary**, **Sentiment**, **Vector** 파이프라인의 API·입력·출력·처리 단계를 정리한 문서입니다.
 
 - **범위**: `src/` 기반 HTTP API. `hybrid_search` / `final_pipeline` 미포함.
 - **테스트**: `test_all_task.py` — API 호출만 사용.
@@ -12,14 +12,14 @@
 | 섹션 | 링크 |
 |------|------|
 | **1. 개요** | [1. 개요](#1-개요) · [1.1 API 구조](#11-api-구조) · [1.1.1 API 문서 (Swagger)](#111-api-문서-swagger--openapi) · [1.2 파이프라인 흐름 (개략)](#12-파이프라인-흐름-개략) |
-| **2. Strength** | [2. Strength (강점 추출)](#2-strength-강점-추출) · [2.1 위치](#21-위치) · [2.2 흐름](#22-흐름) · [2.3 출력](#23-출력-api) · [2.4 공통](#24-공통) |
+| **2. Comparison** | [2. Comparison (비교)](#2-comparison-비교) · [2.1 위치](#21-위치) · [2.2 흐름](#22-흐름) · [2.3 출력](#23-출력-api) · [2.4 공통](#24-공통) |
 | **3. Summary** | [3. Summary (요약)](#3-summary-요약) · [3.1 위치](#31-위치) · [3.2 입력·시드](#32-입력시드) · [3.3 흐름](#33-흐름) · [3.4 출력](#34-출력-api) |
 | **4. Sentiment** | [4. Sentiment (감성 분석)](#4-sentiment-감성-분석) · [4.1 위치](#41-위치) · [4.2 흐름](#42-흐름) · [4.3 출력](#43-출력-api) · [4.4 공통](#44-공통) |
 | **5. Vector** | [5. Vector (벡터 검색·업로드·리뷰)](#5-vector-벡터-검색업로드리뷰) · [5.1 위치](#51-위치) · [5.2 컬렉션·벡터](#52-컬렉션벡터-형식) · [5.3 검색 파이프라인](#53-검색-파이프라인) · [5.4 API 엔드포인트](#54-api-엔드포인트) · [5.5 업로드·포인트](#55-업로드포인트) · [5.6 원천데이터](#56-원천데이터-업로드-전-요구-형태) |
 | **6. 공통·의존성** | [6. 공통·의존성](#6-공통의존성) · [6.1 의존성](#61-의존성-dependencies) · [6.2 락·SKIP](#62-락skip) · [6.3 Config 요약](#63-config-요약) |
 | **7. API 매핑** | [7. API ↔ 파이프라인 매핑](#7-api--파이프라인-매핑) |
-| **8. API 입출력 JSON** | [8. API 입출력 JSON](#8-api-입출력-json) · [8.1 Strength](#81-strength) · [8.2 Summary](#82-summary) · [8.3 Sentiment](#83-sentiment) · [8.4 Vector](#84-vector) |
-| **9. API DTO** | [9. API 요청/응답 DTO](#9-api-요청응답-dto) · [9.1 API → DTO 매핑](#91-api--dto-매핑) · [9.2 Strength DTO](#92-strength-dto) · [9.3 Summary DTO](#93-summary-dto) · [9.4 Sentiment DTO](#94-sentiment-dto) · [9.5 Vector DTO](#95-vector-dto) · [9.6 공통 DTO](#96-공통-dto) |
+| **8. API 입출력 JSON** | [8. API 입출력 JSON](#8-api-입출력-json) · [8.1 Comparison](#81-comparison) · [8.2 Summary](#82-summary) · [8.3 Sentiment](#83-sentiment) · [8.4 Vector](#84-vector) |
+| **9. API DTO** | [9. API 요청/응답 DTO](#9-api-요청응답-dto) · [9.1 API → DTO 매핑](#91-api--dto-매핑) · [9.2 Comparison DTO](#92-comparison-dto) · [9.3 Summary DTO](#93-summary-dto) · [9.4 Sentiment DTO](#94-sentiment-dto) · [9.5 Vector DTO](#95-vector-dto) · [9.6 공통 DTO](#96-공통-dto) · [9.7 공통 에러 응답](#97-공통-에러-응답-포맷) · [9.8 선택 필드 역할](#98-선택-필드-역할) |
 | **10. 참고** | [10. 참고](#10-참고) |
 
 ---
@@ -30,10 +30,9 @@
 
 | prefix | 라우터 | 용도 |
 |--------|--------|------|
-| `/api/v1/llm` | `llm` | Summary, Strength |
+| `/api/v1/llm` | `llm` | Summary, Comparison |
 | `/api/v1/sentiment` | `sentiment` | 감성 분석 |
-| `/api/v1/vector` | `vector` | 벡터 검색·업로드·리뷰 CRUD |
-| `/api/v1/restaurants` | `restaurant` | (미사용) |
+| `/api/v1/vector` | `vector` | 벡터 검색·업로드 (search/similar, upload) |
 | `/api/v1/test` | `test` | 테스트용 |
 
 - **헬스**: `/health`
@@ -64,15 +63,15 @@
          │                                │                                │
          ▼                                ▼                                ▼
 ┌─────────────────┐            ┌─────────────────┐            ┌─────────────────┐
-│     Vector      │            │     Summary     │            │    Strength     │
+│     Vector      │            │     Summary     │            │   Comparison    │
 │ /search/similar │            │   /summarize    │            │ /extract/       │
-│ /upload         │            │   /summarize/   │            │   strengths     │
-│ /reviews/upsert │            │   batch         │            │                 │
-│ /reviews/delete │            │                 │            │  Kiwi bigram    │
-│                 │            │  aspect_seeds   │            │  → service/     │
-│                 │            │  → hybrid검색   │            │  price 비율     │
-└─────────────────┘            │  → LLM 요약     │            │  → lift, display│
-         │                     └─────────────────┘            └─────────────────┘
+│ /upload         │            │   /summarize/   │            │   comparison    │
+│                 │            │   batch         │            │                 │
+│                 │            │  aspect_seeds   │            │  Kiwi bigram    │
+│                 │            │  → hybrid검색   │            │  → service/     │
+│                 │            │  → LLM 요약     │            │  price 비율     │
+└─────────────────┘            └─────────────────┘            │  → lift, display│
+         │                                │                    └─────────────────┘
          │                                │                                │
          │                     ┌──────────┴──────────┐                     │
          │                     │      Sentiment      │                     │
@@ -86,13 +85,13 @@
 
 ---
 
-## 2. Strength (강점 추출)
+## 2. Comparison (비교)
 
 ### 2.1 위치
 
-- `src/strength_extraction.py` — `StrengthExtractionPipeline.extract_strengths`
-- `src/strength_pipeline.py` — `calculate_single_restaurant_ratios`, `calculate_strength_lift`, `format_strength_display`, `calculate_all_average_ratios_from_*`
-- `POST /api/v1/llm/extract/strengths` (`src/api/routers/llm.py`)
+- `src/comparison.py` — `ComparisonPipeline.compare`
+- `src/comparison_pipeline.py` — `calculate_single_restaurant_ratios`, `calculate_comparison_lift`, `format_comparison_display`, `calculate_all_average_ratios_from_*`
+- `POST /api/v1/llm/comparison` (`src/api/routers/llm.py`)
 
 ### 2.2 흐름
 
@@ -100,7 +99,7 @@
    - `vector_search.get_restaurant_reviews(restaurant_id)` → `content`/`text`만 `review_texts`로.
 
 2. **단일 음식점 비율**  
-   - `strength_pipeline.calculate_single_restaurant_ratios(review_texts, stopwords)`  
+   - `comparison_pipeline.calculate_single_restaurant_ratios(review_texts, stopwords)`  
    - Kiwi NNG/NNP bigram + `SERVICE_KW`/`PRICE_KW`/`SERVICE_POSITIVE_KW`/`PRICE_POSITIVE_KW` → `service`, `price` 긍정 비율.
 
 3. **전체 평균 (all_average_ratios)**  
@@ -109,29 +108,32 @@
    - ③ `Config.ALL_AVERAGE_SERVICE_RATIO`, `ALL_AVERAGE_PRICE_RATIO`
 
 4. **Lift**  
-   - `calculate_strength_lift(single_ratios, all_average_ratios)`  
+   - `calculate_comparison_lift(single_ratios, all_average_ratios)`  
    - `lift = (단일 − 전체) / 전체 × 100`
 
-5. **strength_display**  
-   - `format_strength_display(lift_service, lift_price)`  
-   - `multiple = 1 + lift/100` → `"이 음식점의 서비스 만족도는 판교 평균의 {multiple:.2f}배 수준입니다."` 등.
+5. **comparison_display**
+   - `format_comparison_display(lift_service, lift_price, n_reviews)`
+   - 수치(lift %)는 코드 고정 생성. 해석은 표본 수별 톤 적용.  
+   - 퍼센트 + 해석: `"서비스 만족도는 평균보다 약 N% 높아요. 전반적으로 서비스 평가가 {tone}입니다."`  
+   - 표본 톤: n≥50 → "좋은 편", 20≤n<50 → "상대적으로 좋은 편(표본 중간)", n<20 → "경향이 보이나 표본이 적어요"
 
 6. **강점 리스트**  
-   - `lift > 0` 인 service/price만 `strengths`에 추가  
+   - `lift > 0` 인 service/price만 `comparisons`에 추가  
    - `{ "category": "service"|"price", "lift_percentage": float }`  
    - `lift_percentage` 내림차순 후 `top_k`개.
 
 ### 2.3 출력 (API)
 
-- `restaurant_id`, `strengths`, `total_candidates`, `validated_count`  
-- `category_lift`, `strength_display`, `processing_time_ms`  
-- **strengths**: `[{"category":"service","lift_percentage":20.0}, ...]`
+- `restaurant_id`, `comparisons`, `total_candidates`, `validated_count`
+- `category_lift`, `comparison_display`, `processing_time_ms`
+- **comparisons**: `[{"category":"service","lift_percentage":20.0}, ...]`
 
 ### 2.4 공통
 
 - **Kiwi**: NNG/NNP bigram.  
 - **키워드**: service `친절, 서비스, 응대, 직원, 사장, 불친절`; price `가격, 가성비, 대비, 리필, 무한, 할인, 쿠폰`; 긍정 시드 별도.  
-- **불용어**: `data/stopwords-ko.txt` 우선.
+- **불용어**: `data/stopwords-ko.txt` 우선.  
+- **comparison_display**: 수치(lift, % 차이)는 코드 고정 생성. 해석은 표본 수별 톤 적용. LLM 붙일 때 안전장치: (1) 숫자 계산 금지 — lift·delta_pct를 입력으로 주고 문장만 생성, (2) 과장 금지 — "최고·압도적·완벽" 등 금지, (3) 표본 작으면 톤 다운 — n≥50 / 20≤n<50 / n<20 분기 결과를 LLM에 전달해 자연스럽게 말만 정리. 근거(리뷰 수·키워드)를 같이 넣어 과장 방지.
 
 ---
 
@@ -225,7 +227,7 @@
 ### 5.1 위치
 
 - `src/vector_search.py` — `VectorSearch`
-- `src/api/routers/vector.py` — `/search/similar`, `/upload`, `/restaurants/{id}/reviews`, `/reviews/upsert` (upload 형식: {reviews, restaurants?}), `/reviews/delete`, `/reviews/delete/batch`
+- `src/api/routers/vector.py` — `/search/similar`, `/upload` (업로드 형식: {reviews, restaurants?})
 
 ### 5.2 컬렉션·벡터 형식
 
@@ -245,16 +247,12 @@
 | `query_similar_reviews` | Dense (또는 Dense만) 검색 | `using="dense"` (named일 때) |
 | `query_hybrid_search` | Dense + Sparse RRF | `FusionQuery(RRF)`, `Prefetch` dense/sparse. 단일 벡터면 Dense로 폴백 |
 
-### 5.4 API 엔드포인트
+### 5.4 API 엔드포인트 (현재)
 
 | Method | path | 설명 |
 |--------|------|------|
 | POST | `/api/v1/vector/search/similar` | 유사 리뷰 검색 (query_text, restaurant_id, limit, min_score) |
-| GET | `/api/v1/vector/restaurants/{restaurant_id}/reviews` | 레스토랑별 리뷰 목록 |
 | POST | `/api/v1/vector/upload` | 리뷰·레스토랑 업로드, `restaurant_vectors` 자동 생성 |
-| POST | `/api/v1/vector/reviews/upsert` | 리뷰 upsert (upload와 동일 형식: {reviews, restaurants?, batch_size?}) |
-| DELETE | `/api/v1/vector/reviews/delete` | 리뷰 1건 삭제 |
-| DELETE | `/api/v1/vector/reviews/delete/batch` | 리뷰 배치 삭제 |
 
 ### 5.5 업로드·포인트
 
@@ -271,14 +269,12 @@
 
 | 구분 | 필드 | 타입 | 설명 |
 |------|------|------|------|
-| 필수 | 리뷰 식별자 | id 등 | 한 건을 구분하는 고유값 (API에서는 `id`) |
+| 필수 | 리뷰 식별자 | id 등 | 한 건을 구분하는 고유값 (API에서는 `id`, 선택) |
 | 필수 | 레스토랑 식별자 | restaurant_id | 어느 가게 리뷰인지 (API에서는 `restaurant_id`) |
 | 필수 | 리뷰 텍스트 | content 등 | 리뷰 본문 (API에서는 `content`) |
-| 선택 | 작성일 | created_at | ISO 형식 (메타, is_recommended·updated_at과 동일 취급) |
 
-**업로드 API에서 사용하지 않는 필드**  
-원천에 있어도 무시됨: `member_id`, `group_id`, `subgroup_id`, `is_recommended`, `created_at`, `updated_at`, `images` 등. 변환 시 제거하거나 그대로 두어도 됨.  
-`images`는 `member_id`처럼 **스키마에는 존재**하나, **현재 API 요청/응답에서는 직렬화되지 않음**.  
+**API 스키마**  
+업로드·검색 요청/응답에는 `id`(선택), `restaurant_id`, `content`만 사용. 원천에 그 외 필드가 있어도 API로 넘길 때는 위 세 필드만 보내면 됨.  
 
 **레스토랑(선택)**
 
@@ -287,12 +283,12 @@
 | 권장 | 레스토랑 식별자 | id | API에서는 `id` |
 | 권장 | 이름 | name | API에서는 `name` (대표 벡터·표시용) |
 
-레스토랑 정보가 없어도 리뷰만으로 업로드는 가능합니다. 레스토랑 메타가 있으면 `restaurants` 배열에 넣어 함께 보내면 됩니다.
+레스토랑 정보가 없어도 리뷰만으로 업로드는 가능합니다. 레스토랑 정보가 있으면 `restaurants` 배열에 넣어 함께 보내면 됩니다.
 
 **넣는 순서**
 
 1. 원천데이터에서 위 필드만 추출해 `{ "reviews": [ ... ], "restaurants": [ ... ] }` 형태로 만든다.  
-2. `POST /api/v1/vector/upload` (최초) 또는 `POST /api/v1/vector/reviews/upsert` (추가·수정)로 전달한다.
+2. `POST /api/v1/vector/upload`로 전달한다. (리뷰·레스토랑 추가·갱신은 동일 upload로 upsert 가능.)
 
 **참고**  
 - `data/test_data_sample.json`: 리뷰 배열 JSON 예시 (필드 많음 → upload 시 `id`, `restaurant_id`, `content`만 사용).  
@@ -314,7 +310,7 @@
 ### 6.2 락·SKIP
 
 - **`acquire_lock(restaurant_id, analysis_type, ttl=3600)`** (Redis)  
-  - `sentiment`, `summary`, `strength` 진입 시 중복 실행 방지.  
+  - `sentiment`, `summary`, `comparison` 진입 시 중복 실행 방지.  
 - **SKIP**  
   - `metrics.metrics_db.should_skip_analysis(restaurant_id, analysis_type, min_interval_seconds=Config.SKIP_MIN_INTERVAL_SECONDS)`  
   - 최근 성공 이력이 있으면 스킵, `last_success_at` 반환.
@@ -325,7 +321,7 @@
 |------|------|
 | `COLLECTION_NAME` | 리뷰 컬렉션 이름 |
 | `QDRANT_URL` | `:memory:`, `http://...`, on-disk 경로 |
-| `ALL_AVERAGE_ASPECT_DATA_PATH` | Strength 전체 평균용 파일 (TSV/JSON) |
+| `ALL_AVERAGE_ASPECT_DATA_PATH` | Comparison 전체 평균용 파일 (TSV/JSON) |
 | `ALL_AVERAGE_SERVICE_RATIO`, `ALL_AVERAGE_PRICE_RATIO` | 전체 평균 폴백 |
 | `ASPECT_SEEDS_FILE` | Summary aspect seed JSON (선택) |
 | `SKIP_MIN_INTERVAL_SECONDS` | SKIP 최소 간격(초) |
@@ -338,49 +334,40 @@
 
 | API | 파이프라인 | 핵심 (src) |
 |-----|------------|------------|
-| `POST /api/v1/llm/extract/strengths` | Strength | `StrengthExtractionPipeline.extract_strengths` → `strength_pipeline` (비율, lift, format_strength_display). `strengths`: `[{category, lift_percentage}]` |
+| `POST /api/v1/llm/comparison` | Comparison | `ComparisonPipeline.compare` → `comparison_pipeline` (비율, lift, format_comparison_display). `comparisons`: `[{category, lift_percentage}]` |
 | `POST /api/v1/llm/summarize` | Summary | **기본 시드만** (`DEFAULT_*_SEEDS`) → `query_hybrid_search` → `summarize_aspects_new` |
 | `POST /api/v1/llm/summarize/batch` | Summary (배치) | BATCH_SEARCH_ASYNC(aspect 병렬), BATCH_RESTAURANT_ASYNC(음식점 간 병렬). 시드 1회 로드. 상세: [BATCH_SUMMARY_MODE.md](BATCH_SUMMARY_MODE.md) |
 | `POST /api/v1/sentiment/analyze` | Sentiment | `SentimentAnalyzer.analyze` → `_classify_contents` (HF + LLM 재판정) |
 | `POST /api/v1/sentiment/analyze/batch` | Sentiment (배치) | `analyze_multiple_restaurants_async` → `analyze` |
 | `POST /api/v1/vector/search/similar` | Vector | `query_similar_reviews` (Dense, named일 때 `using="dense"`) |
-| `GET /api/v1/vector/restaurants/{id}/reviews` | Vector | `get_restaurant_reviews` |
 | `POST /api/v1/vector/upload` | Vector | `prepare_points`, `upload_collection`, `upsert_restaurant_vector` |
-| `POST /api/v1/vector/reviews/upsert` | Vector | `upsert_reviews_from_data` (요청 형식: upload와 동일 `{reviews, restaurants?, batch_size?}`) |
-| `DELETE /api/v1/vector/reviews/delete` | Vector | `delete_review` |
-| `DELETE /api/v1/vector/reviews/delete/batch` | Vector | `delete_reviews_batch` |
 
 ---
 
 ## 8. API 입출력 JSON
 
-### 8.1 Strength
+### 8.1 Comparison
 
-**`POST /api/v1/llm/extract/strengths`**
+**`POST /api/v1/llm/comparison`**
 
 ```json
-// 요청
+// 요청 (restaurant_id, top_k만 사용)
 {
   "restaurant_id": 1,
-  "category_filter": null,
-  "region_filter": null,
-  "price_band_filter": null,
-  "top_k": 10,
-  "max_candidates": 300,
-  "months_back": 6
+  "top_k": 10
 }
 
 // 응답 (debug=false)
 {
   "restaurant_id": 1,
-  "strengths": [
+  "comparisons": [
     {"category": "service", "lift_percentage": 18.5},
     {"category": "price", "lift_percentage": 12.2}
   ],
   "total_candidates": 120,
   "validated_count": 2,
   "category_lift": {"service": 18.5, "price": 12.2},
-  "strength_display": ["이 음식점의 서비스 만족도는 전체 평균의 1.19배 수준입니다.", "이 음식점의 가격 만족도는 전체 평균의 1.12배 수준입니다."]
+  "comparison_display": ["서비스 만족도는 평균보다 약 19% 높아요. 전반적으로 서비스 평가가 좋은 편입니다.", "가격 만족도는 평균보다 약 12% 높아요. 전반적으로 가격 평가가 좋은 편입니다."]
 }
 ```
 
@@ -432,7 +419,7 @@
   }
 }
 
-// 응답 (debug=true) — SummaryResponse. restaurant_id, overall_summary, categories, positive_reviews, negative_reviews, positive_count, negative_count, debug
+// 응답 (debug=true) — SummaryDisplayResponse에 debug 필드 추가. (positive_reviews, negative_reviews 등은 미사용·미노출)
 ```
 
 ---
@@ -555,25 +542,10 @@
 }
 ```
 
-**`GET /api/v1/vector/restaurants/{restaurant_id}/reviews`**
-
-```json
-// 경로: /api/v1/vector/restaurants/1/reviews
-
-// 응답
-{
-  "restaurant_id": "1",
-  "reviews": [
-    {"id": 1, "restaurant_id": 1, "content": "맛있어요", "member_id": null, "group_id": null, "created_at": null, "updated_at": null }
-  ],
-  "total": 1
-}
-```
-
 **`POST /api/v1/vector/upload`**
 
 ```json
-// 요청 (reviews: is_recommended, member_id, group_id, subgroup_id, updated_at 미사용. created_at은 메타로 선택 / restaurants: full_address, location, created_at 미사용)
+// 요청 (reviews: id 선택, restaurant_id, content / restaurants: id 선택, name, reviews)
 {
   "reviews": [
     {"id": 1, "restaurant_id": 1, "content": "맛있어요" }
@@ -591,64 +563,6 @@
 }
 ```
 
-**`POST /api/v1/vector/reviews/upsert`** (요청 형식: upload와 동일)
-
-```json
-// 요청
-{
-  "reviews": [
-    {"id": 1, "restaurant_id": 1, "content": "맛있어요" }
-  ],
-  "restaurants": [
-    {"id": 1, "name": "테스트 음식점"}
-  ],
-  "batch_size": 32
-}
-
-// 응답
-{
-  "results": [{"action": "inserted", "review_id": 1, "version": 2, "point_id": "..."}],
-  "total": 1,
-  "success_count": 1,
-  "error_count": 0
-}
-```
-
-**`DELETE /api/v1/vector/reviews/delete`**
-
-```json
-// 요청
-{
-  "restaurant_id": 1,
-  "review_id": 201
-}
-
-// 응답
-{
-  "action": "deleted",
-  "review_id": 201,
-  "point_id": "abc123..."
-}
-```
-
-**`DELETE /api/v1/vector/reviews/delete/batch`**
-
-```json
-// 요청
-{
-  "restaurant_id": 1,
-  "review_ids": [201, 202, 203]
-}
-
-// 응답
-{
-  "results": [{"review_id": 201, "action": "deleted", "point_id": "..."}, ...],
-  "total": 3,
-  "deleted_count": 3,
-  "not_found_count": 0
-}
-```
-
 ---
 
 ## 9. API 요청/응답 DTO
@@ -660,37 +574,28 @@ API별 요청/응답에 사용되는 Pydantic 모델(DTO)과 필드를 정리합
 
 | API | Request DTO | Response DTO |
 |-----|-------------|--------------|
-| `POST /api/v1/llm/extract/strengths` | `StrengthRequestV2` | `StrengthResponseV2` (또는 Dict, 에러/스킵 시) |
-| `POST /api/v1/llm/summarize` | `SummaryRequest` | `SummaryDisplayResponse` (debug=false) / `SummaryResponse` (debug=true) |
+| `POST /api/v1/llm/comparison` | `ComparisonRequest` | `ComparisonResponse` (또는 Dict, 에러/스킵 시) |
+| `POST /api/v1/llm/summarize` | `SummaryRequest` | `SummaryDisplayResponse` (debug 필드 선택) |
 | `POST /api/v1/llm/summarize/batch` | `SummaryBatchRequest` | `SummaryBatchResponse` |
 | `POST /api/v1/sentiment/analyze` | `SentimentAnalysisRequest` | `SentimentAnalysisDisplayResponse` (debug=false) / `SentimentAnalysisResponse` (debug=true) |
 | `POST /api/v1/sentiment/analyze/batch` | `SentimentAnalysisBatchRequest` | `SentimentAnalysisBatchResponse` |
 | `POST /api/v1/vector/search/similar` | `VectorSearchRequest` | `VectorSearchResponse` |
-| `GET /api/v1/vector/restaurants/{id}/reviews` | (path: `restaurant_id`) | `RestaurantReviewsResponse` |
 | `POST /api/v1/vector/upload` | `VectorUploadRequest` | `VectorUploadResponse` |
-| `POST /api/v1/vector/reviews/upsert` | `UpsertReviewsRequest` | `UpsertReviewsBatchResponse` |
-| `DELETE /api/v1/vector/reviews/delete` | `DeleteReviewRequest` | `DeleteReviewResponse` |
-| `DELETE /api/v1/vector/reviews/delete/batch` | `DeleteReviewsBatchRequest` | `DeleteReviewsBatchResponse` |
 
-### 9.2 Strength DTO
+### 9.2 Comparison DTO
 
 | DTO | 필드 | 타입 | 설명 |
 |-----|------|------|------|
-| **StrengthRequestV2** | restaurant_id | int | 타겟 레스토랑 ID |
-| | category_filter | int? | 카테고리 필터 |
-| | region_filter | str? | 지역 필터 |
-| | price_band_filter | str? | 가격대 필터 |
+| **ComparisonRequest** | restaurant_id | int | 타겟 레스토랑 ID |
 | | top_k | int | 반환 최대 개수 (1~50, 기본 10) |
-| | max_candidates | int | 근거 후보 최대 개수 (50~1000, 기본 300) |
-| | months_back | int | 최근 N개월 (1~24, 기본 6) |
-| **StrengthDetail** | category | str | "service" \| "price" |
+| **ComparisonDetail** | category | str | "service" \| "price" |
 | | lift_percentage | float | (단일−전체)/전체×100 |
-| **StrengthResponseV2** | restaurant_id | int | 레스토랑 ID |
-| | strengths | List[StrengthDetail] | 강점 리스트 |
+| **ComparisonResponse** | restaurant_id | int | 레스토랑 ID |
+| | comparisons | List[ComparisonDetail] | 비교 항목 리스트 |
 | | total_candidates | int | 근거 후보 총 개수 |
 | | validated_count | int | 검증 통과 개수 |
 | | category_lift | Dict[str, float]? | service/price lift |
-| | strength_display | List[str]? | 표시 문장 리스트 |
+| | comparison_display | List[str]? | 표시 문장 리스트 |
 | | debug | DebugInfo? | 디버그 정보 |
 
 ### 9.3 Summary DTO
@@ -709,11 +614,7 @@ API별 요청/응답에 사용되는 Pydantic 모델(DTO)과 필드를 정리합
 | **SummaryDisplayResponse** | restaurant_id | int | 레스토랑 ID |
 | | overall_summary | str | 전체 요약 |
 | | categories | Dict[str, CategorySummary]? | service/price/food 요약 |
-| **SummaryResponse** | (SummaryDisplayResponse 필드) + | | |
-| | positive_reviews | List[ReviewModel] | (debug=true) |
-| | negative_reviews | List[ReviewModel] | (debug=true) |
-| | positive_count, negative_count | int | (debug=true) |
-| | debug | DebugInfo? | (debug=true) |
+| | debug | DebugInfo? | X-Debug: true 시에만 |
 | **SummaryBatchResponse** | results | List[SummaryDisplayResponse] | 레스토랑별 요약 |
 
 ### 9.4 Sentiment DTO
@@ -750,12 +651,10 @@ API별 요청/응답에 사용되는 Pydantic 모델(DTO)과 필드를 정리합
 | | score | float | 유사도 점수 |
 | **VectorSearchResponse** | results | List[VectorSearchResult] | 검색 결과 |
 | | total | int | 총 개수 |
-| **VectorUploadReviewInput** | id | int? | 리뷰 ID |
+| **VectorUploadReviewInput** | id | int? | 리뷰 ID (선택) |
 | | restaurant_id | int | 레스토랑 ID |
 | | content | str | 리뷰 내용 |
-| | created_at | datetime? | 생성 시간 (메타) |
-| | images | List[ReviewImageModel]? | 이미지 리스트 (스키마만, API 요청/응답 미포함) |
-| **VectorUploadRestaurantInput** | id | int? | 레스토랑 ID |
+| **VectorUploadRestaurantInput** | id | int? | 레스토랑 ID (선택) |
 | | name | str | 레스토랑 이름 |
 | | reviews | List[VectorUploadReviewInput] | 중첩 리뷰 (선택) |
 | **VectorUploadRequest** | reviews | List[VectorUploadReviewInput] | 리뷰 리스트 |
@@ -763,27 +662,6 @@ API별 요청/응답에 사용되는 Pydantic 모델(DTO)과 필드를 정리합
 | **VectorUploadResponse** | message | str | 메시지 |
 | | points_count | int | 업로드된 포인트 수 |
 | | collection_name | str | 컬렉션 이름 |
-| **UpsertReviewsRequest** | reviews | List[VectorUploadReviewInput] | 리뷰 리스트 |
-| | restaurants | List[VectorUploadRestaurantInput]? | 레스토랑 리스트 |
-| | batch_size | int? | 배치 크기 (1~100, 기본 32) |
-| **UpsertReviewsBatchResponse** | results | List[Dict] | [{ action, review_id, version?, point_id? }] |
-| | total | int | 처리된 수 |
-| | success_count | int | 성공 수 |
-| | error_count | int | 실패 수 |
-| **DeleteReviewRequest** | restaurant_id | int | 레스토랑 ID |
-| | review_id | int | 리뷰 ID |
-| **DeleteReviewResponse** | action | str | "deleted" \| "not_found" |
-| | review_id | int | 리뷰 ID |
-| | point_id | str | Point ID |
-| **DeleteReviewsBatchRequest** | restaurant_id | int | 레스토랑 ID |
-| | review_ids | List[int] | 리뷰 ID 리스트 |
-| **DeleteReviewsBatchResponse** | results | List[Dict] | [{ review_id, action, point_id? }] |
-| | total | int | 처리된 수 |
-| | deleted_count | int | 삭제된 수 |
-| | not_found_count | int | 미발견 수 |
-| **RestaurantReviewsResponse** | restaurant_id | int | 레스토랑 ID (경로 파라미터는 str 전달, 응답 시 int로 직렬화) |
-| | reviews | List[ReviewModel] | 리뷰 리스트 |
-| | total | int | 총 리뷰 수 |
 
 ### 9.6 공통 DTO
 
@@ -798,12 +676,9 @@ API별 요청/응답에 사용되는 Pydantic 모델(DTO)과 필드를 정리합
 | | tokens_used | int? | 사용 토큰 수 |
 | | model_version | str? | 모델 버전 |
 | | warnings | List[str]? | 경고 메시지 |
-| **ReviewModel** | id | int? | 리뷰 ID |
-| | restaurant_id | int | 레스토랑 ID (필수) |
-| | member_id, group_id, subgroup_id | int? | 회원·그룹 ID (스키마만, API 응답 미포함) |
+| **ReviewModel** | id | int? | 리뷰 ID (선택) |
+| | restaurant_id | int | 레스토랑 ID |
 | | content | str | 리뷰 내용 |
-| | is_recommended, created_at, updated_at | various | 메타 |
-| | images | List[ReviewImageModel]? | 이미지 리스트 (스키마만, API 요청/응답 미포함) |
 
 ### 9.7 공통 에러 응답 포맷
 
@@ -828,11 +703,39 @@ API별 요청/응답에 사용되는 Pydantic 모델(DTO)과 필드를 정리합
 - **HTTP 오류(4xx/5xx)**: `message`는 `detail` 문자열, `details`는 원본 `detail`
 - **Unhandled(500)**: `message="Internal server error"`, `details=null`
 
+### 9.8 선택 필드 역할
+
+선택(optional) 필드는 **없어도 요청/응답이 성립**하지만, **있으면 그 값이 동작에 반영**됩니다.
+
+**요청(Request) 쪽**
+
+| DTO | 필드 | 역할 |
+|-----|------|------|
+| **ReviewModel** | id | 리뷰 식별. 검색 응답·업로드 시 "이 리뷰"를 가리킬 때 사용. 없으면 서버가 내부 ID로 구분. |
+| **SentimentReviewInput** | id | **LLM 재판정 시 매핑용.** 1차 분류 후 negative만 LLM 재판정할 때, LLM 출력 `[{"id": ..., "sentiment": ...}]`와 매칭. 없으면 인덱스로 매핑. |
+| **VectorSearchRequest** | restaurant_id | **검색 범위 제한.** 값을 넣으면 해당 레스토랑 리뷰만 검색, None이면 전체 검색. |
+| **VectorUploadReviewInput** | id | 업로드 시 리뷰 식별·upsert 시 "어느 포인트를 갱신할지" 구분. 없으면 서버가 ID 생성. |
+| **VectorUploadRestaurantInput** | id | 레스토랑 식별·대표 벡터 매핑용. 없으면 이름만으로 처리. |
+| **VectorUploadRequest** | restaurants | **레스토랑 메타 전달.** 리뷰만 올릴 수도 있고, 넣으면 레스토랑 대표 벡터·이름 매핑에 사용. |
+| **ErrorResponse** | details | 422 등 검증/에러 시 상세(필드별 오류 등). 없으면 null. |
+
+**응답(Response) 쪽**
+
+| DTO | 필드 | 역할 |
+|-----|------|------|
+| **DebugInfo** (전부 선택) | request_id, processing_time_ms, tokens_used, model_version, warnings | **디버그/운영용.** `X-Debug: true` 또는 `debug=true`일 때만 응답에 포함. 요청 추적·지연·토큰·경고 확인용. |
+| **SentimentAnalysisResponse** | debug | 감성 분석 응답에 디버그 블록 추가. |
+| **SummaryDisplayResponse** | categories | 카테고리별 요약(service/price/food). 파이프라인 결과가 없으면 None. |
+| **SummaryDisplayResponse** | debug | 요약 응답에 디버그 블록 추가. |
+| **ComparisonResponse** | category_lift | service/price별 lift 퍼센트. 통계·LLM 설명용. 없으면 None. |
+| **ComparisonResponse** | comparison_display | 표시용 문장(퍼센트+해석, 표본 수별 톤). 없으면 None. |
+| **ComparisonResponse** | debug | 비교 응답에 디버그 블록 추가. |
+
 ---
 
 ## 10. 참고
 
-- **Strength**: 현재 API는 Kiwi+lift 경로만 사용. `strengths`: `{category, lift_percentage}`.  
+- **Comparison**: 현재 API는 Kiwi+lift 경로만 사용. 요청은 `restaurant_id`, `top_k`만. `comparisons`: `{category, lift_percentage}`.  
 - **Summary**: **기본 시드만 사용** (`DEFAULT_*_SEEDS` 직접, `load_aspect_seeds`·파일 미사용) + `query_hybrid_search` (Dense+Sparse RRF) → `summarize_aspects_new`.  
 - **Vector**: named 컬렉션에서 Dense 단독 검색 시 `using="dense"` 필요. 단일 벡터 컬렉션은 `using` 없음.  
 - **Sentiment**: `SentimentAnalyzer` (HF 1차 + LLM 2차 재판정).

@@ -131,7 +131,7 @@ class MetricsDB:
         
         Args:
             restaurant_id: 레스토랑 ID
-            analysis_type: 분석 타입 ('sentiment', 'summary', 'strength')
+            analysis_type: 분석 타입 ('sentiment', 'summary', 'comparison')
             processing_time_ms: 처리 시간 (밀리초)
             tokens_used: 사용된 토큰 수
             batch_size: 배치 크기
@@ -243,7 +243,7 @@ class MetricsDB:
         Args:
             request_id: 요청 ID
             restaurant_id: 레스토랑 ID
-            analysis_type: 분석 타입 ('sentiment', 'summary', 'strength')
+            analysis_type: 분석 타입 ('sentiment', 'summary', 'comparison')
             prefill_time_ms: Prefill 시간 (밀리초)
             decode_time_ms: Decode 시간 (밀리초)
             total_time_ms: 전체 시간 (밀리초)
@@ -280,7 +280,7 @@ class MetricsDB:
         
         Args:
             restaurant_id: 레스토랑 ID
-            analysis_type: 분석 타입 ('sentiment', 'summary', 'strength')
+            analysis_type: 분석 타입 ('sentiment', 'summary', 'comparison')
             
         Returns:
             마지막 성공 실행 시각 (datetime), 없으면 None
@@ -332,7 +332,7 @@ class MetricsDB:
         
         Args:
             restaurant_id: 레스토랑 ID
-            analysis_type: 분석 타입 ('sentiment', 'summary', 'strength')
+            analysis_type: 분석 타입 ('sentiment', 'summary', 'comparison')
             min_interval_seconds: 최소 간격 (초)
             
         Returns:

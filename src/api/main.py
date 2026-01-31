@@ -12,7 +12,7 @@ import logging
 import sys
 import uuid
 
-from .routers import sentiment, vector, llm, restaurant, test
+from .routers import sentiment, vector, llm, test
 from ..cpu_monitor import get_cpu_monitor
 
 # 로거 설정 (콘솔 출력)
@@ -136,7 +136,6 @@ app.add_middleware(
 app.include_router(sentiment.router, prefix="/api/v1/sentiment", tags=["sentiment"])
 app.include_router(vector.router, prefix="/api/v1/vector", tags=["vector"])
 app.include_router(llm.router, prefix="/api/v1/llm", tags=["llm"])
-app.include_router(restaurant.router, prefix="/api/v1/restaurants", tags=["restaurants"])
 app.include_router(test.router, prefix="/api/v1/test", tags=["test"])
 
 

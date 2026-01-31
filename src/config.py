@@ -111,7 +111,7 @@ class Config:
     # SKIP 로직 설정 (초기 전략: analysis_metrics 기반)
     SKIP_MIN_INTERVAL_SECONDS: int = int(os.getenv("SKIP_MIN_INTERVAL_SECONDS", "3600"))  # 최소 간격 (초, 기본값: 1시간)
     
-    # Strength Extraction - 전체 데이터셋 평균 비율 (배치 작업 결과로 교체 필요)
+    # Comparison - 전체 데이터셋 평균 비율 (배치 작업 결과로 교체 필요)
     ALL_AVERAGE_SERVICE_RATIO: float = float(os.getenv("ALL_AVERAGE_SERVICE_RATIO", "0.60"))  # 전체 평균 서비스 긍정 비율
     ALL_AVERAGE_PRICE_RATIO: float = float(os.getenv("ALL_AVERAGE_PRICE_RATIO", "0.55"))  # 전체 평균 가격 긍정 비율
     # strength_in_aspect와 동일한 '전체' 사용: aspect_data 파일(TSV의 Review 컬럼, JSON의 content)에서 계산
