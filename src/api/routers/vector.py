@@ -44,9 +44,21 @@ def search_similar_reviews(
             min_score=request.min_score,
         )
         # VectorSearchResult 형식으로 변환 (review와 score 포함)
+        # payload의 id/review_id가 없을 수 있어 ReviewModel 호환 dict로 변환
+        def _to_review_model(payload: dict) -> dict:
+            rid = payload.get("id") or payload.get("review_id")
+            if rid is not None and str(rid).isdigit():
+                rid = int(rid)
+            elif rid is None:
+                rid = 0  # 기존 데이터 호환용
+            return {
+                "id": rid,
+                "restaurant_id": int(payload["restaurant_id"]) if payload.get("restaurant_id") and str(payload["restaurant_id"]).isdigit() else payload.get("restaurant_id", 0),
+                "content": payload.get("content") or payload.get("review", ""),
+            }
         search_results = [
             VectorSearchResult(
-                review=r["payload"],
+                review=_to_review_model(r["payload"]),
                 score=r["score"]
             )
             for r in results
@@ -64,7 +76,7 @@ async def upload_vector_data(
     """
     벡터 데이터를 벡터 데이터베이스에 업로드합니다 ( 기반).
     
-    - **reviews**: 리뷰 리스트 (id 선택, restaurant_id, content)
+    - **reviews**: 리뷰 리스트 (id, restaurant_id, content, created_at 필수)
     - **restaurants**: 레스토랑 리스트 (id 선택, name, reviews; 선택사항)
     """
     try:

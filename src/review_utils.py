@@ -126,13 +126,20 @@ def validate_review_data(review: Union[Dict, Any]) -> bool:
     Returns:
         유효성 여부
     """
-    # : content는 필수, id는 선택 (생성 시 자동 생성 가능)
+    # content는 필수, id는 필수 (API 스키마와 일치)
     # Pydantic 모델인 경우
     if hasattr(review, 'content'):
-        return bool(review.content)
+        if not review.content:
+            return False
+        if hasattr(review, 'id'):
+            return review.id is not None
+        return True
     # 딕셔너리인 경우
     elif isinstance(review, dict):
-        return "content" in review and bool(review.get("content"))
+        if "content" not in review or not review.get("content"):
+            return False
+        rid = review.get("id") or review.get("review_id")
+        return rid is not None
     return False
 
 
