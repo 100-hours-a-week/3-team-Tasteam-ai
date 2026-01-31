@@ -420,7 +420,7 @@ def _tone_by_sample(n_reviews: int) -> str:
     """
     표본 수에 따른 해석 톤. (과장 방지, 표본 작으면 톤 다운)
     - n ≥ 50: "좋은 편"
-    - 20 ≤ n < 50: "상대적으로 좋은 편(표본 중간)"
+    - 20 ≤ n < 50: "상대적으로 좋은 편"
     - n < 20: "경향이 보이나 표본이 적어요"
     """
     if n_reviews >= 50:
@@ -428,7 +428,7 @@ def _tone_by_sample(n_reviews: int) -> str:
         return "좋은 편"
     if n_reviews >= 20:
         logger.info("표본 리뷰수 20 <= n=%d < 50이므로 톤 '상대적으로 좋은 편' 사용", n_reviews)
-        return "상대적으로 좋은 편(표본 중간)"
+        return "상대적으로 좋은 편"
     logger.info("표본 리뷰수 n=%d < 20이므로 톤 '경향이 보이나 표본이 적어요' 사용", n_reviews)
     return "경향이 보이나 표본이 적어요"
 
