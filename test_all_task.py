@@ -306,11 +306,15 @@ def generate_test_data(
                         'reviews': []
                     }
                 
-                # 리뷰 추가 (Qdrant 업로드 시 point_id 구분을 위해 id 필수)
+                # 리뷰 추가 (Qdrant 업로드 시 point_id 구분을 위해 id 필수, created_at 필수)
+                review_id = review.get('id')
+                if review_id is None:
+                    review_id = hash((restaurant_id, review.get('content', ''))) % (10 ** 9) or 1
                 review_data = {
-                    'id': review.get('id'),
+                    'id': review_id,
                     'restaurant_id': review.get('restaurant_id'),
                     'content': review.get('content', ''),
+                    'created_at': review.get('created_at') or datetime.now().isoformat(),
                 }
                 restaurants_dict[restaurant_id_str]['reviews'].append(review_data)
             
@@ -341,11 +345,13 @@ def generate_test_data(
                 STRENGTH_TARGET_RESTAURANT_ID = 4 if any((r.get('restaurant_id') or 0) == 4 for r in data.get('restaurants', [])) else None
                 # ReviewModel 형식으로 변환
                 SAMPLE_REVIEWS = []
-                for review in first_restaurant.get('reviews', []):
+                for i, review in enumerate(first_restaurant.get('reviews', [])):
                     if isinstance(review, dict) and review.get('content'):
                         review_obj = {
+                            'id': review.get('id') or (i + 1),
                             'restaurant_id': review.get('restaurant_id', SAMPLE_RESTAURANT_ID),
                             'content': review.get('content', ''),
+                            'created_at': review.get('created_at') or datetime.now().isoformat(),
                         }
                         SAMPLE_REVIEWS.append(review_obj)
                 print_info(f"  - 샘플 레스토랑 ID: {SAMPLE_RESTAURANT_ID}")
@@ -1246,15 +1252,17 @@ def test_sentiment_analysis(enable_benchmark: bool = False, num_iterations: int 
             "reviews": []  # 빈 리스트 (서버에서 자동 조회)
         }
     else:
-        # SentimentReviewInput 형식 (restaurant_id, content만)
+        # SentimentReviewInput 형식 (id, restaurant_id, content, created_at)
         reviews_list = []
-        for review in SAMPLE_REVIEWS:
+        for i, review in enumerate(SAMPLE_REVIEWS):
+            created_at = (review.get('created_at') if isinstance(review, dict) else None) or datetime.now().isoformat()
+            rid = (review.get('id') if isinstance(review, dict) else None) or (i + 1)
             if isinstance(review, dict) and review.get('content'):
-                reviews_list.append({'restaurant_id': review.get('restaurant_id', SAMPLE_RESTAURANT_ID), 'content': review['content']})
+                reviews_list.append({'id': rid, 'restaurant_id': review.get('restaurant_id', SAMPLE_RESTAURANT_ID), 'content': review['content'], 'created_at': created_at})
             elif isinstance(review, dict):
-                reviews_list.append({'restaurant_id': SAMPLE_RESTAURANT_ID, 'content': str(review.get('content', ''))})
+                reviews_list.append({'id': rid, 'restaurant_id': SAMPLE_RESTAURANT_ID, 'content': str(review.get('content', '')), 'created_at': created_at})
             elif isinstance(review, str):
-                reviews_list.append({'restaurant_id': SAMPLE_RESTAURANT_ID, 'content': review})
+                reviews_list.append({'id': rid, 'restaurant_id': SAMPLE_RESTAURANT_ID, 'content': review, 'created_at': created_at})
         
         payload = {
             "restaurant_id": SAMPLE_RESTAURANT_ID,
@@ -1421,20 +1429,25 @@ def test_sentiment_analysis_batch(enable_benchmark: bool = False, num_iterations
     url = f"{BASE_URL}{API_PREFIX}/sentiment/analyze/batch"
     # 10개 레스토랑 배치 생성 (QUANTITATIVE_METRICS.md 요구사항)
     restaurants_payload = []
-    # SentimentReviewInput 형식 (restaurant_id, content만)
+    # SentimentReviewInput 형식 (id, restaurant_id, content, created_at)
     reviews_list = []
-    for review in SAMPLE_REVIEWS:
+    for i, review in enumerate(SAMPLE_REVIEWS):
+        created_at = (review.get('created_at') if isinstance(review, dict) else None) or datetime.now().isoformat()
+        rid = (review.get('id') if isinstance(review, dict) else None) or (i + 1)
         if isinstance(review, dict) and review.get('content'):
-            reviews_list.append({'restaurant_id': review.get('restaurant_id', SAMPLE_RESTAURANT_ID), 'content': review['content']})
+            reviews_list.append({'id': rid, 'restaurant_id': review.get('restaurant_id', SAMPLE_RESTAURANT_ID), 'content': review['content'], 'created_at': created_at})
         elif isinstance(review, str):
-            reviews_list.append({'restaurant_id': SAMPLE_RESTAURANT_ID, 'content': review})
+            reviews_list.append({'id': rid, 'restaurant_id': SAMPLE_RESTAURANT_ID, 'content': review, 'created_at': created_at})
     
     for i in range(10):
         # 각 레스토랑에 맞게 restaurant_id 업데이트
         restaurant_reviews = []
-        for review in reviews_list:
+        for j, review in enumerate(reviews_list):
             if isinstance(review, dict):
-                review_copy = {'restaurant_id': SAMPLE_RESTAURANT_ID + i, 'content': review.get('content', '')}
+                # 배치에서 restaurant_id별로 id 구분: base_id * 1000 + j
+                base_id = review.get('id', j + 1)
+                rid = base_id * 1000 + i if isinstance(base_id, int) else (i * 100 + j + 1)
+                review_copy = {'id': rid, 'restaurant_id': SAMPLE_RESTAURANT_ID + i, 'content': review.get('content', ''), 'created_at': review.get('created_at', datetime.now().isoformat())}
                 restaurant_reviews.append(review_copy)
         
         restaurants_payload.append({
@@ -2860,12 +2873,14 @@ def main():
             STRENGTH_TARGET_RESTAURANT_ID = 4 if any((r.get("restaurant_id") or 0) == 4 for r in data.get("restaurants", [])) else None
             # 리뷰 객체를 ReviewModel 형식으로 저장 (API가 ReviewModel 리스트를 기대)
             SAMPLE_REVIEWS = []
-            for review in first_restaurant.get("reviews", []):
+            for idx, review in enumerate(first_restaurant.get("reviews", [])):
                 if isinstance(review, dict) and review.get('content'):
-                    # SentimentReviewInput 형식 (restaurant_id, content만)
+                    # SentimentReviewInput 형식 (id, restaurant_id, content, created_at)
                     review_obj = {
+                        'id': review.get('id') or (idx + 1),
                         'restaurant_id': review.get('restaurant_id', SAMPLE_RESTAURANT_ID),
                         'content': review.get('content', ''),
+                        'created_at': review.get('created_at') or datetime.now().isoformat(),
                     }
                     SAMPLE_REVIEWS.append(review_obj)
             print_info(f"테스트 레스토랑 ID: {SAMPLE_RESTAURANT_ID}")

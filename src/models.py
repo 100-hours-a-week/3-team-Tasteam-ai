@@ -2,6 +2,7 @@
 API 요청/응답 모델 정의 ( 기반)
 """
 
+from datetime import datetime
 from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, Field
 
@@ -17,8 +18,8 @@ class ErrorResponse(BaseModel):
 
 
 class ReviewModel(BaseModel):
-    """리뷰 모델 (API 요청/응답용: id, restaurant_id, content만)"""
-    id: Optional[int] = Field(None, description="리뷰 ID")
+    """리뷰 모델 (API 요청/응답용: id, restaurant_id, content)"""
+    id: int = Field(..., description="리뷰 ID")
     restaurant_id: int = Field(..., description="레스토랑 ID")
     content: str = Field(..., description="리뷰 내용")
 
@@ -37,16 +38,17 @@ class DebugInfo(BaseModel):
 # ==================== Sentiment Analysis ====================
 
 class SentimentReviewInput(BaseModel):
-    """감성 분석용 리뷰 입력 (id, restaurant_id, content)"""
-    id: Optional[int] = Field(None, description="리뷰 ID (선택, LLM 재판정 시 매핑용)")
+    """감성 분석용 리뷰 입력 (id, restaurant_id, content, created_at)"""
+    id: int = Field(..., description="리뷰 ID (LLM 재판정 시 매핑용)")
     restaurant_id: int = Field(..., description="레스토랑 ID (BIGINT FK)")
     content: str = Field(..., description="리뷰 내용 (VARCHAR(1000))")
+    created_at: datetime = Field(..., description="리뷰 작성 시각 (ISO 8601)")
 
 
 class SentimentAnalysisRequest(BaseModel):
     """감성 분석 요청 모델 ( 기반)"""
     restaurant_id: int = Field(..., description="레스토랑 ID (BIGINT FK)")
-    reviews: List[SentimentReviewInput] = Field(..., description="리뷰 리스트 (id 선택, restaurant_id, content)")
+    reviews: List[SentimentReviewInput] = Field(..., description="리뷰 리스트 (id, restaurant_id, content, created_at 필수)")
 
 
 class SentimentAnalysisDisplayResponse(BaseModel):
@@ -70,9 +72,9 @@ class SentimentAnalysisResponse(BaseModel):
 
 
 class SentimentRestaurantBatchInput(BaseModel):
-    """배치 감성 분석용 레스토랑 입력 (reviews는 SentimentReviewInput: id 선택, restaurant_id, content)"""
+    """배치 감성 분석용 레스토랑 입력 (reviews는 SentimentReviewInput: id, restaurant_id, content, created_at 필수)"""
     restaurant_id: int = Field(..., description="레스토랑 ID")
-    reviews: List[SentimentReviewInput] = Field(default_factory=list, description="리뷰 리스트 (id 선택, restaurant_id, content)")
+    reviews: List[SentimentReviewInput] = Field(default_factory=list, description="리뷰 리스트 (id, restaurant_id, content, created_at 필수)")
 
 
 class SentimentAnalysisBatchRequest(BaseModel):
@@ -183,10 +185,11 @@ class VectorSearchResponse(BaseModel):
 # ==================== Vector Upload ====================
 
 class VectorUploadReviewInput(BaseModel):
-    """벡터 업로드용 리뷰 입력 (id 선택, restaurant_id, content)"""
-    id: Optional[int] = Field(None, description="리뷰 ID")
+    """벡터 업로드용 리뷰 입력 (id, restaurant_id, content, created_at)"""
+    id: int = Field(..., description="리뷰 ID")
     restaurant_id: int = Field(..., description="레스토랑 ID")
     content: str = Field(..., description="리뷰 내용")
+    created_at: datetime = Field(..., description="리뷰 작성 시각 (ISO 8601)")
 
 
 class VectorUploadRestaurantInput(BaseModel):
@@ -198,7 +201,7 @@ class VectorUploadRestaurantInput(BaseModel):
 
 class VectorUploadRequest(BaseModel):
     """벡터 데이터 업로드 요청 모델"""
-    reviews: List[VectorUploadReviewInput] = Field(..., description="리뷰 리스트 (id, restaurant_id, content)")
+    reviews: List[VectorUploadReviewInput] = Field(..., description="리뷰 리스트 (id, restaurant_id, content, created_at 필수)")
     restaurants: Optional[List[VectorUploadRestaurantInput]] = Field(None, description="레스토랑 리스트 (id, name, reviews만, 선택사항)")
 
 

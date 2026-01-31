@@ -64,8 +64,8 @@
          ▼                                ▼                                ▼
 ┌─────────────────┐            ┌─────────────────┐            ┌─────────────────┐
 │     Vector      │            │     Summary     │            │   Comparison    │
-│ /search/similar │            │   /summarize    │            │ /extract/       │
-│ /upload         │            │   /summarize/   │            │   comparison    │
+│ /search/similar │            │   /summarize    │            │ /comparison     │
+│ /upload         │            │   /summarize/   │            │                 │
 │                 │            │   batch         │            │                 │
 │                 │            │  aspect_seeds   │            │  Kiwi bigram    │
 │                 │            │  → hybrid검색   │            │  → service/     │
@@ -131,6 +131,7 @@
 
 ### 2.4 공통
 
+- **Spark 로그 억제**: Comparison(comparison_pipeline)은 Spark 사용. 로그 억제는 [trouble_shooting/SPARK_LOG_NOISE.md](trouble_shooting/SPARK_LOG_NOISE.md) 참고.
 - **Kiwi**: NNG/NNP bigram.  
 - **키워드**: service `친절, 서비스, 응대, 직원, 사장, 불친절`; price `가격, 가성비, 대비, 리필, 무한, 할인, 쿠폰`; 긍정 시드 별도.  
 - **불용어**: `data/stopwords-ko.txt` 우선.  
@@ -195,7 +196,9 @@
 
 1. **리뷰**  
    - `reviews`가 요청에 있으면 사용.  
-   - 없으면 `vector_search.get_restaurant_reviews` 등 (구성에 따라 다름).
+   - 없으면(또는 빈 리스트) `vector_search`에서 조회:  
+     - `ENABLE_SENTIMENT_SAMPLING=true` → `get_recent_restaurant_reviews(limit=SENTIMENT_RECENT_TOP_K)`  
+     - `ENABLE_SENTIMENT_SAMPLING=false` → `get_restaurant_reviews` (전체 리뷰)
 
 2. **1차 분류 (HuggingFace)**  
    - `Dilwolf/Kakao_app-kr_sentiment`, `return_all_scores=True`  
@@ -270,12 +273,13 @@
 
 | 구분 | 필드 | 타입 | 설명 |
 |------|------|------|------|
-| 필수 | 리뷰 식별자 | id 등 | 한 건을 구분하는 고유값 (API에서는 `id`, 선택) |
+| 필수 | 리뷰 식별자 | id 등 | 한 건을 구분하는 고유값 (API에서는 `id`, 필수) |
 | 필수 | 레스토랑 식별자 | restaurant_id | 어느 가게 리뷰인지 (API에서는 `restaurant_id`) |
 | 필수 | 리뷰 텍스트 | content 등 | 리뷰 본문 (API에서는 `content`) |
+| 필수 | 작성 시각 | created_at | 리뷰 작성 시각 (API에서는 `created_at`, ISO 8601) |
 
 **API 스키마**  
-업로드·검색 요청/응답에는 `id`(선택), `restaurant_id`, `content`만 사용. 원천에 그 외 필드가 있어도 API로 넘길 때는 위 세 필드만 보내면 됨.  
+업로드·감성 분석 요청에는 `id`, `restaurant_id`, `content`, `created_at` 모두 필수. 검색 응답에는 `id`, `restaurant_id`, `content` 포함.  
 
 **레스토랑(선택)**
 
@@ -292,7 +296,7 @@
 2. `POST /api/v1/vector/upload`로 전달한다. (리뷰·레스토랑 추가·갱신은 동일 upload로 upsert 가능.)
 
 **참고**  
-- `data/test_data_sample.json`: 리뷰 배열 JSON 예시 (필드 많음 → upload 시 `id`, `restaurant_id`, `content`만 사용).  
+- `data/test_data_sample.json`: 리뷰 배열 JSON 예시 (필드 많음 → upload 시 `id`, `restaurant_id`, `content`, `created_at` 사용).  
 - `kr3.tsv` + `POST /api/v1/test/generate`: TSV 원천을 배치 요청 형식으로 변환한 뒤, 그 결과에서 `reviews`/`restaurants`를 뽑아 upload 형식으로 재가공 가능.
 
 ---
@@ -329,6 +333,11 @@
 | `SUMMARY_LLM_ASYNC` | Summary 배치: LLM 호출. true=AsyncOpenAI/httpx, false=to_thread |
 | `SENTIMENT_CLASSIFIER_USE_THREAD` | Sentiment: true면 HF 분류기 asyncio.to_thread(블로킹 격리), false면 메인 스레드(기본값) |
 | `SENTIMENT_LLM_ASYNC` | Sentiment: true면 LLM 재판정 AsyncOpenAI, false면 동기(기본값) |
+| `ENABLE_SENTIMENT_SAMPLING` | Sentiment: true면 최근 리뷰 샘플링, false면 전체 리뷰 |
+| `SENTIMENT_RECENT_TOP_K` | Sentiment 샘플링 시 최근 리뷰 수 (기본 100) |
+| `BATCH_SEARCH_CONCURRENCY` | Summary 배치 검색 동시성 (기본 50) |
+| `BATCH_LLM_CONCURRENCY` | Summary 배치 LLM 동시성 (기본 8) |
+| `OPENAI_MODEL` | Sentiment LLM 재판정·폴백 모델 (gpt-4o-mini 등) |
 | `ALL_AVERAGE_SERVICE_RATIO`, `ALL_AVERAGE_PRICE_RATIO` | 전체 평균 폴백 |
 | `ASPECT_SEEDS_FILE` | Summary aspect seed JSON (선택) |
 | `SKIP_MIN_INTERVAL_SECONDS` | SKIP 최소 간격(초) |
@@ -472,12 +481,12 @@
 **`POST /api/v1/sentiment/analyze`**
 
 ```json
-// 요청 (리뷰: id 선택, restaurant_id, content)
+// 요청 (리뷰: id, restaurant_id, content, created_at 필수)
 {
   "restaurant_id": 1,
   "reviews": [
-    {"id": 1, "restaurant_id": 1, "content": "맛있어요! 서비스도 친절해요."},
-    {"id": 2, "restaurant_id": 1, "content": "맛있어요"}
+    {"id": 1, "restaurant_id": 1, "content": "맛있어요! 서비스도 친절해요.", "created_at": "2025-02-17T17:02:45.366789"},
+    {"id": 2, "restaurant_id": 1, "content": "맛있어요", "created_at": "2025-11-14T17:02:45.367453"}
   ]
 }
 
@@ -505,12 +514,12 @@
 **`POST /api/v1/sentiment/analyze/batch`**
 
 ```json
-// 요청 (리뷰: id 선택, restaurant_id, content)
+// 요청 (리뷰: id, restaurant_id, content, created_at 필수)
 {
   "restaurants": [
-    {"restaurant_id": 1, "reviews": [{"id": 1, "restaurant_id": 1, "content": "맛있어요! 서비스도 친절해요."}, {"id": 2, "restaurant_id": 1, "content": "맛있어요"}]},
-    {"restaurant_id": 2, "reviews": [{"id": 10, "restaurant_id": 2, "content": "맛있어요"}]},
-    {"restaurant_id": 3, "reviews": [{"id": 20, "restaurant_id": 3, "content": "맛있어요"}]}
+    {"restaurant_id": 1, "reviews": [{"id": 1, "restaurant_id": 1, "content": "맛있어요! 서비스도 친절해요.", "created_at": "2025-02-17T17:02:45.366789"}, {"id": 2, "restaurant_id": 1, "content": "맛있어요", "created_at": "2025-11-14T17:02:45.367453"}]},
+    {"restaurant_id": 2, "reviews": [{"id": 10, "restaurant_id": 2, "content": "맛있어요", "created_at": "2025-11-14T17:02:45.367453"}]},
+    {"restaurant_id": 3, "reviews": [{"id": 20, "restaurant_id": 3, "content": "맛있어요", "created_at": "2025-11-14T17:02:45.367454"}]}
   ]
 }
 
@@ -552,10 +561,10 @@
 **`POST /api/v1/vector/upload`**
 
 ```json
-// 요청 (reviews: id 선택, restaurant_id, content / restaurants: id 선택, name, reviews)
+// 요청 (reviews: id, restaurant_id, content, created_at 필수 / restaurants: id 선택, name, reviews)
 {
   "reviews": [
-    {"id": 1, "restaurant_id": 1, "content": "맛있어요" }
+    {"id": 1, "restaurant_id": 1, "content": "맛있어요", "created_at": "2025-02-17T17:02:45.366789"}
   ],
   "restaurants": [
     {"id": 1, "name": "테스트 음식점"}
@@ -628,9 +637,10 @@ API별 요청/응답에 사용되는 Pydantic 모델(DTO)과 필드를 정리합
 
 | DTO | 필드 | 타입 | 설명 |
 |-----|------|------|------|
-| **SentimentReviewInput** | id | int? | 리뷰 ID (선택, LLM 재판정 매핑용) |
+| **SentimentReviewInput** | id | int | 리뷰 ID (필수, LLM 재판정 매핑용) |
 | | restaurant_id | int | 레스토랑 ID |
 | | content | str | 리뷰 내용 |
+| | created_at | datetime | 리뷰 작성 시각 (ISO 8601, 필수) |
 | **SentimentAnalysisRequest** | restaurant_id | int | 레스토랑 ID |
 | | reviews | List[SentimentReviewInput] | 리뷰 리스트 |
 | **SentimentAnalysisDisplayResponse** | restaurant_id | int | 레스토랑 ID |
@@ -658,9 +668,10 @@ API별 요청/응답에 사용되는 Pydantic 모델(DTO)과 필드를 정리합
 | | score | float | 유사도 점수 |
 | **VectorSearchResponse** | results | List[VectorSearchResult] | 검색 결과 |
 | | total | int | 총 개수 |
-| **VectorUploadReviewInput** | id | int? | 리뷰 ID (선택) |
+| **VectorUploadReviewInput** | id | int | 리뷰 ID (필수) |
 | | restaurant_id | int | 레스토랑 ID |
 | | content | str | 리뷰 내용 |
+| | created_at | datetime | 리뷰 작성 시각 (ISO 8601, 필수) |
 | **VectorUploadRestaurantInput** | id | int? | 레스토랑 ID (선택) |
 | | name | str | 레스토랑 이름 |
 | | reviews | List[VectorUploadReviewInput] | 중첩 리뷰 (선택) |
@@ -683,7 +694,7 @@ API별 요청/응답에 사용되는 Pydantic 모델(DTO)과 필드를 정리합
 | | tokens_used | int? | 사용 토큰 수 |
 | | model_version | str? | 모델 버전 |
 | | warnings | List[str]? | 경고 메시지 |
-| **ReviewModel** | id | int? | 리뷰 ID (선택) |
+| **ReviewModel** | id | int | 리뷰 ID (필수) |
 | | restaurant_id | int | 레스토랑 ID |
 | | content | str | 리뷰 내용 |
 
@@ -718,10 +729,10 @@ API별 요청/응답에 사용되는 Pydantic 모델(DTO)과 필드를 정리합
 
 | DTO | 필드 | 역할 |
 |-----|------|------|
-| **ReviewModel** | id | 리뷰 식별. 검색 응답·업로드 시 "이 리뷰"를 가리킬 때 사용. 없으면 서버가 내부 ID로 구분. |
-| **SentimentReviewInput** | id | **LLM 재판정 시 매핑용.** 1차 분류 후 negative만 LLM 재판정할 때, LLM 출력 `[{"id": ..., "sentiment": ...}]`와 매칭. 없으면 인덱스로 매핑. |
+| **SentimentReviewInput** | id | **필수.** LLM 재판정 시 매핑용. 1차 분류 후 negative만 LLM 재판정할 때, LLM 출력 `[{"id": ..., "sentiment": ...}]`와 매칭. |
+| **SentimentReviewInput** | created_at | **필수.** 리뷰 작성 시각 (ISO 8601). ENABLE_SENTIMENT_SAMPLING 시 get_recent_restaurant_reviews 정렬에 사용. |
 | **VectorSearchRequest** | restaurant_id | **검색 범위 제한.** 값을 넣으면 해당 레스토랑 리뷰만 검색, None이면 전체 검색. |
-| **VectorUploadReviewInput** | id | 업로드 시 리뷰 식별·upsert 시 "어느 포인트를 갱신할지" 구분. 없으면 서버가 ID 생성. |
+| **VectorUploadReviewInput** | id | **필수.** 업로드 시 리뷰 식별·upsert 시 "어느 포인트를 갱신할지" 구분. |
 | **VectorUploadRestaurantInput** | id | 레스토랑 식별·대표 벡터 매핑용. 없으면 이름만으로 처리. |
 | **VectorUploadRequest** | restaurants | **레스토랑 메타 전달.** 리뷰만 올릴 수도 있고, 넣으면 레스토랑 대표 벡터·이름 매핑에 사용. |
 | **ErrorResponse** | details | 422 등 검증/에러 시 상세(필드별 오류 등). 없으면 null. |
@@ -742,7 +753,7 @@ API별 요청/응답에 사용되는 Pydantic 모델(DTO)과 필드를 정리합
 
 ## 10. 참고
 
-- **Comparison**: 현재 API는 Kiwi+lift 경로만 사용. 요청은 `restaurant_id`, `top_k`만. `comparisons`: `{category, lift_percentage}`.  
+- **Comparison**: 현재 API는 Kiwi+lift 경로만 사용. 요청은 `restaurant_id`, `top_k`만. `comparisons`: `{category, lift_percentage}`. Spark 사용(comparison_pipeline), 로그 억제: [trouble_shooting/SPARK_LOG_NOISE.md](trouble_shooting/SPARK_LOG_NOISE.md).  
 - **Summary**: **기본 시드만 사용** (`DEFAULT_*_SEEDS` 직접, `load_aspect_seeds`·파일 미사용) + `query_hybrid_search` (Dense+Sparse RRF) → `summarize_aspects_new`.  
 - **Vector**: named 컬렉션에서 Dense 단독 검색 시 `using="dense"` 필요. 단일 벡터 컬렉션은 `using` 없음.  
-- **Sentiment**: `SentimentAnalyzer` (HF 1차 + LLM 2차 재판정).
+- **Sentiment**: `SentimentAnalyzer` (HF 1차 + LLM 2차 재판정). `ENABLE_SENTIMENT_SAMPLING`에 따라 전체/샘플링 분기.
