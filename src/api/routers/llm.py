@@ -17,6 +17,8 @@ from ...models import (
     SummaryBatchResponse,
     ComparisonRequest,
     ComparisonResponse,
+    ComparisonBatchRequest,
+    ComparisonBatchResponse,
     DebugInfo
 )
 from ..dependencies import get_llm_utils, get_vector_search, get_metrics_collector, get_debug_mode
@@ -389,12 +391,11 @@ async def compare(
     2. Kiwi 명사 bigram → service/price 긍정 비율 계산 (calculate_single_restaurant_ratios)
     3. 단일 vs 전체 평균 lift 계산 (calculate_comparison_lift)
     4. LLM으로 자연어 설명 생성 (generate_comparison_descriptions)
-    5. 양수 lift만 반환 (top_k 제한)
+    5. 양수 lift만 반환 (전체 반환)
     
     Args:
         request: 비교 요청
             - restaurant_id: 타겟 레스토랑 ID
-            - top_k: 반환할 최대 비교 항목 개수 (기본 10)
     
     Returns:
         비교 결과 (category_lift, lift_percentage, all_average_ratio, single_restaurant_ratio 포함).
@@ -467,7 +468,6 @@ async def compare(
         # 파이프라인 실행
         result = await pipeline.compare(
             restaurant_id=request.restaurant_id,
-            top_k=request.top_k,
         )
         
         # 메트릭 수집
@@ -507,6 +507,42 @@ async def compare(
         )
         logger.error(f"비교 중 오류: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"비교 중 오류 발생: {str(e)}")
+
+
+@router.post("/comparison/batch", response_model=ComparisonBatchResponse)
+async def compare_batch(
+    request: ComparisonBatchRequest,
+    llm_utils: LLMUtils = Depends(get_llm_utils),
+    vector_search: VectorSearch = Depends(get_vector_search),
+    metrics: MetricsCollector = Depends(get_metrics_collector),
+):
+    """
+    여러 레스토랑에 대한 비교 배치 처리 (Kiwi + lift).
+    
+    COMPARISON_BATCH_ASYNC=true면 음식점 간 병렬(asyncio.gather), false(기본값)면 순차.
+    
+    Args:
+        request: 배치 비교 요청
+            - restaurants: 레스토랑 데이터 리스트 (각 항목: restaurant_id)
+    
+    Returns:
+        각 레스토랑별 비교 결과 리스트
+    """
+    try:
+        pipeline = ComparisonPipeline(
+            llm_utils=llm_utils,
+            vector_search=vector_search,
+        )
+        results = await pipeline.compare_batch(
+            restaurants=request.restaurants,
+        )
+        return ComparisonBatchResponse(results=[ComparisonResponse(**r) for r in results])
+    except Exception as e:
+        logger.error(f"배치 비교 중 오류: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"배치 비교 중 오류 발생: {str(e)}"
+        )
 
 
 @router.post("/summarize/batch", response_model=SummaryBatchResponse)

@@ -102,6 +102,8 @@ class _InferenceConfig:
     
     # Comparison: service/price LLM 호출. true=asyncio.gather(병렬), false=순차
     COMPARISON_ASYNC: bool = os.getenv("COMPARISON_ASYNC", "false").lower() == "true"
+    # Comparison 배치: 음식점 간 병렬. true=asyncio.gather(병렬), false=순차(기본값)
+    COMPARISON_BATCH_ASYNC: bool = os.getenv("COMPARISON_BATCH_ASYNC", "false").lower() == "true"
 
 
 # --- Retrieval (Qdrant, embedding, top_k, rerank 등) ---
