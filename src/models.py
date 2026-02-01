@@ -134,7 +134,6 @@ class SummaryBatchResponse(BaseModel):
 class ComparisonRequest(BaseModel):
     """다른 음식점과의 비교 요청 모델 (Kiwi+lift 파이프라인)"""
     restaurant_id: int = Field(..., description="타겟 레스토랑 ID")
-    top_k: int = Field(10, ge=1, le=50, description="반환할 최대 비교 항목 개수")
 
 
 class ComparisonDetail(BaseModel):
@@ -158,6 +157,19 @@ class ComparisonResponse(BaseModel):
         description="lift 기반 표시 문장 (서비스/가격 만족도, 최신 파이프라인).",
     )
     debug: Optional[DebugInfo] = Field(None, description="디버그 정보")
+
+
+class ComparisonBatchRequest(BaseModel):
+    """배치 비교 요청 모델"""
+    restaurants: List[Dict[str, Any]] = Field(
+        ...,
+        description="레스토랑 데이터 리스트, 각 항목: restaurant_id(필수)."
+    )
+
+
+class ComparisonBatchResponse(BaseModel):
+    """배치 비교 응답 모델 (각 항목은 단일 ComparisonResponse와 동일)"""
+    results: List[ComparisonResponse] = Field(..., description="각 레스토랑별 비교 결과")
 
 
 # ==================== Vector Search (일반) ====================

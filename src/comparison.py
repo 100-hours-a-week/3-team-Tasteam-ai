@@ -72,7 +72,6 @@ class ComparisonPipeline:
     async def compare(
         self,
         restaurant_id: int,
-        top_k: int = 10,
     ) -> Dict[str, Any]:
         """
         통계적 비율 기반 다른 음식점과의 비교 (Kiwi + lift).
@@ -228,7 +227,6 @@ class ComparisonPipeline:
             })
 
         comparisons.sort(key=lambda x: x["lift_percentage"], reverse=True)
-        comparisons = comparisons[:top_k]
 
         processing_time = (time.time() - start_time) * 1000
         return {
@@ -240,3 +238,31 @@ class ComparisonPipeline:
             "comparison_display": comparison_display,
             "processing_time_ms": processing_time,
         }
+
+    async def compare_batch(
+        self,
+        restaurants: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """
+        다수 음식점에 대한 비교 배치 처리.
+        COMPARISON_BATCH_ASYNC=true면 asyncio.gather(병렬), false면 순차.
+        """
+        if not restaurants:
+            return []
+
+        def _get_restaurant_id(rd: Dict) -> int:
+            return int(rd.get("restaurant_id", 0))
+
+        if Config.COMPARISON_BATCH_ASYNC:
+            tasks = [
+                self.compare(restaurant_id=_get_restaurant_id(rd))
+                for rd in restaurants
+            ]
+            return list(await asyncio.gather(*tasks))
+
+        results: List[Dict[str, Any]] = []
+        for rd in restaurants:
+            rid = _get_restaurant_id(rd)
+            result = await self.compare(restaurant_id=rid)
+            results.append(result)
+        return results

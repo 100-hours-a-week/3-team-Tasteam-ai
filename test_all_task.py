@@ -49,7 +49,7 @@ HTTP API 호출만으로 테스트를 수행합니다. hybrid_search/final_pipel
     --benchmark-cpu     서버 CPU 모니터만 (X-Enable-CPU-Monitor)
     --benchmark-gpu     서버 GPU 모니터만 (logs/gpu_usage.log)
     --iterations N      벤치마크 반복 횟수 (기본 5)
-    --tests T1 [T2...]  실행할 테스트: all|sentiment|sentiment_batch|summarize|summarize_batch|comparison|vector
+    --tests T1 [T2...]  실행할 테스트: all|sentiment|sentiment_batch|summarize|summarize_batch|comparison|comparison_batch|vector
     --save-results PATH 결과 JSON 저장 경로
     --provider P        LLM 제공자: openai|local|runpod
     --model M           테스트할 LLM 모델명
@@ -559,7 +559,7 @@ def build_data_info(
             data_scale["kr3_restaurants"] = kr3_restaurants
 
     single_tests = {"sentiment", "summarize", "comparison", "vector"}
-    batch_tests = {"sentiment_batch", "summarize_batch"}
+    batch_tests = {"sentiment_batch", "summarize_batch", "comparison_batch"}
     tests = selected_tests or []
     has_single = any(t in single_tests for t in tests)
     has_batch = any(t in batch_tests for t in tests)
@@ -1914,8 +1914,7 @@ def test_comparison(enable_benchmark: bool = False, num_iterations: int = 5):
     
     입력:
         {
-            "restaurant_id": 1,
-            "top_k": 5
+            "restaurant_id": 1
         }
     
     출력:
@@ -1934,7 +1933,6 @@ def test_comparison(enable_benchmark: bool = False, num_iterations: int = 5):
     rid = STRENGTH_TARGET_RESTAURANT_ID if STRENGTH_TARGET_RESTAURANT_ID is not None else SAMPLE_RESTAURANT_ID
     payload = {
         "restaurant_id": rid,
-        "top_k": 5,
     }
     
     try:
@@ -2190,6 +2188,58 @@ def test_comparison(enable_benchmark: bool = False, num_iterations: int = 5):
         return False
 
 
+def test_comparison_batch(enable_benchmark: bool = False, num_iterations: int = 5):
+    """
+    다수 음식점에 대한 비교 배치 테스트 (Kiwi + lift).
+    COMPARISON_BATCH_ASYNC=true면 음식점 간 병렬, false(기본값)면 순차.
+    """
+    print_header("5-2. 배치 비교 테스트")
+    
+    url = f"{BASE_URL}{API_PREFIX}/llm/comparison/batch"
+    rid = STRENGTH_TARGET_RESTAURANT_ID if STRENGTH_TARGET_RESTAURANT_ID is not None else SAMPLE_RESTAURANT_ID
+    payload = {
+        "restaurants": [
+            {"restaurant_id": rid},
+            {"restaurant_id": rid + 1},
+        ],
+    }
+    
+    try:
+        if enable_benchmark:
+            print_info(f"성능 측정 모드: {num_iterations}회 반복 실행 중...")
+            success, stats = measure_performance(url, payload, num_iterations=num_iterations, warmup_iterations=1, timeout=600)
+            if success and stats:
+                print_success(f"배치 비교 성공 (평균 처리 시간: {stats['avg_latency_sec']:.2f}초)")
+                print_info(f"  - 평균: {stats['avg_latency_sec']:.3f}초")
+                print_info(f"  - 성공률: {stats['success_rate']:.1f}%")
+                return True
+            else:
+                print_error("배치 비교 성능 측정 실패")
+                return False
+        else:
+            start_time = time.time()
+            response = requests.post(url, json=payload, timeout=600, headers=get_request_headers())
+            elapsed_time = time.time() - start_time
+            
+            if response.status_code == 200:
+                data = response.json()
+                results = data.get("results", [])
+                print_success(f"배치 비교 성공 (소요 시간: {elapsed_time:.2f}초, {len(results)}개 레스토랑)")
+                for r in results:
+                    rid_out = r.get("restaurant_id", "N/A")
+                    comparisons = r.get("comparisons", [])
+                    category_lift = r.get("category_lift") or {}
+                    print(f"    레스토랑 {rid_out}: 비교 항목 {len(comparisons)}개, {category_lift}")
+                return True
+            else:
+                print_error(f"배치 비교 실패: {response.status_code}")
+                print(f"  응답: {response.text[:200]}")
+                return False
+    except Exception as e:
+        print_error(f"배치 비교 중 오류: {str(e)}")
+        return False
+
+
 def test_vector_search(enable_benchmark: bool = False, num_iterations: int = 5):
     """벡터 검색 테스트"""
     print_header("6. 벡터 검색 테스트")
@@ -2409,7 +2459,7 @@ def run_tests_for_model(
         # 테스트 실행
         selected_tests = tests or ["summarize", "summarize_batch"]
         if "all" in selected_tests:
-            selected_tests = ["sentiment", "sentiment_batch", "summarize", "summarize_batch", "comparison", "vector"]
+            selected_tests = ["sentiment", "sentiment_batch", "summarize", "summarize_batch", "comparison", "comparison_batch", "vector"]
 
         test_registry = {
             "sentiment": ("감성 분석", lambda: test_sentiment_analysis(enable_benchmark=enable_benchmark, num_iterations=iterations)),
@@ -2417,6 +2467,7 @@ def run_tests_for_model(
             "summarize": ("리뷰 요약", lambda: test_summarize(enable_benchmark=enable_benchmark, num_iterations=iterations)),
             "summarize_batch": ("배치 리뷰 요약", lambda: test_summarize_batch(enable_benchmark=enable_benchmark, num_iterations=iterations)),
             "comparison": ("비교", lambda: test_comparison(enable_benchmark=enable_benchmark, num_iterations=iterations)),
+            "comparison_batch": ("배치 비교", lambda: test_comparison_batch(enable_benchmark=enable_benchmark, num_iterations=iterations)),
             "vector": ("벡터 검색", lambda: test_vector_search(enable_benchmark=enable_benchmark, num_iterations=iterations)),
         }
 
@@ -2712,7 +2763,7 @@ def main():
         "--tests",
         nargs="+",
         default=["all"],
-        choices=["all", "sentiment", "sentiment_batch", "summarize", "summarize_batch", "comparison", "vector"],
+        choices=["all", "sentiment", "sentiment_batch", "summarize", "summarize_batch", "comparison", "comparison_batch", "vector"],
         help="실행할 테스트 선택 (기본값: all). src 기반 API 테스트만 포함.",
     )
     parser.add_argument(
@@ -2902,7 +2953,7 @@ def main():
         # data_info 구성 (--save-results용)
         compare_tests = args.tests or ["summarize", "summarize_batch"]
         if "all" in compare_tests:
-            compare_tests = ["sentiment", "sentiment_batch", "summarize", "summarize_batch", "comparison", "vector"]
+            compare_tests = ["sentiment", "sentiment_batch", "summarize", "summarize_batch", "comparison", "comparison_batch", "vector"]
         compare_data_info = build_data_info(
             test_data=test_data,
             data_source_name="test_data_sample.json",
@@ -3062,7 +3113,7 @@ def main():
     
     selected_tests = args.tests or ["summarize", "summarize_batch"]
     if "all" in selected_tests:
-        selected_tests = ["sentiment", "sentiment_batch", "summarize", "summarize_batch", "comparison", "vector"]
+        selected_tests = ["sentiment", "sentiment_batch", "summarize", "summarize_batch", "comparison", "comparison_batch", "vector"]
 
     test_registry = {
         "sentiment": ("감성 분석", lambda: test_sentiment_analysis(enable_benchmark=enable_benchmark_mode, num_iterations=args.iterations)),
@@ -3070,6 +3121,7 @@ def main():
         "summarize": ("리뷰 요약", lambda: test_summarize(enable_benchmark=enable_benchmark_mode, num_iterations=args.iterations)),
         "summarize_batch": ("배치 리뷰 요약", lambda: test_summarize_batch(enable_benchmark=enable_benchmark_mode, num_iterations=args.iterations)),
         "comparison": ("비교", lambda: test_comparison(enable_benchmark=enable_benchmark_mode, num_iterations=args.iterations)),
+        "comparison_batch": ("배치 비교", lambda: test_comparison_batch(enable_benchmark=enable_benchmark_mode, num_iterations=args.iterations)),
         "vector": ("벡터 검색", lambda: test_vector_search(enable_benchmark=enable_benchmark_mode, num_iterations=args.iterations)),
     }
 
