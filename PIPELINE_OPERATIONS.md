@@ -118,16 +118,16 @@
    - 퍼센트 + 해석: `"서비스 만족도는 평균보다 약 N% 높아요. 전반적으로 서비스 평가가 {tone}입니다."`  
    - 표본 톤: n≥50 → "좋은 편", 20≤n<50 → "상대적으로 좋은 편(표본 중간)", n<20 → "경향이 보이나 표본이 적어요"
 
-6. **강점 리스트**  
+6. **비교 리스트**  
    - `lift > 0` 인 service/price만 `comparisons`에 추가  
    - `{ "category": "service"|"price", "lift_percentage": float }`  
-   - `lift_percentage` 내림차순 후 `top_k`개.
+   - `lift_percentage` 내림차순 정렬, 모든 항목 반환.
 
 ### 2.3 출력 (API)
 
 - `restaurant_id`, `comparisons`, `total_candidates`, `validated_count`
 - `category_lift`, `comparison_display`, `processing_time_ms`
-- **comparisons**: `[{"category":"service","lift_percentage":20.0}, ...]`
+- **comparisons**: `[{"category":"service","lift_percentage":20.0}, ...]` (lift > 0인 모든 항목, lift_percentage 내림차순)
 
 ### 2.4 공통
 
@@ -367,10 +367,9 @@
 **`POST /api/v1/llm/comparison`**
 
 ```json
-// 요청 (restaurant_id, top_k만 사용)
+// 요청 (restaurant_id만 사용)
 {
-  "restaurant_id": 1,
-  "top_k": 10
+  "restaurant_id": 1
 }
 
 // 응답 (debug=false)
@@ -603,7 +602,6 @@ API별 요청/응답에 사용되는 Pydantic 모델(DTO)과 필드를 정리합
 | DTO | 필드 | 타입 | 설명 |
 |-----|------|------|------|
 | **ComparisonRequest** | restaurant_id | int | 타겟 레스토랑 ID |
-| | top_k | int | 반환 최대 개수 (1~50, 기본 10) |
 | **ComparisonDetail** | category | str | "service" \| "price" |
 | | lift_percentage | float | (단일−전체)/전체×100 |
 | **ComparisonResponse** | restaurant_id | int | 레스토랑 ID |
@@ -753,7 +751,7 @@ API별 요청/응답에 사용되는 Pydantic 모델(DTO)과 필드를 정리합
 
 ## 10. 참고
 
-- **Comparison**: 현재 API는 Kiwi+lift 경로만 사용. 요청은 `restaurant_id`, `top_k`만. `comparisons`: `{category, lift_percentage}`. Spark 사용(comparison_pipeline), 로그 억제: [trouble_shooting/SPARK_LOG_NOISE.md](trouble_shooting/SPARK_LOG_NOISE.md).  
+- **Comparison**: 현재 API는 Kiwi+lift 경로만 사용. 요청은 `restaurant_id`만. `comparisons`: `{category, lift_percentage}` (lift > 0인 모든 항목 반환). Spark 사용(comparison_pipeline), 로그 억제: [trouble_shooting/SPARK_LOG_NOISE.md](trouble_shooting/SPARK_LOG_NOISE.md).  
 - **Summary**: **기본 시드만 사용** (`DEFAULT_*_SEEDS` 직접, `load_aspect_seeds`·파일 미사용) + `query_hybrid_search` (Dense+Sparse RRF) → `summarize_aspects_new`.  
 - **Vector**: named 컬렉션에서 Dense 단독 검색 시 `using="dense"` 필요. 단일 벡터 컬렉션은 `using` 없음.  
 - **Sentiment**: `SentimentAnalyzer` (HF 1차 + LLM 2차 재판정). `ENABLE_SENTIMENT_SAMPLING`에 따라 전체/샘플링 분기.
