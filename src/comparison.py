@@ -190,13 +190,12 @@ class ComparisonPipeline:
             if lift <= 0:
                 return f"{label} 만족도는 평균과 비슷합니다."
             pct = round(lift)
-            percent_sentence = f"{label} 만족도는 평균보다 약 {pct}% 높아요."
-            interp = await self.llm_utils.generate_comparison_interpretation_async(
+            full_line = await self.llm_utils.generate_comparison_interpretation_async(
                 label, lift, tone, n_reviews
             )
-            if interp:
-                return percent_sentence + " " + interp
-            return percent_sentence + f" 전반적으로 {label} 평가가 {tone}입니다."
+            if full_line:
+                return full_line
+            return f"{label} 만족도는 평균보다 약 {pct}% 높아요."
 
         try:
             if Config.COMPARISON_ASYNC:
