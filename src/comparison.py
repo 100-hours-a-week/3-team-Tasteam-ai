@@ -177,7 +177,7 @@ class ComparisonPipeline:
         n_reviews = len(review_texts)
 
         logger.info(
-            "표본(단일 음식점) restaurant_id=%s service=%.4f, price=%.4f | lift service=%.2f%%, price=%.2f%%",
+            "표본(단일 음식점) restaurant_id=%s service=%.4f, price=%.4f | lift service=%d%%, price=%d%%",
             restaurant_id,
             single_restaurant_ratios.get("service", 0),
             single_restaurant_ratios.get("price", 0),
@@ -195,7 +195,12 @@ class ComparisonPipeline:
             )
             if full_line:
                 return full_line
-            return f"{label} 만족도는 평균보다 약 {pct}% 높아요."
+            # LLM 실패 시 lift 크기별 템플릿 폴백 (해석 포함)
+            if lift >= 30:
+                return f"{label} 만족도는 평균보다 약 {pct}% 높아, 차이가 큰 편입니다."
+            if lift < 10:
+                return f"{label} 만족도가 평균보다 {pct}% 높지만, 차이는 크지 않은 편입니다."
+            return f"{label} 만족도는 평균보다 약 {pct}% 높아, 차이가 어느 정도 있습니다."
 
         try:
             if Config.COMPARISON_ASYNC:

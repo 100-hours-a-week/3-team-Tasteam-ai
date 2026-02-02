@@ -633,9 +633,9 @@ def calculate_comparison_lift(
         
         if all_ratio > 0:
             lift = ((single_ratio - all_ratio) / all_ratio) * 100
-            lift_dict[category] = round(lift, 2)
+            lift_dict[category] = round(lift)
         else:
-            lift_dict[category] = 0.0
+            lift_dict[category] = 0
     
     return lift_dict
 
