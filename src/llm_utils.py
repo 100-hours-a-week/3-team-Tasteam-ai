@@ -724,9 +724,11 @@ class LLMUtils:
             "리뷰 수", "표본 수", "신뢰", "믿을 수",
             "상당히", "매우", "굉장히", "확실히", "단연",
             "최고", "압도적", "완벽",
+            "평균보다 높은 비율",  # 보고서형 표현 축소
         )
         QUALITATIVE_RESTATEMENT = ("좋은 편", "긍정적인 편")
-        PCT_RE = r"\d+(?:\.\d+)?\s*%"
+        PCT_RE = r"\d+(?:\.\d+)?\s*(?:%|퍼센트)"
+        INTERP_MARKERS = ("차이", "크지", "어느 정도", "크게", "나타", "비슷")
 
         def _extract_json_obj(text: str) -> Optional[str]:
             t = text.strip()
@@ -750,7 +752,7 @@ class LLMUtils:
             p0 = parts[0]
             return p0 if re.search(r"[.!?]$", p0) else (p0 + ".")
 
-        def is_valid_interp(s: str) -> bool:
+        def is_valid_interp(s: str, abs_lift_val: float) -> bool:
             s = " ".join(s.strip().split())
             if not s:
                 return False
@@ -758,10 +760,14 @@ class LLMUtils:
                 return False
             if any(q in s for q in QUALITATIVE_RESTATEMENT):
                 return False
+            if abs_lift_val < 30 and "강점" in s:
+                return False
             pct_matches = re.findall(PCT_RE, s)
             if len(pct_matches) != 1:
                 return False
             if "평균" not in s:
+                return False
+            if not any(m in s for m in INTERP_MARKERS):
                 return False
             return True
 
@@ -769,26 +775,27 @@ class LLMUtils:
         if abs_lift < 10:
             diff_hint = "문장은 '... 높지만, 차이는 크지 않은 편입니다.'처럼 차이가 크지 않음을 해석하세요."
         elif abs_lift < 30:
-            diff_hint = "문장은 '... 높지만, 차이는 중간 정도입니다.'처럼 완만한 차이를 해석하세요."
+            diff_hint = "문장은 '... 높지만, 차이가 어느 정도 있습니다.'처럼 완만한 차이를 해석하세요."
         else:
-            diff_hint = "문장은 '... 높아, 차이가 큰 편입니다.'처럼 차이가 큼을 해석하세요."
+            diff_hint = "문장은 '... 높아, 강점이 보입니다.' 또는 '... 높아, 차이가 크게 나타납니다.'처럼 의미를 한 단계 더 명확히 하세요. '차이가 큰 편'만 쓰지 말고 강점/차이 나타남을 드러내세요."
 
         system_content = (
             "당신은 음식점 비교 해석 문장을 만드는 도우미입니다. "
             "반드시 다음을 지킵니다: "
             "(1) 문장에 숫자(%)를 정확히 1회 포함하세요. "
             "(2) 좋은 편/긍정적인 편 같은 재진술 금지. "
-            "(3) 하지만/다만/그래도로 차이 크기만 해석하세요. "
+            "(3) 접속어(예: '높지만', '높아', '다만')를 사용해 차이 크기만 해석하세요. "
             "(4) 과장/강조 표현 금지. 예: '최고', '압도적', '완벽', '상당히', '매우', '굉장히'. "
             "(5) 리뷰수/표본수/신뢰도 언급 금지. "
-            "(6) lift는 '만족도가 평균보다 높은 비율'. 가격 lift = 가격/가성비 만족. "
-            "(7) 한 문장만 출력(줄바꿈 금지). "
+            "(6) '평균보다 높은 비율은', '~비율은' 같은 보고서형 표현은 쓰지 마세요. 짧고 명확하게. "
+            "(7) lift는 만족도가 평균 대비 얼마나 높은지. 가격 lift = 가격/가성비 만족. "
+            "(8) 한 문장만 출력(줄바꿈 금지). "
             "반드시 JSON 형식으로만 답하세요: {\"interpretation\": \"한 문장\"}."
         )
 
         user_content = (
             f"카테고리: {category}. "
-            f"lift 퍼센트: {round(lift_pct)}%. "
+            f"lift 퍼센트: {int(round(lift_pct))}%. "
             f"표본 톤: {tone}. "
             f"{diff_hint} "
             "숫자(%)는 문장에 정확히 1회만 포함하세요."
@@ -814,14 +821,16 @@ class LLMUtils:
             interp = data.get("interpretation")
             if isinstance(interp, str):
                 interp = _enforce_one_sentence(interp)
-                if is_valid_interp(interp):
+                interp = interp.replace("퍼센트", "%")
+                if is_valid_interp(interp, abs_lift):
                     return interp.strip()
             return None
 
         except Exception as e:
             if raw and isinstance(raw, str):
                 candidate = _enforce_one_sentence(raw)
-                if is_valid_interp(candidate):
+                candidate = candidate.replace("퍼센트", "%")
+                if is_valid_interp(candidate, abs_lift):
                     return candidate.strip()
             logger.warning("비교 해석 LLM 실패: %s", e)
             return None
