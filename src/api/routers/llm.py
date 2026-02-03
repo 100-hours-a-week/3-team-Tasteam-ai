@@ -6,7 +6,7 @@ import asyncio
 import time
 import logging
 from fastapi import APIRouter, HTTPException, Depends
-from typing import List, Union, Dict, Any
+from typing import List, Union, Dict, Any, Optional
 
 from ...llm_utils import LLMUtils
 from ...vector_search import VectorSearch
@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def _build_category_result(result: Dict[str, Any], restaurant_id: int) -> Dict[str, Any]:
+def _build_category_result(result: Dict[str, Any], restaurant_id: int, restaurant_name: Optional[str] = None) -> Dict[str, Any]:
     """요약 파이프라인 결과를 SummaryDisplayResponse용 dict로 변환."""
     overall_summary = result.get("overall_summary", {}).get("summary", "")
     if not overall_summary:
@@ -55,6 +55,7 @@ def _build_category_result(result: Dict[str, Any], restaurant_id: int) -> Dict[s
             )
     return {
         "restaurant_id": restaurant_id,
+        "restaurant_name": restaurant_name,
         "overall_summary": overall_summary,
         "categories": categories_dict if categories_dict else None,
     }
@@ -129,7 +130,8 @@ async def _process_one_restaurant_async(
                 llm_utils=llm_utils,
                 per_category_max=request.limit,
             )
-    return _build_category_result(result, restaurant_id)
+    restaurant_name = restaurant_data.get("restaurant_name")
+    return _build_category_result(result, restaurant_id, restaurant_name)
 
 
 async def _batch_summarize_async(
@@ -246,6 +248,7 @@ async def summarize_reviews(
                     # SKIP 응답
                     return SummaryDisplayResponse(
                         restaurant_id=request.restaurant_id,
+                        restaurant_name=getattr(request, "restaurant_name", None),
                         overall_summary="",
                         debug=DebugInfo(
                             request_id=request_id,
@@ -262,6 +265,7 @@ async def summarize_reviews(
         # 2. 카테고리별 하이브리드 검색
         hits_dict = {}
         hits_data_dict = {}
+        summary_restaurant_name: Optional[str] = getattr(request, "restaurant_name", None)
         
         for seeds, name in zip(seed_list, name_list):
             # Seed를 쿼리로 사용 (최대 10개만 사용하여 토큰 절약)
@@ -284,7 +288,8 @@ async def summarize_reviews(
                 payload = hit.get("payload", {})
                 content = payload.get("content", "")
                 review_id = payload.get("review_id") or payload.get("id") or str(hit.get("id", ""))
-                
+                if summary_restaurant_name is None and payload.get("restaurant_name"):
+                    summary_restaurant_name = payload.get("restaurant_name")
                 hits_dict[name].append(content)
                 hits_data_dict[name].append({
                     "review_id": str(review_id),
@@ -343,6 +348,7 @@ async def summarize_reviews(
         # 항상 SummaryDisplayResponse (positive_reviews 등 미사용 필드 제외)
         return SummaryDisplayResponse(
             restaurant_id=request.restaurant_id,
+            restaurant_name=request.restaurant_name or summary_restaurant_name,
             overall_summary=overall_summary,
             categories=categories_dict if categories_dict else None,
             debug=DebugInfo(
@@ -443,6 +449,7 @@ async def compare(
                     if debug:
                         return ComparisonResponse(
                             restaurant_id=request.restaurant_id,
+                            restaurant_name=None,
                             comparisons=[],
                             total_candidates=0,
                             validated_count=0,
@@ -454,6 +461,7 @@ async def compare(
                     else:
                         return ComparisonResponse(
                             restaurant_id=request.restaurant_id,
+                            restaurant_name=None,
                             comparisons=[],
                             total_candidates=0,
                             validated_count=0,
@@ -535,6 +543,7 @@ async def compare_batch(
         )
         results = await pipeline.compare_batch(
             restaurants=request.restaurants,
+            all_average_data_path=request.all_average_data_path,
         )
         return ComparisonBatchResponse(results=[ComparisonResponse(**r) for r in results])
     except Exception as e:
@@ -634,7 +643,7 @@ async def summarize_reviews_batch(
                 llm_utils=llm_utils,
                 per_category_max=request.limit,
             )
-            results.append(_build_category_result(result, restaurant_id))
+            results.append(_build_category_result(result, restaurant_id, restaurant_data.get("restaurant_name")))
         
         return SummaryBatchResponse(results=[
             SummaryDisplayResponse(**r) for r in results

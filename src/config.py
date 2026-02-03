@@ -84,32 +84,36 @@ class _InferenceConfig:
 
     # 실행 모드: sync vs async, sync vs thread isolation (실험 플래그)
     
-    # sync vs thread isolation
+    # sync vs thread isolation (기본값 true: 배치 시 속도·이벤트 루프 격리)
     
     # Sentiment: HF 분류기. true=asyncio.to_thread(블로킹 격리), false=메인 스레드
-    SENTIMENT_CLASSIFIER_USE_THREAD: bool = os.getenv("SENTIMENT_CLASSIFIER_USE_THREAD", "false").lower() == "true"
+    SENTIMENT_CLASSIFIER_USE_THREAD: bool = os.getenv("SENTIMENT_CLASSIFIER_USE_THREAD", "true").lower() == "true"
     # Sentiment: LLM 재판정. true=AsyncOpenAI, false=동기
-    SENTIMENT_LLM_ASYNC: bool = os.getenv("SENTIMENT_LLM_ASYNC", "false").lower() == "true"
+    SENTIMENT_LLM_ASYNC: bool = os.getenv("SENTIMENT_LLM_ASYNC", "true").lower() == "true"
+    # Sentiment 배치: 음식점 간 병렬. true=asyncio.gather(병렬), false=순차
+    SENTIMENT_RESTAURANT_ASYNC: bool = os.getenv("SENTIMENT_RESTAURANT_ASYNC", os.getenv("BATCH_RESTAURANT_ASYNC", "true")).lower() == "true"
+    # Sentiment 파이프라인을 항상 CPU에서 실행 (meta tensor 오류 회피용, true 시 device=-1)
+    SENTIMENT_FORCE_CPU: bool = os.getenv("SENTIMENT_FORCE_CPU", "true").lower() == "true"
     
-    # sync vs async
+    # sync vs async (기본값 true: 파이프라인 내·음식점 간 병렬로 최대 속도)
     
     # Summary 배치: LLM 호출. true=AsyncOpenAI/httpx.AsyncClient, false=asyncio.to_thread(동기 래핑)
-    SUMMARY_LLM_ASYNC: bool = os.getenv("SUMMARY_LLM_ASYNC", os.getenv("LLM_ASYNC", "false")).lower() == "true"
+    SUMMARY_LLM_ASYNC: bool = os.getenv("SUMMARY_LLM_ASYNC", os.getenv("LLM_ASYNC", "true")).lower() == "true"
     # Summary 배치: aspect(service/price/food) 서치 병렬
-    SUMMARY_SEARCH_ASYNC: bool = os.getenv("SUMMARY_SEARCH_ASYNC", os.getenv("BATCH_SEARCH_ASYNC", "false")).lower() == "true"
+    SUMMARY_SEARCH_ASYNC: bool = os.getenv("SUMMARY_SEARCH_ASYNC", os.getenv("BATCH_SEARCH_ASYNC", "true")).lower() == "true"
     # Summary 배치: 음식점 간 병렬
-    SUMMARY_RESTAURANT_ASYNC: bool = os.getenv("SUMMARY_RESTAURANT_ASYNC", os.getenv("BATCH_RESTAURANT_ASYNC", "false")).lower() == "true"
+    SUMMARY_RESTAURANT_ASYNC: bool = os.getenv("SUMMARY_RESTAURANT_ASYNC", os.getenv("BATCH_RESTAURANT_ASYNC", "true")).lower() == "true"
     
     # Comparison: service/price LLM 호출. true=asyncio.gather(병렬), false=순차
-    COMPARISON_ASYNC: bool = os.getenv("COMPARISON_ASYNC", "false").lower() == "true"
-    # Comparison 배치: 음식점 간 병렬. true=asyncio.gather(병렬), false=순차(기본값)
-    COMPARISON_BATCH_ASYNC: bool = os.getenv("COMPARISON_BATCH_ASYNC", "false").lower() == "true"
+    COMPARISON_ASYNC: bool = os.getenv("COMPARISON_ASYNC", "true").lower() == "true"
+    # Comparison 배치: 음식점 간 병렬. true=asyncio.gather(병렬), false=순차
+    COMPARISON_BATCH_ASYNC: bool = os.getenv("COMPARISON_BATCH_ASYNC", "true").lower() == "true"
 
 
 # --- Retrieval (Qdrant, embedding, top_k, rerank 등) ---
 class _RetrievalConfig:
     """검색/검열: Qdrant URL, collection, top_k, rerank_k, aspect seed"""
-    QDRANT_URL: Optional[str] = os.getenv("QDRANT_URL", ":memory:")
+    QDRANT_URL: Optional[str] = os.getenv("QDRANT_URL", "./qdrant_data")
     COLLECTION_NAME: str = os.getenv("COLLECTION_NAME", DEFAULT_COLLECTION_NAME)
     SCORE_THRESHOLD: float = float(os.getenv("SCORE_THRESHOLD", str(DEFAULT_SCORE_THRESHOLD)))
     LLM_KEYWORDS: list = DEFAULT_LLM_KEYWORDS

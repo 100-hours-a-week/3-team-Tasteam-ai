@@ -211,7 +211,6 @@ def convert_to_review_model(
         "is_recommended": is_recommended,
         "created_at": created_at,
         "updated_at": None,
-        "deleted_at": None,
         "images": []
     }
 

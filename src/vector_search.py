@@ -75,9 +75,18 @@ class VectorSearch:
         # 컬렉션이 없으면 생성 (하이브리드 검색: Dense + Sparse)
         try:
             collection_info = self.client.get_collection(collection_name)
-            # 기존 컬렉션에 sparse_vectors_config가 없으면 업데이트 필요 (마이그레이션)
-            if not hasattr(collection_info.config, 'sparse_vectors_config') or collection_info.config.sparse_vectors_config is None:
+            cfg = collection_info.config
+            # get_collection 응답은 sparse_vectors / params.sparse_vectors 등으로 올 수 있음. 모두 확인
+            has_sparse = (
+                getattr(cfg, "sparse_vectors_config", None) is not None
+                or getattr(cfg, "sparse_vectors", None) is not None
+                or (getattr(cfg, "params", None) is not None and getattr(cfg.params, "sparse_vectors", None) is not None)
+            )
+            if not has_sparse:
                 logger.warning(f"컬렉션 {collection_name}에 sparse_vectors_config가 없습니다. 하이브리드 검색을 위해 재생성이 필요할 수 있습니다.")
+            else:
+                # --no-upload 시에도 하이브리드 검색 대비 Sparse 모델 로드 및 로그
+                self._get_sparse_model()
         except Exception:
             # 컬렉션이 없으면 생성 (하이브리드 검색 지원)
             self.client.create_collection(
@@ -93,7 +102,21 @@ class VectorSearch:
                 },
             )
             logger.info(f"하이브리드 검색 지원 컬렉션 생성 완료: {collection_name} (dense + sparse)")
-    
+            self._get_sparse_model()
+
+    def _get_sparse_model(self):
+        """Sparse 벡터 모델 lazy 로드 (한 번만, 로그 1회). --no-upload 시에도 __init__에서 컬렉션에 sparse 있으면 호출해 로그 출력."""
+        if self._sparse_model is not None:
+            return self._sparse_model
+        try:
+            self._sparse_model = SparseTextEmbedding(Config.SPARSE_EMBEDDING_MODEL)
+            logger.info(f"Sparse 벡터 모델 로드 완료: {Config.SPARSE_EMBEDDING_MODEL}")
+            return self._sparse_model
+        except Exception as e:
+            logger.warning(f"Sparse 벡터 모델 로드 실패, Dense만 사용: {e}")
+            self._sparse_model = None
+            return None
+
     def _get_point_id(self, restaurant_id: Union[int, str], review_id: Union[int, str]) -> str:
         """
         리뷰 ID 기반 Point ID 생성 (일관성 보장)
@@ -237,15 +260,7 @@ class VectorSearch:
         # 2단계: 배치로 벡터 인코딩 (Dense + Sparse, 대용량 처리 최적화)
         logger.info(f"총 {len(review_texts)}개의 리뷰를 배치로 인코딩합니다 (배치 크기: {batch_size}, 하이브리드: Dense + Sparse)")
         
-        # Sparse 모델 초기화 (한 번만, final_summary_pipeline과 동일)
-        try:
-            if self._sparse_model is None:
-                self._sparse_model = SparseTextEmbedding(Config.SPARSE_EMBEDDING_MODEL)
-                logger.info(f"Sparse 벡터 모델 로드 완료: {Config.SPARSE_EMBEDDING_MODEL}")
-        except Exception as e:
-            logger.warning(f"Sparse 벡터 모델 로드 실패, Dense만 사용: {e}")
-            self._sparse_model = None
-        
+        self._get_sparse_model()
         for i in range(0, len(review_texts), batch_size):
             batch_texts = review_texts[i:i + batch_size]
             batch_metadata = review_metadata[i:i + batch_size]
@@ -1179,9 +1194,9 @@ class VectorSearch:
             
             # Sparse 벡터 생성 (FastEmbed 사용, 모델 캐싱)
             try:
+                self._get_sparse_model()
                 if self._sparse_model is None:
-                    self._sparse_model = SparseTextEmbedding(Config.SPARSE_EMBEDDING_MODEL)
-                
+                    raise RuntimeError("Sparse 모델 없음")
                 sparse_emb = next(self._sparse_model.embed([query_text]))
                 
                 sparse_vector = models.SparseVector(
@@ -1682,14 +1697,7 @@ class VectorSearch:
 
         # 3. 배치 인코딩 (Dense + Sparse)
         logger.info(f"총 {len(valid_entries)}개 리뷰 배치 인코딩 (batch_size={batch_size}, Dense+Sparse)")
-        try:
-            if self._sparse_model is None:
-                self._sparse_model = SparseTextEmbedding(Config.SPARSE_EMBEDDING_MODEL)
-                logger.info(f"Sparse 벡터 모델 로드: {Config.SPARSE_EMBEDDING_MODEL}")
-        except Exception as e:
-            logger.warning(f"Sparse 로드 실패, Dense만 사용: {e}")
-            self._sparse_model = None
-
+        self._get_sparse_model()
         all_dense, all_sparse = [], []
         for i in range(0, len(review_texts), batch_size):
             batch = review_texts[i:i + batch_size]

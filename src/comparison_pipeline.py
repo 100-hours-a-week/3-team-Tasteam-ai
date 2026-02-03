@@ -23,7 +23,24 @@ try:
 except ImportError:
     SPARK_AVAILABLE = False
 
+try:
+    from py4j.protocol import Py4JNetworkError
+except ImportError:
+    Py4JNetworkError = Exception  # no py4j
+
 _spark_session = None
+
+
+def _reset_spark() -> None:
+    """Py4J/Spark 연결 끊김 시 세션 초기화. 다음 호출에서 새 세션 생성."""
+    global _spark_session
+    if _spark_session is not None:
+        try:
+            _spark_session.stop()
+        except Exception:
+            pass
+        _spark_session = None
+        logger.warning("SparkSession 초기화 완료 (Py4J 오류 후 재생성용)")
 
 
 def _get_spark() -> "SparkSession":
@@ -110,6 +127,88 @@ def _spark_calculate_ratios(texts_rdd, stopwords: Optional[List[str]] = None) ->
         candidates = bigram_counts.takeOrdered(2000, key=lambda x: -x[1])
     finally:
         bigrams.unpersist()
+
+    def is_noise(phrase: str) -> bool:
+        sp = phrase.split()
+        if len(sp) != 2:
+            return True
+        a, b = sp[0], sp[1]
+        return len(a) < 2 or len(b) < 2
+
+    candidates = [x for x in candidates if not is_noise(x[0])]
+
+    def classify(phrase: str) -> List[str]:
+        labels: List[str] = []
+        if any(k in phrase for k in SERVICE_KW):
+            labels.append("service")
+        if any(k in phrase for k in PRICE_KW):
+            labels.append("price")
+        if not labels:
+            labels.append("other")
+        return labels
+
+    category_json: Dict[str, Dict[str, int]] = {"service": {}, "price": {}}
+    for phrase, count in candidates:
+        for lab in classify(phrase):
+            if lab in category_json:
+                category_json[lab][phrase] = category_json[lab].get(phrase, 0) + count
+
+    total_s = sum(category_json["service"].values())
+    total_p = sum(category_json["price"].values())
+    service_pos = sum(
+        cnt for phrase, cnt in category_json["service"].items()
+        if any(t in phrase.split() for t in SERVICE_POSITIVE_KW)
+    )
+    price_pos = sum(
+        cnt for phrase, cnt in category_json["price"].items()
+        if any(t in phrase for t in PRICE_POSITIVE_KW)
+    )
+
+    def safe_div(a: float, b: float) -> float:
+        return round(a / b, 4) if b else 0.0
+
+    return {
+        "service": safe_div(service_pos, total_s),
+        "price": safe_div(price_pos, total_p),
+    }
+
+
+def _python_calculate_ratios(
+    texts: List[str],
+    stopwords: Optional[List[str]] = None,
+) -> Dict[str, float]:
+    """
+    Spark 없이 Kiwi만으로 service/price 긍정 비율 계산 (Py4J 오류 시 폴백).
+    """
+    from collections import Counter
+
+    stop = set(stopwords or [])
+    bigram_counts: Counter = Counter()
+    try:
+        from kiwipiepy import Kiwi
+        kiwi = Kiwi()
+    except ImportError:
+        return {"service": 0.0, "price": 0.0}
+    for text in texts:
+        if not text or not isinstance(text, str):
+            continue
+        text = re.sub(r"\s+", " ", text).strip()
+        if not text:
+            continue
+        try:
+            tokens = [
+                t.form for t in kiwi.tokenize(text)
+                if t.tag in ("NNG", "NNP") and len(t.form) >= 2 and t.form not in stop
+            ]
+        except Exception:
+            continue
+        for i in range(len(tokens) - 1):
+            a, b = tokens[i], tokens[i + 1]
+            if a == b or len(a) < 2 or len(b) < 2:
+                continue
+            bigram_counts[f"{a} {b}"] += 1
+    candidates = bigram_counts.most_common(2000)
+    candidates = [(p, c) for p, c in candidates if len(p.split()) == 2 and p.split()[0] != p.split()[1]]
 
     def is_noise(phrase: str) -> bool:
         sp = phrase.split()
@@ -411,19 +510,23 @@ def calculate_single_restaurant_ratios(
     stopwords: Optional[List[str]] = None,
 ) -> Dict[str, float]:
     """
-    단일 음식점의 카테고리별 긍정 비율 계산 (Spark + Kiwi NNG/NNP bigram). 비-Spark 대체 없음.
+    단일 음식점의 카테고리별 긍정 비율 계산 (Spark + Kiwi). Py4J 오류 시 Python 폴백.
     """
     if not reviews:
-        return {"service": 0.0, "price": 0.0}
-    if not SPARK_AVAILABLE:
-        logger.error("pyspark 미설치. ratio 계산 불가.")
         return {"service": 0.0, "price": 0.0}
     texts = [s for s in reviews if s and isinstance(s, str)]
     if not texts:
         return {"service": 0.0, "price": 0.0}
-    spark = _get_spark()
-    rdd = spark.sparkContext.parallelize(texts, numSlices=max(1, min(len(texts) // 50, 32)))
-    out = _spark_calculate_ratios(rdd, stopwords)
+    if SPARK_AVAILABLE:
+        try:
+            spark = _get_spark()
+            rdd = spark.sparkContext.parallelize(texts, numSlices=max(1, min(len(texts) // 50, 32)))
+            out = _spark_calculate_ratios(rdd, stopwords)
+            return {"service": round(out["service"], 2), "price": round(out["price"], 2)}
+        except (Py4JNetworkError, BrokenPipeError, ConnectionError, OSError, EOFError) as e:
+            logger.warning("Spark/Py4J 오류, Python 폴백 사용: %s", e)
+            _reset_spark()
+    out = _python_calculate_ratios(texts, stopwords)
     return {"service": round(out["service"], 2), "price": round(out["price"], 2)}
 
 
@@ -494,18 +597,25 @@ def calculate_all_average_ratios_from_file(
         return None
 
     try:
-        from pyspark.sql.functions import col, length
+        from pyspark.sql.functions import col, length, explode
 
         spark = _get_spark()
         if path.lower().endswith(".json"):
             df = spark.read.option("multiline", "true").json(path)
             text_col = next((c for c in ("content", "text") if c in df.columns), None)
-            if not text_col:
-                logger.warning("calculate_all_average_ratios_from_file: JSON에 content/text 컬럼 없음")
+            if not text_col and "reviews" in df.columns:
+                # tasteam_app 형식: {"reviews": [{"content":"..."}, ...]}
+                flat_df = df.select(explode(col("reviews")).alias("r"))
+                base_df = flat_df.select(col("r.content").alias("text")).where(
+                    col("text").isNotNull() & (length(col("text")) > 0)
+                )
+            elif text_col:
+                base_df = df.select(col(text_col).alias("text")).where(
+                    col("text").isNotNull() & (length(col("text")) > 0)
+                )
+            else:
+                logger.warning("calculate_all_average_ratios_from_file: JSON에 content/text/reviews 컬럼 없음")
                 return None
-            base_df = df.select(col(text_col).alias("text")).where(
-                col("text").isNotNull() & (length(col("text")) > 0)
-            )
         elif path.lower().endswith(".tsv") or path.lower().endswith(".csv"):
             sep = "\t" if path.lower().endswith(".tsv") else ","
             df = spark.read.option("sep", sep).option("header", "true").csv(path)
@@ -522,6 +632,18 @@ def calculate_all_average_ratios_from_file(
 
         texts_rdd = base_df.select("text").rdd.map(lambda r: r["text"])
         return _spark_calculate_ratios(texts_rdd, stopwords)
+    except (Py4JNetworkError, BrokenPipeError, ConnectionError, OSError, EOFError) as e:
+        logger.warning("Spark/Py4J 오류, Python 폴백 시도: %s", e)
+        _reset_spark()
+        try:
+            rows = load_reviews_from_aspect_data_file(path, project_root)
+            texts = [(r.get("content") or r.get("text") or "").strip() for r in rows if isinstance(r, dict)]
+            texts = [t for t in texts if t]
+            if texts:
+                return _python_calculate_ratios(texts, stopwords)
+        except Exception as fb:
+            logger.warning("Python 폴백 실패: %s", fb)
+        return None
     except Exception as e:
         logger.warning("calculate_all_average_ratios_from_file 실패: %s — %s", path, e)
         return None
@@ -557,6 +679,12 @@ def load_reviews_from_aspect_data_file(
                         c = (r.get("content") or r.get("text") or "").strip()
                         if c:
                             out.append({"content": c})
+            elif isinstance(data, dict) and "reviews" in data:
+                for r in data["reviews"] or []:
+                    if isinstance(r, dict):
+                        c = (r.get("content") or r.get("text") or "").strip()
+                        if c:
+                            out.append({"content": c})
             elif isinstance(data, dict) and "restaurants" in data:
                 for rest in data["restaurants"] or []:
                     for r in (rest.get("reviews") or []):
@@ -587,13 +715,10 @@ def calculate_all_average_ratios_from_reviews(
     stopwords: Optional[List[str]] = None,
 ) -> Dict[str, float]:
     """
-    전체 리뷰에서 service/price 긍정 비율 계산 (Spark + Kiwi). 비-Spark 대체 없음.
+    전체 리뷰에서 service/price 긍정 비율 계산 (Spark + Kiwi). Py4J 오류 시 Python 폴백.
     리뷰: [{"content":"..."} or {"text":"..."}, ...]
     """
     if not reviews:
-        return {"service": 0.0, "price": 0.0}
-    if not SPARK_AVAILABLE:
-        logger.error("pyspark 미설치. 전체 평균 ratio 계산 불가.")
         return {"service": 0.0, "price": 0.0}
     texts = [
         ((r.get("content") or r.get("text") or "") if isinstance(r, dict) else "")
@@ -602,11 +727,17 @@ def calculate_all_average_ratios_from_reviews(
     texts = [t for t in texts if t and isinstance(t, str)]
     if not texts:
         return {"service": 0.0, "price": 0.0}
-    spark = _get_spark()
-    rdd = spark.sparkContext.parallelize(
-        texts, numSlices=max(1, min(len(texts) // 100, 256))
-    )
-    return _spark_calculate_ratios(rdd, stopwords)
+    if SPARK_AVAILABLE:
+        try:
+            spark = _get_spark()
+            rdd = spark.sparkContext.parallelize(
+                texts, numSlices=max(1, min(len(texts) // 100, 256))
+            )
+            return _spark_calculate_ratios(rdd, stopwords)
+        except (Py4JNetworkError, BrokenPipeError, ConnectionError, OSError, EOFError) as e:
+            logger.warning("Spark/Py4J 오류, Python 폴백 사용: %s", e)
+            _reset_spark()
+    return _python_calculate_ratios(texts, stopwords)
 
 
 def calculate_comparison_lift(

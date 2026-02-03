@@ -2,6 +2,7 @@
 감성 분석 라우터 ()
 """
 
+import logging
 import time
 from fastapi import APIRouter, HTTPException, Depends
 from typing import List, Union
@@ -86,6 +87,7 @@ async def analyze_sentiment(
                     if debug:
                         return SentimentAnalysisResponse(
                             restaurant_id=request.restaurant_id,
+                            restaurant_name=getattr(request, "restaurant_name", None),
                             positive_count=0,
                             negative_count=0,
                             neutral_count=0,
@@ -102,6 +104,7 @@ async def analyze_sentiment(
                         # SKIP된 경우에도 기본 응답 반환 (클라이언트 호환성)
                         return SentimentAnalysisDisplayResponse(
                             restaurant_id=request.restaurant_id,
+                            restaurant_name=getattr(request, "restaurant_name", None),
                             positive_ratio=0,
                             negative_ratio=0,
                         )
@@ -121,7 +124,8 @@ async def analyze_sentiment(
                 batch_size=len(request.reviews),
             )
 
-            # 디버그 모드에 따라 응답 반환
+            # 디버그 모드에 따라 응답 반환 (restaurant_name은 요청에서 반환)
+            result["restaurant_name"] = getattr(request, "restaurant_name", None)
             if debug:
                 return SentimentAnalysisResponse(
                     **result,
@@ -135,6 +139,7 @@ async def analyze_sentiment(
             else:
                 return SentimentAnalysisDisplayResponse(
                     restaurant_id=result["restaurant_id"],
+                    restaurant_name=result.get("restaurant_name"),
                     positive_ratio=result["positive_ratio"],
                     negative_ratio=result["negative_ratio"],
                 )
@@ -177,10 +182,19 @@ async def analyze_sentiment_batch(
     """
     try:
         results = await analyzer.analyze_multiple_restaurants_async(restaurants_data=request.restaurants)
+        # 각 결과에 restaurant_name 병합 (요청 항목 순서 대응)
+        restaurants_list = request.restaurants
+        for i, r in enumerate(results):
+            if i < len(restaurants_list):
+                item = restaurants_list[i]
+                r["restaurant_name"] = item.get("restaurant_name") if isinstance(item, dict) else getattr(item, "restaurant_name", None)
+            else:
+                r["restaurant_name"] = None
         return SentimentAnalysisBatchResponse(results=[
             SentimentAnalysisResponse(**result) for result in results
         ])
     except Exception as e:
+        logging.getLogger(__name__).exception("배치 감성 분석 중 오류")
         raise HTTPException(
             status_code=500,
             detail=f"배치 감성 분석 중 오류 발생: {str(e)}"
