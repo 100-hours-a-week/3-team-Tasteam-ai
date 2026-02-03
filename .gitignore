@@ -14,3 +14,7 @@ package.json
 # Qdrant on-disk 데이터베이스
 qdrant_db/
 *.qdrant
+qdrant_data/
+**/qdrant_data/
+*.sqlite
+*.db
