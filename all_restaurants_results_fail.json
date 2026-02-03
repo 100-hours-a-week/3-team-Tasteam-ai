@@ -1,0 +1,1566 @@
+{
+  "meta": {
+    "base_url": "http://localhost:8001",
+    "total_restaurants": 33,
+    "requested_at": "2026-02-02T21:09:19.087477",
+    "batch_size": 10,
+    "apis": [
+      "summary",
+      "sentiment",
+      "comparison"
+    ]
+  },
+  "results": [
+    {
+      "restaurant_id": 21791082,
+      "restaurant_name": "울프스덴",
+      "summary": {
+        "restaurant_id": 21791082,
+        "restaurant_name": "울프스덴",
+        "overall_summary": "이 음식점에 대한 리뷰가 부족하여 구체적인 평가가 어렵다. 서비스, 가격, 음식에 대한 정보가 전혀 제공되지 않았다.",
+        "categories": {
+          "service": {
+            "summary": "언급이 적다",
+            "bullets": [],
+            "evidence": []
+          },
+          "price": {
+            "summary": "언급이 적다",
+            "bullets": [],
+            "evidence": []
+          },
+          "food": {
+            "summary": "언급이 적다",
+            "bullets": [],
+            "evidence": []
+          }
+        },
+        "debug": null
+      },
+      "sentiment": null,
+      "comparison": {
+        "restaurant_id": 21791082,
+        "restaurant_name": null,
+        "comparisons": [],
+        "total_candidates": 0,
+        "validated_count": 0,
+        "category_lift": {
+          "service": 0.0,
+          "price": 0.0
+        },
+        "comparison_display": [
+          "서비스 만족도는 평균과 비슷합니다.",
+          "가격 만족도는 평균과 비슷합니다."
+        ],
+        "debug": null
+      },
+      "errors": {
+        "sentiment": "{\"code\":500,\"message\":\"배치 감성 분석 중 오류 발생: Tensor.item() cannot be called on meta tensors\",\"details\":\"배치 감성 분석 중 오류 발생: Tensor.item() cannot be called on meta tensors\",\"request_id\":\"91a318bd-10a7-4838-bbd4-042347518024\"}"
+      }
+    },
+    {
+      "restaurant_id": 31004528,
+      "restaurant_name": "새마을식당 판교점",
+      "summary": {
+        "restaurant_id": 31004528,
+        "restaurant_name": "새마을식당 판교점",
+        "overall_summary": "이 음식점에 대한 리뷰가 부족하여 전반적인 평가를 내리기 어렵다. 서비스, 가격, 음식에 대한 정보가 없다.",
+        "categories": {
+          "service": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          },
+          "price": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          },
+          "food": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          }
+        },
+        "debug": null
+      },
+      "sentiment": null,
+      "comparison": {
+        "restaurant_id": 31004528,
+        "restaurant_name": null,
+        "comparisons": [],
+        "total_candidates": 0,
+        "validated_count": 0,
+        "category_lift": {
+          "service": 0.0,
+          "price": 0.0
+        },
+        "comparison_display": [
+          "서비스 만족도는 평균과 비슷합니다.",
+          "가격 만족도는 평균과 비슷합니다."
+        ],
+        "debug": null
+      },
+      "errors": {
+        "sentiment": "{\"code\":500,\"message\":\"배치 감성 분석 중 오류 발생: Tensor.item() cannot be called on meta tensors\",\"details\":\"배치 감성 분석 중 오류 발생: Tensor.item() cannot be called on meta tensors\",\"request_id\":\"91a318bd-10a7-4838-bbd4-042347518024\"}"
+      }
+    },
+    {
+      "restaurant_id": 32731241,
+      "restaurant_name": "담소소사골순대육개장 판교점",
+      "summary": {
+        "restaurant_id": 32731241,
+        "restaurant_name": "담소소사골순대육개장 판교점",
+        "overall_summary": "이 음식점에 대한 리뷰가 부족하여 전반적인 평가를 내리기 어렵다. 각 카테고리에 대한 정보가 부족하다.",
+        "categories": {
+          "service": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          },
+          "price": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          },
+          "food": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          }
+        },
+        "debug": null
+      },
+      "sentiment": null,
+      "comparison": {
+        "restaurant_id": 32731241,
+        "restaurant_name": null,
+        "comparisons": [],
+        "total_candidates": 0,
+        "validated_count": 0,
+        "category_lift": {
+          "service": 0.0,
+          "price": 0.0
+        },
+        "comparison_display": [
+          "서비스 만족도는 평균과 비슷합니다.",
+          "가격 만족도는 평균과 비슷합니다."
+        ],
+        "debug": null
+      },
+      "errors": {
+        "sentiment": "{\"code\":500,\"message\":\"배치 감성 분석 중 오류 발생: Tensor.item() cannot be called on meta tensors\",\"details\":\"배치 감성 분석 중 오류 발생: Tensor.item() cannot be called on meta tensors\",\"request_id\":\"91a318bd-10a7-4838-bbd4-042347518024\"}"
+      }
+    },
+    {
+      "restaurant_id": 33510731,
+      "restaurant_name": "토속상황삼계탕",
+      "summary": {
+        "restaurant_id": 33510731,
+        "restaurant_name": "토속상황삼계탕",
+        "overall_summary": "이 음식점에 대한 리뷰가 부족하여 전반적인 평가를 내리기 어렵다. 각 카테고리에 대한 정보가 부족하다.",
+        "categories": {
+          "service": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          },
+          "price": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          },
+          "food": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          }
+        },
+        "debug": null
+      },
+      "sentiment": null,
+      "comparison": {
+        "restaurant_id": 33510731,
+        "restaurant_name": null,
+        "comparisons": [],
+        "total_candidates": 0,
+        "validated_count": 0,
+        "category_lift": {
+          "service": 0.0,
+          "price": 0.0
+        },
+        "comparison_display": [
+          "서비스 만족도는 평균과 비슷합니다.",
+          "가격 만족도는 평균과 비슷합니다."
+        ],
+        "debug": null
+      },
+      "errors": {
+        "sentiment": "{\"code\":500,\"message\":\"배치 감성 분석 중 오류 발생: Tensor.item() cannot be called on meta tensors\",\"details\":\"배치 감성 분석 중 오류 발생: Tensor.item() cannot be called on meta tensors\",\"request_id\":\"91a318bd-10a7-4838-bbd4-042347518024\"}"
+      }
+    },
+    {
+      "restaurant_id": 33625986,
+      "restaurant_name": "현대옥 판교점",
+      "summary": {
+        "restaurant_id": 33625986,
+        "restaurant_name": "현대옥 판교점",
+        "overall_summary": "이 음식점에 대한 리뷰가 부족하여 서비스, 가격, 음식에 대한 정보가 없다. 추가적인 리뷰가 필요하다.",
+        "categories": {
+          "service": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          },
+          "price": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          },
+          "food": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          }
+        },
+        "debug": null
+      },
+      "sentiment": null,
+      "comparison": {
+        "restaurant_id": 33625986,
+        "restaurant_name": null,
+        "comparisons": [],
+        "total_candidates": 0,
+        "validated_count": 0,
+        "category_lift": {
+          "service": 0.0,
+          "price": 0.0
+        },
+        "comparison_display": [
+          "서비스 만족도는 평균과 비슷합니다.",
+          "가격 만족도는 평균과 비슷합니다."
+        ],
+        "debug": null
+      },
+      "errors": {
+        "sentiment": "{\"code\":500,\"message\":\"배치 감성 분석 중 오류 발생: Tensor.item() cannot be called on meta tensors\",\"details\":\"배치 감성 분석 중 오류 발생: Tensor.item() cannot be called on meta tensors\",\"request_id\":\"91a318bd-10a7-4838-bbd4-042347518024\"}"
+      }
+    },
+    {
+      "restaurant_id": 35905799,
+      "restaurant_name": "루프일레븐",
+      "summary": {
+        "restaurant_id": 35905799,
+        "restaurant_name": "루프일레븐",
+        "overall_summary": "이 음식점에 대한 리뷰가 부족하여 전반적인 평가를 내리기 어렵다. 각 카테고리에 대한 정보가 부족하다.",
+        "categories": {
+          "service": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          },
+          "price": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          },
+          "food": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          }
+        },
+        "debug": null
+      },
+      "sentiment": null,
+      "comparison": {
+        "restaurant_id": 35905799,
+        "restaurant_name": null,
+        "comparisons": [],
+        "total_candidates": 0,
+        "validated_count": 0,
+        "category_lift": {
+          "service": 0.0,
+          "price": 0.0
+        },
+        "comparison_display": [
+          "서비스 만족도는 평균과 비슷합니다.",
+          "가격 만족도는 평균과 비슷합니다."
+        ],
+        "debug": null
+      },
+      "errors": {
+        "sentiment": "{\"code\":500,\"message\":\"배치 감성 분석 중 오류 발생: Tensor.item() cannot be called on meta tensors\",\"details\":\"배치 감성 분석 중 오류 발생: Tensor.item() cannot be called on meta tensors\",\"request_id\":\"91a318bd-10a7-4838-bbd4-042347518024\"}"
+      }
+    },
+    {
+      "restaurant_id": 36727961,
+      "restaurant_name": "조재벌식당 판교점",
+      "summary": {
+        "restaurant_id": 36727961,
+        "restaurant_name": "조재벌식당 판교점",
+        "overall_summary": "이 음식점에 대한 리뷰가 부족하여 전반적인 평가를 내리기 어렵다. 서비스, 가격, 음식에 대한 정보가 부족하다.",
+        "categories": {
+          "service": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          },
+          "price": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          },
+          "food": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          }
+        },
+        "debug": null
+      },
+      "sentiment": null,
+      "comparison": {
+        "restaurant_id": 36727961,
+        "restaurant_name": null,
+        "comparisons": [],
+        "total_candidates": 0,
+        "validated_count": 0,
+        "category_lift": {
+          "service": 0.0,
+          "price": 0.0
+        },
+        "comparison_display": [
+          "서비스 만족도는 평균과 비슷합니다.",
+          "가격 만족도는 평균과 비슷합니다."
+        ],
+        "debug": null
+      },
+      "errors": {
+        "sentiment": "{\"code\":500,\"message\":\"배치 감성 분석 중 오류 발생: Tensor.item() cannot be called on meta tensors\",\"details\":\"배치 감성 분석 중 오류 발생: Tensor.item() cannot be called on meta tensors\",\"request_id\":\"91a318bd-10a7-4838-bbd4-042347518024\"}"
+      }
+    },
+    {
+      "restaurant_id": 37243953,
+      "restaurant_name": "데이빗앤룰스",
+      "summary": {
+        "restaurant_id": 37243953,
+        "restaurant_name": "데이빗앤룰스",
+        "overall_summary": "이 음식점에 대한 리뷰가 부족하여 전반적인 평가를 내리기 어렵다. 서비스, 가격, 음식에 대한 정보가 부족하다.",
+        "categories": {
+          "service": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          },
+          "price": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          },
+          "food": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          }
+        },
+        "debug": null
+      },
+      "sentiment": null,
+      "comparison": {
+        "restaurant_id": 37243953,
+        "restaurant_name": null,
+        "comparisons": [],
+        "total_candidates": 0,
+        "validated_count": 0,
+        "category_lift": {
+          "service": 0.0,
+          "price": 0.0
+        },
+        "comparison_display": [
+          "서비스 만족도는 평균과 비슷합니다.",
+          "가격 만족도는 평균과 비슷합니다."
+        ],
+        "debug": null
+      },
+      "errors": {
+        "sentiment": "{\"code\":500,\"message\":\"배치 감성 분석 중 오류 발생: Tensor.item() cannot be called on meta tensors\",\"details\":\"배치 감성 분석 중 오류 발생: Tensor.item() cannot be called on meta tensors\",\"request_id\":\"91a318bd-10a7-4838-bbd4-042347518024\"}"
+      }
+    },
+    {
+      "restaurant_id": 37542537,
+      "restaurant_name": "춘업순댓국 본점",
+      "summary": {
+        "restaurant_id": 37542537,
+        "restaurant_name": "춘업순댓국 본점",
+        "overall_summary": "리뷰가 부족하여 전반적인 평가를 내리기 어렵다. 서비스, 가격, 음식에 대한 정보가 없다.",
+        "categories": {
+          "service": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          },
+          "price": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          },
+          "food": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          }
+        },
+        "debug": null
+      },
+      "sentiment": null,
+      "comparison": {
+        "restaurant_id": 37542537,
+        "restaurant_name": null,
+        "comparisons": [],
+        "total_candidates": 0,
+        "validated_count": 0,
+        "category_lift": {
+          "service": 0.0,
+          "price": 0.0
+        },
+        "comparison_display": [
+          "서비스 만족도는 평균과 비슷합니다.",
+          "가격 만족도는 평균과 비슷합니다."
+        ],
+        "debug": null
+      },
+      "errors": {
+        "sentiment": "{\"code\":500,\"message\":\"배치 감성 분석 중 오류 발생: Tensor.item() cannot be called on meta tensors\",\"details\":\"배치 감성 분석 중 오류 발생: Tensor.item() cannot be called on meta tensors\",\"request_id\":\"91a318bd-10a7-4838-bbd4-042347518024\"}"
+      }
+    },
+    {
+      "restaurant_id": 37576885,
+      "restaurant_name": "맥도날드 판교테크노밸리점",
+      "summary": {
+        "restaurant_id": 37576885,
+        "restaurant_name": "맥도날드 판교테크노밸리점",
+        "overall_summary": "리뷰가 부족하여 전반적인 평가를 내리기 어렵다. 각 카테고리에 대한 정보가 부족하다.",
+        "categories": {
+          "service": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          },
+          "price": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          },
+          "food": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          }
+        },
+        "debug": null
+      },
+      "sentiment": null,
+      "comparison": {
+        "restaurant_id": 37576885,
+        "restaurant_name": null,
+        "comparisons": [],
+        "total_candidates": 0,
+        "validated_count": 0,
+        "category_lift": {
+          "service": 0.0,
+          "price": 0.0
+        },
+        "comparison_display": [
+          "서비스 만족도는 평균과 비슷합니다.",
+          "가격 만족도는 평균과 비슷합니다."
+        ],
+        "debug": null
+      },
+      "errors": {
+        "sentiment": "{\"code\":500,\"message\":\"배치 감성 분석 중 오류 발생: Tensor.item() cannot be called on meta tensors\",\"details\":\"배치 감성 분석 중 오류 발생: Tensor.item() cannot be called on meta tensors\",\"request_id\":\"91a318bd-10a7-4838-bbd4-042347518024\"}"
+      }
+    },
+    {
+      "restaurant_id": 38262480,
+      "restaurant_name": "재크와 콩나물",
+      "summary": {
+        "restaurant_id": 38262480,
+        "restaurant_name": "재크와 콩나물",
+        "overall_summary": "이 음식점에 대한 리뷰가 부족하여 전반적인 평가를 내리기 어렵다. 서비스, 가격, 음식에 대한 정보가 부족하다.",
+        "categories": {
+          "service": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          },
+          "price": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          },
+          "food": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          }
+        },
+        "debug": null
+      },
+      "sentiment": null,
+      "comparison": {
+        "restaurant_id": 38262480,
+        "restaurant_name": null,
+        "comparisons": [],
+        "total_candidates": 0,
+        "validated_count": 0,
+        "category_lift": {
+          "service": 0.0,
+          "price": 0.0
+        },
+        "comparison_display": [
+          "서비스 만족도는 평균과 비슷합니다.",
+          "가격 만족도는 평균과 비슷합니다."
+        ],
+        "debug": null
+      },
+      "errors": {
+        "sentiment": "{\"code\":500,\"message\":\"배치 감성 분석 중 오류 발생: Tensor.item() cannot be called on meta tensors\",\"details\":\"배치 감성 분석 중 오류 발생: Tensor.item() cannot be called on meta tensors\",\"request_id\":\"b9239492-38f7-412a-9d4d-431f76e75e50\"}"
+      }
+    },
+    {
+      "restaurant_id": 38309897,
+      "restaurant_name": "빈티지1988",
+      "summary": {
+        "restaurant_id": 38309897,
+        "restaurant_name": "빈티지1988",
+        "overall_summary": "이 음식점에 대한 리뷰가 부족하여 전반적인 평가를 내리기 어렵다. 서비스, 가격, 음식에 대한 정보가 부족하다.",
+        "categories": {
+          "service": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          },
+          "price": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          },
+          "food": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          }
+        },
+        "debug": null
+      },
+      "sentiment": null,
+      "comparison": {
+        "restaurant_id": 38309897,
+        "restaurant_name": null,
+        "comparisons": [],
+        "total_candidates": 0,
+        "validated_count": 0,
+        "category_lift": {
+          "service": 0.0,
+          "price": 0.0
+        },
+        "comparison_display": [
+          "서비스 만족도는 평균과 비슷합니다.",
+          "가격 만족도는 평균과 비슷합니다."
+        ],
+        "debug": null
+      },
+      "errors": {
+        "sentiment": "{\"code\":500,\"message\":\"배치 감성 분석 중 오류 발생: Tensor.item() cannot be called on meta tensors\",\"details\":\"배치 감성 분석 중 오류 발생: Tensor.item() cannot be called on meta tensors\",\"request_id\":\"b9239492-38f7-412a-9d4d-431f76e75e50\"}"
+      }
+    },
+    {
+      "restaurant_id": 38705391,
+      "restaurant_name": "황제갈비",
+      "summary": {
+        "restaurant_id": 38705391,
+        "restaurant_name": "황제갈비",
+        "overall_summary": "이 음식점에 대한 리뷰가 부족하여 전반적인 평가를 내리기 어렵다. 서비스, 가격, 음식에 대한 정보가 부족하다.",
+        "categories": {
+          "service": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          },
+          "price": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          },
+          "food": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          }
+        },
+        "debug": null
+      },
+      "sentiment": null,
+      "comparison": {
+        "restaurant_id": 38705391,
+        "restaurant_name": null,
+        "comparisons": [],
+        "total_candidates": 0,
+        "validated_count": 0,
+        "category_lift": {
+          "service": 0.0,
+          "price": 0.0
+        },
+        "comparison_display": [
+          "서비스 만족도는 평균과 비슷합니다.",
+          "가격 만족도는 평균과 비슷합니다."
+        ],
+        "debug": null
+      },
+      "errors": {
+        "sentiment": "{\"code\":500,\"message\":\"배치 감성 분석 중 오류 발생: Tensor.item() cannot be called on meta tensors\",\"details\":\"배치 감성 분석 중 오류 발생: Tensor.item() cannot be called on meta tensors\",\"request_id\":\"b9239492-38f7-412a-9d4d-431f76e75e50\"}"
+      }
+    },
+    {
+      "restaurant_id": 226185221,
+      "restaurant_name": "일상화식",
+      "summary": {
+        "restaurant_id": 226185221,
+        "restaurant_name": "일상화식",
+        "overall_summary": "리뷰가 부족하여 전반적인 평가를 내리기 어렵다. 각 카테고리에 대한 정보가 부족하다.",
+        "categories": {
+          "service": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          },
+          "price": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          },
+          "food": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          }
+        },
+        "debug": null
+      },
+      "sentiment": null,
+      "comparison": {
+        "restaurant_id": 226185221,
+        "restaurant_name": null,
+        "comparisons": [],
+        "total_candidates": 0,
+        "validated_count": 0,
+        "category_lift": {
+          "service": 0.0,
+          "price": 0.0
+        },
+        "comparison_display": [
+          "서비스 만족도는 평균과 비슷합니다.",
+          "가격 만족도는 평균과 비슷합니다."
+        ],
+        "debug": null
+      },
+      "errors": {
+        "sentiment": "{\"code\":500,\"message\":\"배치 감성 분석 중 오류 발생: Tensor.item() cannot be called on meta tensors\",\"details\":\"배치 감성 분석 중 오류 발생: Tensor.item() cannot be called on meta tensors\",\"request_id\":\"b9239492-38f7-412a-9d4d-431f76e75e50\"}"
+      }
+    },
+    {
+      "restaurant_id": 959193386,
+      "restaurant_name": "조마루감자탕 판교점",
+      "summary": {
+        "restaurant_id": 959193386,
+        "restaurant_name": "조마루감자탕 판교점",
+        "overall_summary": "이 음식점에 대한 리뷰가 부족하여 전반적인 평가를 내리기 어렵다. 서비스, 가격, 음식에 대한 정보가 부족하다.",
+        "categories": {
+          "service": {
+            "summary": "언급이 적다",
+            "bullets": [],
+            "evidence": []
+          },
+          "price": {
+            "summary": "언급이 적다",
+            "bullets": [],
+            "evidence": []
+          },
+          "food": {
+            "summary": "언급이 적다",
+            "bullets": [],
+            "evidence": []
+          }
+        },
+        "debug": null
+      },
+      "sentiment": null,
+      "comparison": {
+        "restaurant_id": 959193386,
+        "restaurant_name": null,
+        "comparisons": [],
+        "total_candidates": 0,
+        "validated_count": 0,
+        "category_lift": {
+          "service": 0.0,
+          "price": 0.0
+        },
+        "comparison_display": [
+          "서비스 만족도는 평균과 비슷합니다.",
+          "가격 만족도는 평균과 비슷합니다."
+        ],
+        "debug": null
+      },
+      "errors": {
+        "sentiment": "{\"code\":500,\"message\":\"배치 감성 분석 중 오류 발생: Tensor.item() cannot be called on meta tensors\",\"details\":\"배치 감성 분석 중 오류 발생: Tensor.item() cannot be called on meta tensors\",\"request_id\":\"b9239492-38f7-412a-9d4d-431f76e75e50\"}"
+      }
+    },
+    {
+      "restaurant_id": 1086988618,
+      "restaurant_name": "써브웨이 판교테크노밸리점",
+      "summary": {
+        "restaurant_id": 1086988618,
+        "restaurant_name": "써브웨이 판교테크노밸리점",
+        "overall_summary": "리뷰가 부족하여 전반적인 평가를 내리기 어렵다. 서비스, 가격, 음식에 대한 정보가 없다.",
+        "categories": {
+          "service": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          },
+          "price": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          },
+          "food": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          }
+        },
+        "debug": null
+      },
+      "sentiment": null,
+      "comparison": {
+        "restaurant_id": 1086988618,
+        "restaurant_name": null,
+        "comparisons": [],
+        "total_candidates": 0,
+        "validated_count": 0,
+        "category_lift": {
+          "service": 0.0,
+          "price": 0.0
+        },
+        "comparison_display": [
+          "서비스 만족도는 평균과 비슷합니다.",
+          "가격 만족도는 평균과 비슷합니다."
+        ],
+        "debug": null
+      },
+      "errors": {
+        "sentiment": "{\"code\":500,\"message\":\"배치 감성 분석 중 오류 발생: Tensor.item() cannot be called on meta tensors\",\"details\":\"배치 감성 분석 중 오류 발생: Tensor.item() cannot be called on meta tensors\",\"request_id\":\"b9239492-38f7-412a-9d4d-431f76e75e50\"}"
+      }
+    },
+    {
+      "restaurant_id": 1255344270,
+      "restaurant_name": "팔복 수내",
+      "summary": {
+        "restaurant_id": 1255344270,
+        "restaurant_name": "팔복 수내",
+        "overall_summary": "이 음식점에 대한 리뷰가 부족하여 전반적인 평가를 내리기 어렵다. 각 카테고리에 대한 정보가 부족하다.",
+        "categories": {
+          "service": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          },
+          "price": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          },
+          "food": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          }
+        },
+        "debug": null
+      },
+      "sentiment": null,
+      "comparison": {
+        "restaurant_id": 1255344270,
+        "restaurant_name": null,
+        "comparisons": [],
+        "total_candidates": 0,
+        "validated_count": 0,
+        "category_lift": {
+          "service": 0.0,
+          "price": 0.0
+        },
+        "comparison_display": [
+          "서비스 만족도는 평균과 비슷합니다.",
+          "가격 만족도는 평균과 비슷합니다."
+        ],
+        "debug": null
+      },
+      "errors": {
+        "sentiment": "{\"code\":500,\"message\":\"배치 감성 분석 중 오류 발생: Tensor.item() cannot be called on meta tensors\",\"details\":\"배치 감성 분석 중 오류 발생: Tensor.item() cannot be called on meta tensors\",\"request_id\":\"b9239492-38f7-412a-9d4d-431f76e75e50\"}"
+      }
+    },
+    {
+      "restaurant_id": 1281176265,
+      "restaurant_name": "후루룩손칼국수",
+      "summary": {
+        "restaurant_id": 1281176265,
+        "restaurant_name": "후루룩손칼국수",
+        "overall_summary": "이 음식점에 대한 리뷰가 부족하여 전반적인 평가를 내리기 어렵다. 각 카테고리에 대한 정보가 부족하다.",
+        "categories": {
+          "service": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          },
+          "price": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          },
+          "food": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          }
+        },
+        "debug": null
+      },
+      "sentiment": null,
+      "comparison": {
+        "restaurant_id": 1281176265,
+        "restaurant_name": null,
+        "comparisons": [],
+        "total_candidates": 0,
+        "validated_count": 0,
+        "category_lift": {
+          "service": 0.0,
+          "price": 0.0
+        },
+        "comparison_display": [
+          "서비스 만족도는 평균과 비슷합니다.",
+          "가격 만족도는 평균과 비슷합니다."
+        ],
+        "debug": null
+      },
+      "errors": {
+        "sentiment": "{\"code\":500,\"message\":\"배치 감성 분석 중 오류 발생: Tensor.item() cannot be called on meta tensors\",\"details\":\"배치 감성 분석 중 오류 발생: Tensor.item() cannot be called on meta tensors\",\"request_id\":\"b9239492-38f7-412a-9d4d-431f76e75e50\"}"
+      }
+    },
+    {
+      "restaurant_id": 1302480095,
+      "restaurant_name": "수작",
+      "summary": {
+        "restaurant_id": 1302480095,
+        "restaurant_name": "수작",
+        "overall_summary": "이 음식점에 대한 리뷰가 부족하여 전반적인 평가를 내리기 어렵다. 서비스, 가격, 음식에 대한 정보가 없다.",
+        "categories": {
+          "service": {
+            "summary": "언급이 적다",
+            "bullets": [],
+            "evidence": []
+          },
+          "price": {
+            "summary": "언급이 적다",
+            "bullets": [],
+            "evidence": []
+          },
+          "food": {
+            "summary": "언급이 적다",
+            "bullets": [],
+            "evidence": []
+          }
+        },
+        "debug": null
+      },
+      "sentiment": null,
+      "comparison": {
+        "restaurant_id": 1302480095,
+        "restaurant_name": null,
+        "comparisons": [],
+        "total_candidates": 0,
+        "validated_count": 0,
+        "category_lift": {
+          "service": 0.0,
+          "price": 0.0
+        },
+        "comparison_display": [
+          "서비스 만족도는 평균과 비슷합니다.",
+          "가격 만족도는 평균과 비슷합니다."
+        ],
+        "debug": null
+      },
+      "errors": {
+        "sentiment": "{\"code\":500,\"message\":\"배치 감성 분석 중 오류 발생: Tensor.item() cannot be called on meta tensors\",\"details\":\"배치 감성 분석 중 오류 발생: Tensor.item() cannot be called on meta tensors\",\"request_id\":\"b9239492-38f7-412a-9d4d-431f76e75e50\"}"
+      }
+    },
+    {
+      "restaurant_id": 1303984471,
+      "restaurant_name": "BBQ치킨 판교테크노밸리점",
+      "summary": {
+        "restaurant_id": 1303984471,
+        "restaurant_name": "BBQ치킨 판교테크노밸리점",
+        "overall_summary": "이 음식점에 대한 리뷰가 부족하여 전반적인 평가를 내리기 어렵다. 서비스, 가격, 음식에 대한 정보가 부족하다.",
+        "categories": {
+          "service": {
+            "summary": "언급이 적다",
+            "bullets": [],
+            "evidence": []
+          },
+          "price": {
+            "summary": "언급이 적다",
+            "bullets": [],
+            "evidence": []
+          },
+          "food": {
+            "summary": "언급이 적다",
+            "bullets": [],
+            "evidence": []
+          }
+        },
+        "debug": null
+      },
+      "sentiment": null,
+      "comparison": {
+        "restaurant_id": 1303984471,
+        "restaurant_name": null,
+        "comparisons": [],
+        "total_candidates": 0,
+        "validated_count": 0,
+        "category_lift": {
+          "service": 0.0,
+          "price": 0.0
+        },
+        "comparison_display": [
+          "서비스 만족도는 평균과 비슷합니다.",
+          "가격 만족도는 평균과 비슷합니다."
+        ],
+        "debug": null
+      },
+      "errors": {
+        "sentiment": "{\"code\":500,\"message\":\"배치 감성 분석 중 오류 발생: Tensor.item() cannot be called on meta tensors\",\"details\":\"배치 감성 분석 중 오류 발생: Tensor.item() cannot be called on meta tensors\",\"request_id\":\"b9239492-38f7-412a-9d4d-431f76e75e50\"}"
+      }
+    },
+    {
+      "restaurant_id": 1309961192,
+      "restaurant_name": "헤비스테이크 판교테크노밸리점",
+      "summary": {
+        "restaurant_id": 1309961192,
+        "restaurant_name": "헤비스테이크 판교테크노밸리점",
+        "overall_summary": "이 음식점에 대한 리뷰가 부족하여 전반적인 평가를 내리기 어렵다. 각 카테고리에 대한 정보가 부족하다.",
+        "categories": {
+          "service": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          },
+          "price": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          },
+          "food": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          }
+        },
+        "debug": null
+      },
+      "sentiment": null,
+      "comparison": {
+        "restaurant_id": 1309961192,
+        "restaurant_name": null,
+        "comparisons": [],
+        "total_candidates": 0,
+        "validated_count": 0,
+        "category_lift": {
+          "service": 0.0,
+          "price": 0.0
+        },
+        "comparison_display": [
+          "서비스 만족도는 평균과 비슷합니다.",
+          "가격 만족도는 평균과 비슷합니다."
+        ],
+        "debug": null
+      },
+      "errors": {
+        "sentiment": "{\"code\":500,\"message\":\"배치 감성 분석 중 오류 발생: Tensor.item() cannot be called on meta tensors\",\"details\":\"배치 감성 분석 중 오류 발생: Tensor.item() cannot be called on meta tensors\",\"request_id\":\"f562162c-0857-460c-8ba4-073d5f6b9a08\"}"
+      }
+    },
+    {
+      "restaurant_id": 1339655296,
+      "restaurant_name": "원조감자탕일미집 판교점",
+      "summary": {
+        "restaurant_id": 1339655296,
+        "restaurant_name": "원조감자탕일미집 판교점",
+        "overall_summary": "이 음식점에 대한 리뷰가 부족하여 전반적인 평가를 내리기 어렵다. 각 카테고리에 대한 정보가 부족하다.",
+        "categories": {
+          "service": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          },
+          "price": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          },
+          "food": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          }
+        },
+        "debug": null
+      },
+      "sentiment": null,
+      "comparison": {
+        "restaurant_id": 1339655296,
+        "restaurant_name": null,
+        "comparisons": [],
+        "total_candidates": 0,
+        "validated_count": 0,
+        "category_lift": {
+          "service": 0.0,
+          "price": 0.0
+        },
+        "comparison_display": [
+          "서비스 만족도는 평균과 비슷합니다.",
+          "가격 만족도는 평균과 비슷합니다."
+        ],
+        "debug": null
+      },
+      "errors": {
+        "sentiment": "{\"code\":500,\"message\":\"배치 감성 분석 중 오류 발생: Tensor.item() cannot be called on meta tensors\",\"details\":\"배치 감성 분석 중 오류 발생: Tensor.item() cannot be called on meta tensors\",\"request_id\":\"f562162c-0857-460c-8ba4-073d5f6b9a08\"}"
+      }
+    },
+    {
+      "restaurant_id": 1418632150,
+      "restaurant_name": "중경별곡마라탕상궈",
+      "summary": {
+        "restaurant_id": 1418632150,
+        "restaurant_name": "중경별곡마라탕상궈",
+        "overall_summary": "이 음식점에 대한 리뷰가 부족하여 전반적인 평가를 내리기 어렵다. 서비스, 가격, 음식에 대한 정보가 전혀 제공되지 않았다.",
+        "categories": {
+          "service": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          },
+          "price": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          },
+          "food": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          }
+        },
+        "debug": null
+      },
+      "sentiment": null,
+      "comparison": {
+        "restaurant_id": 1418632150,
+        "restaurant_name": null,
+        "comparisons": [],
+        "total_candidates": 0,
+        "validated_count": 0,
+        "category_lift": {
+          "service": 0.0,
+          "price": 0.0
+        },
+        "comparison_display": [
+          "서비스 만족도는 평균과 비슷합니다.",
+          "가격 만족도는 평균과 비슷합니다."
+        ],
+        "debug": null
+      },
+      "errors": {
+        "sentiment": "{\"code\":500,\"message\":\"배치 감성 분석 중 오류 발생: Tensor.item() cannot be called on meta tensors\",\"details\":\"배치 감성 분석 중 오류 발생: Tensor.item() cannot be called on meta tensors\",\"request_id\":\"f562162c-0857-460c-8ba4-073d5f6b9a08\"}"
+      }
+    },
+    {
+      "restaurant_id": 1457551180,
+      "restaurant_name": "신라마라탕 판교점",
+      "summary": {
+        "restaurant_id": 1457551180,
+        "restaurant_name": "신라마라탕 판교점",
+        "overall_summary": "이 음식점에 대한 리뷰가 부족하여 전반적인 평가를 내리기 어렵다. 서비스, 가격, 음식에 대한 정보가 모두 부족하다.",
+        "categories": {
+          "service": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          },
+          "price": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          },
+          "food": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          }
+        },
+        "debug": null
+      },
+      "sentiment": null,
+      "comparison": {
+        "restaurant_id": 1457551180,
+        "restaurant_name": null,
+        "comparisons": [],
+        "total_candidates": 0,
+        "validated_count": 0,
+        "category_lift": {
+          "service": 0.0,
+          "price": 0.0
+        },
+        "comparison_display": [
+          "서비스 만족도는 평균과 비슷합니다.",
+          "가격 만족도는 평균과 비슷합니다."
+        ],
+        "debug": null
+      },
+      "errors": {
+        "sentiment": "{\"code\":500,\"message\":\"배치 감성 분석 중 오류 발생: Tensor.item() cannot be called on meta tensors\",\"details\":\"배치 감성 분석 중 오류 발생: Tensor.item() cannot be called on meta tensors\",\"request_id\":\"f562162c-0857-460c-8ba4-073d5f6b9a08\"}"
+      }
+    },
+    {
+      "restaurant_id": 1551742227,
+      "restaurant_name": "판교면학",
+      "summary": {
+        "restaurant_id": 1551742227,
+        "restaurant_name": "판교면학",
+        "overall_summary": "이 음식점에 대한 리뷰가 부족하여 전반적인 평가를 내리기 어렵다. 각 카테고리에 대한 정보가 부족하다.",
+        "categories": {
+          "service": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          },
+          "price": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          },
+          "food": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          }
+        },
+        "debug": null
+      },
+      "sentiment": null,
+      "comparison": {
+        "restaurant_id": 1551742227,
+        "restaurant_name": null,
+        "comparisons": [],
+        "total_candidates": 0,
+        "validated_count": 0,
+        "category_lift": {
+          "service": 0.0,
+          "price": 0.0
+        },
+        "comparison_display": [
+          "서비스 만족도는 평균과 비슷합니다.",
+          "가격 만족도는 평균과 비슷합니다."
+        ],
+        "debug": null
+      },
+      "errors": {
+        "sentiment": "{\"code\":500,\"message\":\"배치 감성 분석 중 오류 발생: Tensor.item() cannot be called on meta tensors\",\"details\":\"배치 감성 분석 중 오류 발생: Tensor.item() cannot be called on meta tensors\",\"request_id\":\"f562162c-0857-460c-8ba4-073d5f6b9a08\"}"
+      }
+    },
+    {
+      "restaurant_id": 1555619837,
+      "restaurant_name": "오한수 우육면가 판교점",
+      "summary": {
+        "restaurant_id": 1555619837,
+        "restaurant_name": "오한수 우육면가 판교점",
+        "overall_summary": "이 음식점에 대한 리뷰가 부족하여 전반적인 평가를 내리기 어렵다. 각 카테고리에 대한 정보가 부족하다.",
+        "categories": {
+          "service": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          },
+          "price": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          },
+          "food": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          }
+        },
+        "debug": null
+      },
+      "sentiment": null,
+      "comparison": {
+        "restaurant_id": 1555619837,
+        "restaurant_name": null,
+        "comparisons": [],
+        "total_candidates": 0,
+        "validated_count": 0,
+        "category_lift": {
+          "service": 0.0,
+          "price": 0.0
+        },
+        "comparison_display": [
+          "서비스 만족도는 평균과 비슷합니다.",
+          "가격 만족도는 평균과 비슷합니다."
+        ],
+        "debug": null
+      },
+      "errors": {
+        "sentiment": "{\"code\":500,\"message\":\"배치 감성 분석 중 오류 발생: Tensor.item() cannot be called on meta tensors\",\"details\":\"배치 감성 분석 중 오류 발생: Tensor.item() cannot be called on meta tensors\",\"request_id\":\"f562162c-0857-460c-8ba4-073d5f6b9a08\"}"
+      }
+    },
+    {
+      "restaurant_id": 1593577547,
+      "restaurant_name": "화포식당 판교점",
+      "summary": {
+        "restaurant_id": 1593577547,
+        "restaurant_name": "화포식당 판교점",
+        "overall_summary": "이 음식점에 대한 리뷰가 부족하여 전반적인 평가를 내리기 어렵다. 각 카테고리에 대한 정보가 부족하다.",
+        "categories": {
+          "service": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          },
+          "price": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          },
+          "food": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          }
+        },
+        "debug": null
+      },
+      "sentiment": null,
+      "comparison": {
+        "restaurant_id": 1593577547,
+        "restaurant_name": null,
+        "comparisons": [],
+        "total_candidates": 0,
+        "validated_count": 0,
+        "category_lift": {
+          "service": 0.0,
+          "price": 0.0
+        },
+        "comparison_display": [
+          "서비스 만족도는 평균과 비슷합니다.",
+          "가격 만족도는 평균과 비슷합니다."
+        ],
+        "debug": null
+      },
+      "errors": {
+        "sentiment": "{\"code\":500,\"message\":\"배치 감성 분석 중 오류 발생: Tensor.item() cannot be called on meta tensors\",\"details\":\"배치 감성 분석 중 오류 발생: Tensor.item() cannot be called on meta tensors\",\"request_id\":\"f562162c-0857-460c-8ba4-073d5f6b9a08\"}"
+      }
+    },
+    {
+      "restaurant_id": 1620963045,
+      "restaurant_name": "오봉집 판교유스페이스점",
+      "summary": {
+        "restaurant_id": 1620963045,
+        "restaurant_name": "오봉집 판교유스페이스점",
+        "overall_summary": "이 음식점에 대한 리뷰가 부족하여 전반적인 평가를 내리기 어렵다. 서비스, 가격, 음식에 대한 정보가 전혀 제공되지 않았다.",
+        "categories": {
+          "service": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          },
+          "price": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          },
+          "food": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          }
+        },
+        "debug": null
+      },
+      "sentiment": null,
+      "comparison": {
+        "restaurant_id": 1620963045,
+        "restaurant_name": null,
+        "comparisons": [],
+        "total_candidates": 0,
+        "validated_count": 0,
+        "category_lift": {
+          "service": 0.0,
+          "price": 0.0
+        },
+        "comparison_display": [
+          "서비스 만족도는 평균과 비슷합니다.",
+          "가격 만족도는 평균과 비슷합니다."
+        ],
+        "debug": null
+      },
+      "errors": {
+        "sentiment": "{\"code\":500,\"message\":\"배치 감성 분석 중 오류 발생: Tensor.item() cannot be called on meta tensors\",\"details\":\"배치 감성 분석 중 오류 발생: Tensor.item() cannot be called on meta tensors\",\"request_id\":\"f562162c-0857-460c-8ba4-073d5f6b9a08\"}"
+      }
+    },
+    {
+      "restaurant_id": 1730451139,
+      "restaurant_name": "클준빛날영",
+      "summary": {
+        "restaurant_id": 1730451139,
+        "restaurant_name": "클준빛날영",
+        "overall_summary": "이 음식점에 대한 리뷰가 부족하여 전반적인 평가를 내리기 어렵다. 서비스, 가격, 음식에 대한 정보가 모두 부족하다.",
+        "categories": {
+          "service": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          },
+          "price": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          },
+          "food": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          }
+        },
+        "debug": null
+      },
+      "sentiment": null,
+      "comparison": {
+        "restaurant_id": 1730451139,
+        "restaurant_name": null,
+        "comparisons": [],
+        "total_candidates": 0,
+        "validated_count": 0,
+        "category_lift": {
+          "service": 0.0,
+          "price": 0.0
+        },
+        "comparison_display": [
+          "서비스 만족도는 평균과 비슷합니다.",
+          "가격 만족도는 평균과 비슷합니다."
+        ],
+        "debug": null
+      },
+      "errors": {
+        "sentiment": "{\"code\":500,\"message\":\"배치 감성 분석 중 오류 발생: Tensor.item() cannot be called on meta tensors\",\"details\":\"배치 감성 분석 중 오류 발생: Tensor.item() cannot be called on meta tensors\",\"request_id\":\"f562162c-0857-460c-8ba4-073d5f6b9a08\"}"
+      }
+    },
+    {
+      "restaurant_id": 1740068270,
+      "restaurant_name": "이든활어",
+      "summary": {
+        "restaurant_id": 1740068270,
+        "restaurant_name": "이든활어",
+        "overall_summary": "이 음식점에 대한 리뷰가 부족하여 전반적인 평가를 내리기 어렵다. 서비스, 가격, 음식에 대한 정보가 모두 부족하다.",
+        "categories": {
+          "service": {
+            "summary": "언급이 적다",
+            "bullets": [],
+            "evidence": []
+          },
+          "price": {
+            "summary": "언급이 적다",
+            "bullets": [],
+            "evidence": []
+          },
+          "food": {
+            "summary": "언급이 적다",
+            "bullets": [],
+            "evidence": []
+          }
+        },
+        "debug": null
+      },
+      "sentiment": null,
+      "comparison": {
+        "restaurant_id": 1740068270,
+        "restaurant_name": null,
+        "comparisons": [],
+        "total_candidates": 0,
+        "validated_count": 0,
+        "category_lift": {
+          "service": 0.0,
+          "price": 0.0
+        },
+        "comparison_display": [
+          "서비스 만족도는 평균과 비슷합니다.",
+          "가격 만족도는 평균과 비슷합니다."
+        ],
+        "debug": null
+      },
+      "errors": {
+        "sentiment": "{\"code\":500,\"message\":\"배치 감성 분석 중 오류 발생: Tensor.item() cannot be called on meta tensors\",\"details\":\"배치 감성 분석 중 오류 발생: Tensor.item() cannot be called on meta tensors\",\"request_id\":\"f562162c-0857-460c-8ba4-073d5f6b9a08\"}"
+      }
+    },
+    {
+      "restaurant_id": 1928652856,
+      "restaurant_name": "고쿠텐 판교점",
+      "summary": {
+        "restaurant_id": 1928652856,
+        "restaurant_name": "고쿠텐 판교점",
+        "overall_summary": "이 음식점에 대한 리뷰가 부족하여 전반적인 평가를 내리기 어렵다. 서비스, 가격, 음식에 대한 정보가 모두 부족하다.",
+        "categories": {
+          "service": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          },
+          "price": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          },
+          "food": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          }
+        },
+        "debug": null
+      },
+      "sentiment": null,
+      "comparison": {
+        "restaurant_id": 1928652856,
+        "restaurant_name": null,
+        "comparisons": [],
+        "total_candidates": 0,
+        "validated_count": 0,
+        "category_lift": {
+          "service": 0.0,
+          "price": 0.0
+        },
+        "comparison_display": [
+          "서비스 만족도는 평균과 비슷합니다.",
+          "가격 만족도는 평균과 비슷합니다."
+        ],
+        "debug": null
+      },
+      "errors": {
+        "sentiment": "{\"code\":500,\"message\":\"배치 감성 분석 중 오류 발생: Tensor.item() cannot be called on meta tensors\",\"details\":\"배치 감성 분석 중 오류 발생: Tensor.item() cannot be called on meta tensors\",\"request_id\":\"db13a818-5f58-4c59-b2d5-b3c7d01d79b7\"}"
+      }
+    },
+    {
+      "restaurant_id": 1947840094,
+      "restaurant_name": "행복한집숯불갈비",
+      "summary": {
+        "restaurant_id": 1947840094,
+        "restaurant_name": "행복한집숯불갈비",
+        "overall_summary": "이 음식점에 대한 리뷰가 부족하여 전반적인 평가를 내리기 어렵다. 각 카테고리에 대한 정보가 부족하다.",
+        "categories": {
+          "service": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          },
+          "price": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          },
+          "food": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          }
+        },
+        "debug": null
+      },
+      "sentiment": null,
+      "comparison": {
+        "restaurant_id": 1947840094,
+        "restaurant_name": null,
+        "comparisons": [],
+        "total_candidates": 0,
+        "validated_count": 0,
+        "category_lift": {
+          "service": 0.0,
+          "price": 0.0
+        },
+        "comparison_display": [
+          "서비스 만족도는 평균과 비슷합니다.",
+          "가격 만족도는 평균과 비슷합니다."
+        ],
+        "debug": null
+      },
+      "errors": {
+        "sentiment": "{\"code\":500,\"message\":\"배치 감성 분석 중 오류 발생: Tensor.item() cannot be called on meta tensors\",\"details\":\"배치 감성 분석 중 오류 발생: Tensor.item() cannot be called on meta tensors\",\"request_id\":\"db13a818-5f58-4c59-b2d5-b3c7d01d79b7\"}"
+      }
+    },
+    {
+      "restaurant_id": 1957405008,
+      "restaurant_name": "정식당",
+      "summary": {
+        "restaurant_id": 1957405008,
+        "restaurant_name": "정식당",
+        "overall_summary": "이 음식점에 대한 리뷰가 부족하여 전반적인 평가를 내리기 어렵다. 각 카테고리에 대한 정보가 부족하다.",
+        "categories": {
+          "service": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          },
+          "price": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          },
+          "food": {
+            "summary": "언급이 적다.",
+            "bullets": [],
+            "evidence": []
+          }
+        },
+        "debug": null
+      },
+      "sentiment": null,
+      "comparison": {
+        "restaurant_id": 1957405008,
+        "restaurant_name": null,
+        "comparisons": [],
+        "total_candidates": 0,
+        "validated_count": 0,
+        "category_lift": {
+          "service": 0.0,
+          "price": 0.0
+        },
+        "comparison_display": [
+          "서비스 만족도는 평균과 비슷합니다.",
+          "가격 만족도는 평균과 비슷합니다."
+        ],
+        "debug": null
+      },
+      "errors": {
+        "sentiment": "{\"code\":500,\"message\":\"배치 감성 분석 중 오류 발생: Tensor.item() cannot be called on meta tensors\",\"details\":\"배치 감성 분석 중 오류 발생: Tensor.item() cannot be called on meta tensors\",\"request_id\":\"db13a818-5f58-4c59-b2d5-b3c7d01d79b7\"}"
+      }
+    }
+  ]
+}

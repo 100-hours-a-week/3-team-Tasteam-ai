@@ -2,6 +2,8 @@
 FastAPI 의존성 주입
 """
 
+import os
+import threading
 from functools import lru_cache
 from fastapi import Depends, Header, Query
 from qdrant_client import QdrantClient
@@ -15,37 +17,43 @@ from ..metrics_collector import MetricsCollector
 from ..cpu_monitor import get_or_create_benchmark_cpu_monitor
 from ..gpu_monitor import get_or_create_benchmark_gpu_monitor
 
-# 의존성 싱글톤 (매 요청 인스턴스 생성 방지 — Encoder/Qdrant는 @lru_cache, 나머지는 모듈 캐시)
+# 의존성 싱글톤 (매 요청 인스턴스 생성 방지 — Qdrant는 스레드 안전 싱글톤, 나머지는 모듈 캐시)
+_qdrant_client_instance: Optional[QdrantClient] = None
+_qdrant_client_lock = threading.Lock()
 _vector_search_singleton: Optional[VectorSearch] = None
 _sentiment_analyzer_singleton: Optional[SentimentAnalyzer] = None
 _default_metrics_collector: Optional[MetricsCollector] = None
 _benchmark_metrics_collector: Optional[MetricsCollector] = None
 
 
-@lru_cache()
 def get_qdrant_client() -> QdrantClient:
-    """Qdrant 클라이언트 싱글톤"""
-    # 메모리 모드
-    if Config.QDRANT_URL == ":memory:":
-        return QdrantClient(location=":memory:")
-    
-    # HTTP/HTTPS로 시작하면 원격 서버
-    if Config.QDRANT_URL.startswith(("http://", "https://")):
-        return QdrantClient(url=Config.QDRANT_URL)
-    
-    # 그 외는 로컬 파일 경로 (on-disk)
-    # 디렉토리가 없으면 자동 생성
-    import os
-    qdrant_path = Config.QDRANT_URL
-    if not os.path.isabs(qdrant_path):
-        # 상대 경로인 경우 프로젝트 루트 기준으로 변환
-        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        qdrant_path = os.path.join(project_root, qdrant_path)
-    
-    # 디렉토리 생성
-    os.makedirs(qdrant_path, exist_ok=True)
-    
-    return QdrantClient(path=qdrant_path)
+    """
+    Qdrant 클라이언트 싱글톤 (스레드 안전).
+    로컬 path 사용 시 한 프로세스당 하나만 열리도록 보장하여
+    'already accessed by another instance' 오류를 방지합니다.
+    """
+    global _qdrant_client_instance
+    if _qdrant_client_instance is not None:
+        return _qdrant_client_instance
+    with _qdrant_client_lock:
+        if _qdrant_client_instance is not None:
+            return _qdrant_client_instance
+        # 메모리 모드
+        if Config.QDRANT_URL == ":memory:":
+            client = QdrantClient(location=":memory:")
+        # HTTP/HTTPS로 시작하면 원격 서버
+        elif Config.QDRANT_URL.startswith(("http://", "https://")):
+            client = QdrantClient(url=Config.QDRANT_URL)
+        else:
+            # 로컬 파일 경로 (on-disk)
+            qdrant_path = Config.QDRANT_URL
+            if not os.path.isabs(qdrant_path):
+                project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+                qdrant_path = os.path.join(project_root, qdrant_path)
+            os.makedirs(qdrant_path, exist_ok=True)
+            client = QdrantClient(path=qdrant_path)
+        _qdrant_client_instance = client
+        return _qdrant_client_instance
 
 
 def get_metrics_collector(

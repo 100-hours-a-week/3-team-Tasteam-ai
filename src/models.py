@@ -48,12 +48,14 @@ class SentimentReviewInput(BaseModel):
 class SentimentAnalysisRequest(BaseModel):
     """감성 분석 요청 모델 ( 기반)"""
     restaurant_id: int = Field(..., description="레스토랑 ID (BIGINT FK)")
+    restaurant_name: Optional[str] = Field(None, description="레스토랑 이름 (응답에 그대로 반환)")
     reviews: List[SentimentReviewInput] = Field(..., description="리뷰 리스트 (id, restaurant_id, content, created_at 필수)")
 
 
 class SentimentAnalysisDisplayResponse(BaseModel):
     """감성 분석 표시용 응답 모델 (최소 필드)"""
     restaurant_id: int = Field(..., description="레스토랑 ID")
+    restaurant_name: Optional[str] = Field(None, description="레스토랑 이름 (요청 시 전달 시 반환)")
     positive_ratio: int = Field(..., description="긍정 비율 (%) - 정수값")
     negative_ratio: int = Field(..., description="부정 비율 (%) - 정수값")
 
@@ -61,6 +63,7 @@ class SentimentAnalysisDisplayResponse(BaseModel):
 class SentimentAnalysisResponse(BaseModel):
     """감성 분석 응답 모델 ( 기반)"""
     restaurant_id: int = Field(..., description="레스토랑 ID")
+    restaurant_name: Optional[str] = Field(None, description="레스토랑 이름 (요청 시 전달 시 반환)")
     positive_count: int = Field(..., description="긍정 리뷰 개수")
     negative_count: int = Field(..., description="부정 리뷰 개수")
     neutral_count: int = Field(0, description="중립 리뷰 개수")
@@ -74,6 +77,7 @@ class SentimentAnalysisResponse(BaseModel):
 class SentimentRestaurantBatchInput(BaseModel):
     """배치 감성 분석용 레스토랑 입력 (reviews는 SentimentReviewInput: id, restaurant_id, content, created_at 필수)"""
     restaurant_id: int = Field(..., description="레스토랑 ID")
+    restaurant_name: Optional[str] = Field(None, description="레스토랑 이름 (응답에 그대로 반환)")
     reviews: List[SentimentReviewInput] = Field(default_factory=list, description="리뷰 리스트 (id, restaurant_id, content, created_at 필수)")
 
 
@@ -95,6 +99,7 @@ class SentimentAnalysisBatchResponse(BaseModel):
 class SummaryRequest(BaseModel):
     """리뷰 요약 요청 모델. 하이브리드 검색 쿼리는 기본 시드(service/price/food)만 사용."""
     restaurant_id: int = Field(..., description="레스토랑 ID")
+    restaurant_name: Optional[str] = Field(None, description="레스토랑 이름 (응답에 그대로 반환)")
     limit: int = Field(10, ge=1, le=100, description="각 카테고리당 검색할 최대 리뷰 수")
     min_score: float = Field(0.0, ge=0.0, le=1.0, description="최소 유사도 점수")
 
@@ -109,6 +114,7 @@ class CategorySummary(BaseModel):
 class SummaryDisplayResponse(BaseModel):
     """리뷰 요약 표시용 응답 모델 (최소 필드). debug=true 시 debug 필드만 추가, positive_reviews 등 미사용."""
     restaurant_id: int = Field(..., description="레스토랑 ID")
+    restaurant_name: Optional[str] = Field(None, description="레스토랑 이름 (벡터 payload 또는 요청에서 반환)")
     overall_summary: str = Field(..., description="전체 요약")
     categories: Optional[Dict[str, CategorySummary]] = Field(None, description="카테고리별 요약 (새 파이프라인)")
     debug: Optional[DebugInfo] = Field(None, description="디버그 정보 (X-Debug: true 시에만 포함)")
@@ -145,6 +151,7 @@ class ComparisonDetail(BaseModel):
 class ComparisonResponse(BaseModel):
     """다른 음식점과의 비교 응답 모델"""
     restaurant_id: int = Field(..., description="레스토랑 ID")
+    restaurant_name: Optional[str] = Field(None, description="레스토랑 이름 (벡터 payload에서 반환)")
     comparisons: List[ComparisonDetail] = Field(..., description="비교 항목 리스트")
     total_candidates: int = Field(..., description="근거 후보 총 개수")
     validated_count: int = Field(..., description="검증 통과한 비교 항목 개수")
@@ -164,6 +171,10 @@ class ComparisonBatchRequest(BaseModel):
     restaurants: List[Dict[str, Any]] = Field(
         ...,
         description="레스토랑 데이터 리스트, 각 항목: restaurant_id(필수)."
+    )
+    all_average_data_path: Optional[str] = Field(
+        None,
+        description="전체 평균·표본 추출용 데이터 파일 경로 (예: tasteam_app_all_review_data.json). 미지정 시 Config.ALL_AVERAGE_ASPECT_DATA_PATH 사용."
     )
 
 

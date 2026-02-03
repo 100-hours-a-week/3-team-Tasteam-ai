@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import os
+import threading
 from typing import Dict, List, Optional, Any, Tuple, Union
 
 from .config import Config
@@ -19,7 +20,10 @@ class SentimentAnalyzer:
     """
     감성 분석 클래스 ()
     """
-    
+    # 클래스 레벨에서 공유 (인스턴스/스레드 간 파이프라인 싱글톤)
+    _shared_pipeline = None
+    _shared_lock = threading.Lock()
+
     def __init__(
         self,
         vector_search: Optional[Any] = None,
@@ -29,39 +33,64 @@ class SentimentAnalyzer:
             vector_search: VectorSearch 인스턴스 (reviews 미제공 시 전체 리뷰 조회용)
         """
         self.vector_search = vector_search
-        self._sentiment_pipeline = None
+
+    @classmethod
+    def _get_sentiment_pipeline(cls):
+        """전역 싱글톤 파이프라인 (클래스 레벨, 쓰레드 안전)."""
+        if cls._shared_pipeline is not None:
+            return cls._shared_pipeline
+
+        with cls._shared_lock:
+            if cls._shared_pipeline is not None:
+                return cls._shared_pipeline
+
+            try:
+                from transformers import pipeline
+                import torch
+            except Exception as e:
+                raise ImportError(
+                    "transformers가 설치되어 있지 않거나 pipeline 로딩에 실패했습니다. "
+                    "pip install transformers 를 확인하세요."
+                ) from e
+
+            model_name = getattr(Config, "SENTIMENT_MODEL", "Dilwolf/Kakao_app-kr_sentiment")
+            use_cpu = getattr(Config, "SENTIMENT_FORCE_CPU", True)
+            device = 0 if (not use_cpu and torch.cuda.is_available()) else -1
+
+            # low_cpu_mem_usage=False: meta 텐서 로딩 방지
+            # attn_implementation="eager": SDPA meta tensor 오류 우회
+            model_kwargs = {"low_cpu_mem_usage": False, "attn_implementation": "eager"}
+            cls._shared_pipeline = pipeline(
+                "sentiment-analysis",
+                model=model_name,
+                device=device,
+                model_kwargs=model_kwargs,
+            )
+            logger.info(f"Sentiment 모델 로딩 완료: {model_name} (device={device})")
+            return cls._shared_pipeline
     
-    def _get_sentiment_pipeline(self):
-        """HuggingFace sentiment pipeline (lazy init)."""
-        if self._sentiment_pipeline is not None:
-            return self._sentiment_pipeline
-        
-        try:
-            from transformers import pipeline
-        except Exception as e:
-            raise ImportError(
-                "transformers가 설치되어 있지 않거나 pipeline 로딩에 실패했습니다. "
-                "pip install transformers 를 확인하세요."
-            ) from e
-        
-        # 디바이스 선택: GPU가 있으면 사용, 없으면 CPU
-        device = -1
-        try:
-            import torch
-            if Config.USE_GPU and torch.cuda.is_available():
-                device = 0
-        except Exception:
-            device = -1
-        
-        # 새로운 파이프라인: Dilwolf/Kakao_app-kr_sentiment 모델 사용
-        self._sentiment_pipeline = pipeline(
-            task="text-classification",
-            model="Dilwolf/Kakao_app-kr_sentiment",
-            device=device,
-        )
-        logger.info(f"Sentiment 모델 로딩 완료: Dilwolf/Kakao_app-kr_sentiment (device={device})")
-        return self._sentiment_pipeline
-    
+    @staticmethod
+    def _score_to_float(score: Any) -> float:
+        """
+        파이프라인 출력의 score를 float으로 변환.
+        meta tensor 등 .item() 호출 시 RuntimeError가 나는 경우 0.0 반환.
+        """
+        if score is None:
+            return 0.0
+        if isinstance(score, (int, float)):
+            return float(score)
+        if hasattr(score, "item"):
+            try:
+                return float(score.item())
+            except (RuntimeError, ValueError):
+                pass
+        if hasattr(score, "cpu") and hasattr(score, "numpy"):
+            try:
+                return float(score.cpu().numpy().item())
+            except (RuntimeError, ValueError, AttributeError):
+                pass
+        return 0.0
+
     @staticmethod
     def _map_label_to_binary(label: str) -> Optional[str]:
         """
@@ -102,14 +131,15 @@ class SentimentAnalyzer:
             batch = content_list[i : i + batch_size]
             batch_indices = list(range(i, min(i + batch_size, len(content_list))))
             
-            # return_all_scores=True로 호출하여 모든 점수 확인
-            outputs = pipe(batch, return_all_scores=True)
+            # top_k=None으로 모든 레이블 점수 반환 (return_all_scores 대체)
+            outputs = pipe(batch, top_k=None)
             
             for idx, out in zip(batch_indices, outputs):
                 # outputs는 리스트의 리스트: [[{"label": "...", "score": ...}, ...], ...]
                 if isinstance(out, list) and len(out) >= 2:
-                    # positive score (인덱스 1) 확인
-                    positive_score = out[1].get("score", 0.0) if len(out) > 1 else 0.0
+                    # positive score (인덱스 1) 확인 (meta tensor 등은 _score_to_float로 안전 변환)
+                    raw_score = out[1].get("score", 0.0) if len(out) > 1 else 0.0
+                    positive_score = self._score_to_float(raw_score)
                     is_positive = positive_score > 0.8
                     
                     if is_positive:
@@ -521,19 +551,28 @@ class SentimentAnalyzer:
     ) -> List[Dict[str, Any]]:
         """
         여러 레스토랑의 리뷰를 sentiment 모델로 분류하여 결과를 반환합니다.
+        SENTIMENT_RESTAURANT_ASYNC=true면 음식점 간 asyncio.gather(병렬), false면 순차.
         샘플링이 활성화되어 있으면 대표 벡터 기반 TOP-K를 사용하고,
-        비활성화되어 있으면 전체 리뷰를 사용합니다.
+        비활성화되어 있으면 제공된 reviews를 사용합니다.
         """
         if not restaurants_data:
             return []
+
+        async def _analyze_one(data: Any) -> Dict[str, Any]:
+            restaurant_id = data.restaurant_id if hasattr(data, "restaurant_id") else data.get("restaurant_id")
+            reviews = data.reviews if hasattr(data, "reviews") else data.get("reviews", [])
+            if Config.ENABLE_SENTIMENT_SAMPLING:
+                return await self.analyze_async(reviews=None, restaurant_id=restaurant_id)
+            return await self.analyze_async(reviews=reviews, restaurant_id=restaurant_id)
+
+        if Config.SENTIMENT_RESTAURANT_ASYNC:
+            tasks = [_analyze_one(d) for d in restaurants_data]
+            return list(await asyncio.gather(*tasks))
 
         results: List[Dict[str, Any]] = []
         for data in restaurants_data:
             restaurant_id = data.restaurant_id if hasattr(data, "restaurant_id") else data.get("restaurant_id")
             reviews = data.reviews if hasattr(data, "reviews") else data.get("reviews", [])
-            
-            # 샘플링이 활성화되어 있으면 reviews를 None으로 전달하여 샘플링 로직 적용
-            # 샘플링이 비활성화되어 있으면 제공된 reviews를 사용 (없으면 전체 리뷰 조회)
             if Config.ENABLE_SENTIMENT_SAMPLING:
                 results.append(self.analyze(reviews=None, restaurant_id=restaurant_id))
             else:
