@@ -95,13 +95,16 @@ class VectorSearch:
                     "dense": models.VectorParams(
                         size=self._dense_dim,
                         distance=models.Distance.COSINE,
+                        on_disk=Config.QDRANT_VECTORS_ON_DISK,
                     )
                 },
                 sparse_vectors_config={
                     "sparse": models.SparseVectorParams()
                 },
             )
-            logger.info(f"하이브리드 검색 지원 컬렉션 생성 완료: {collection_name} (dense + sparse)")
+            logger.info(
+                f"하이브리드 검색 지원 컬렉션 생성 완료: {collection_name} (dense + sparse, on_disk={Config.QDRANT_VECTORS_ON_DISK})"
+            )
             self._get_sparse_model()
 
     def _get_sparse_model(self):
@@ -747,9 +750,12 @@ class VectorSearch:
                     vectors_config=models.VectorParams(
                         size=self.encoder.get_sentence_embedding_dimension(),
                         distance=models.Distance.COSINE,
+                        on_disk=Config.QDRANT_VECTORS_ON_DISK,
                     ),
                 )
-                logger.info(f"컬렉션 {RESTAURANT_VECTORS_COLLECTION} 생성 완료")
+                logger.info(
+                    f"컬렉션 {RESTAURANT_VECTORS_COLLECTION} 생성 완료 (on_disk={Config.QDRANT_VECTORS_ON_DISK})"
+                )
             
             # 3. 포인트 생성 및 업로드
             # Qdrant의 id는 UUID 형식이어야 하므로, restaurant_id를 기반으로 일관된 UUID 생성

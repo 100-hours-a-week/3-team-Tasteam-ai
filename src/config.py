@@ -112,8 +112,9 @@ class _InferenceConfig:
 
 # --- Retrieval (Qdrant, embedding, top_k, rerank 등) ---
 class _RetrievalConfig:
-    """검색/검열: Qdrant URL, collection, top_k, rerank_k, aspect seed"""
+    """검색/검열: Qdrant URL, collection, top_k, rerank_k, aspect seed, 벡터 on_disk"""
     QDRANT_URL: Optional[str] = os.getenv("QDRANT_URL", "./qdrant_data")
+    QDRANT_VECTORS_ON_DISK: bool = os.getenv("QDRANT_VECTORS_ON_DISK", "false").lower() == "true"
     COLLECTION_NAME: str = os.getenv("COLLECTION_NAME", DEFAULT_COLLECTION_NAME)
     SCORE_THRESHOLD: float = float(os.getenv("SCORE_THRESHOLD", str(DEFAULT_SCORE_THRESHOLD)))
     LLM_KEYWORDS: list = DEFAULT_LLM_KEYWORDS
