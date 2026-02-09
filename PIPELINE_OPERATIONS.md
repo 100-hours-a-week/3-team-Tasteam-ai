@@ -4,6 +4,7 @@
 
 - **범위**: `src/` 기반 HTTP API. `hybrid_search` / `final_pipeline` 미포함.
 - **테스트**: `test_all_task.py` — API 호출만 사용.
+- **관측/모니터링**: Prometheus/Grafana 사용법 및 수집 범위는 `etc_md/OBSERVABILITY_PROM_GRAFANA.md` 참고.
 
 ---
 
@@ -116,7 +117,7 @@
    - 수치(lift %)는 코드 고정 생성. 해석은 표본 수별 톤 적용.
    - `COMPARISON_ASYNC=true`면 service/price LLM 병렬(asyncio.gather), `false`(기본)면 순차 호출.  
    - 퍼센트 + 해석: `"서비스 만족도는 평균보다 약 N% 높아요. 전반적으로 서비스 평가가 {tone}입니다."`  
-   - 표본 톤: n≥50 → "좋은 편", 20≤n<50 → "상대적으로 좋은 편(표본 중간)", n<20 → "경향이 보이나 표본이 적어요"
+   - 표본 톤: n≥50 → "좋은 편", 20≤n<50 → "상대적으로 좋은 편", n<20 → "경향이 보이나 표본이 적어요"
 
 6. **비교 리스트**  
    - `lift > 0` 인 service/price만 `comparisons`에 추가  

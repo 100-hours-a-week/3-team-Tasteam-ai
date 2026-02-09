@@ -1,0 +1,93 @@
+services:
+  old_sync:
+    image: tasteam-old-sync:latest
+    ports:
+      - "8001:8001"
+    env_file: [.env]
+    environment:
+      PORT: "8001"
+      PIPELINE: "old_sync"
+
+  new_sync:
+    image: tasteam-new-async:latest
+    # build는 생략해도 됨(같은 이미지 재사용). 처음엔 한 군데만 build 있어도 OK
+    ports:
+      - "8002:8002"
+    env_file: [.env]
+    environment:
+      PORT: "8002"
+      PIPELINE: "new_sync"
+      # sync 분기
+      # Sentiment: HF 분류기. true=asyncio.to_thread(블로킹 격리), false=메인 스레드
+      SENTIMENT_CLASSIFIER_USE_THREAD: "true"
+      # Sentiment: LLM 재판정. true=AsyncOpenAI, false=동기
+      SENTIMENT_LLM_ASYNC: false
+      # Sentiment 배치: 음식점 간 병렬. true=asyncio.gather(병렬), false=순차
+      SENTIMENT_RESTAURANT_ASYNC: false
+      
+      # sync vs async (기본값 true: 파이프라인 내·음식점 간 병렬로 최대 속도)
+      
+      # Summary 배치: LLM 호출. true=AsyncOpenAI/httpx.AsyncClient, false=asyncio.to_thread(동기 래핑)
+      SUMMARY_LLM_ASYNC: false
+      # Summary 배치: aspect(service/price/food) 서치 병렬
+      SUMMARY_SEARCH_ASYNC: false
+      # Summary 배치: 음식점 간 병렬
+      SUMMARY_RESTAURANT_ASYNC: false
+      
+      # Comparison: service/price LLM 호출. true=asyncio.gather(병렬), false=순차
+      COMPARISON_ASYNC: false
+      # Comparison 배치: 음식점 간 병렬. true=asyncio.gather(병렬), false=순차
+      COMPARISON_BATCH_ASYNC: false
+
+
+
+  new_async:
+    image: tasteam-new-async:latest
+    ports:
+      - "8003:8003"
+    env_file: [.env]
+    environment:
+      PORT: "8003"
+      PIPELINE: "new_async"
+
+  jobmgr:
+    build:
+      context: .
+      dockerfile: Dockerfile.metrics
+    ports: ["1041:1041"]
+
+  node-exporter:
+    image: prom/node-exporter:v1.7.0
+    ports: ["9100:9100"]
+
+  prometheus:
+    image: prom/prometheus:v2.42.0
+    volumes:
+      - ./configs/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./configs/prometheus/alerts.yml:/etc/prometheus/alerts.yml
+    ports: ["9090:9090"]
+    depends_on:
+      - old_sync
+      - new_sync
+      - new_async
+      - jobmgr
+      - node-exporter
+      - alertmanager
+
+  alertmanager:
+    image: prom/alertmanager:v0.26.0
+    volumes:
+      - ./configs/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml
+    ports: ["9093:9093"]
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+
+  grafana:
+    image: grafana/grafana:9.3.6
+    volumes:
+      - ./configs/grafana/datasources:/etc/grafana/provisioning/datasources/
+      - ./configs/grafana/dashboards:/etc/grafana/provisioning/dashboards/
+      - ./configs/grafana/ini/grafana.ini:/etc/grafana/grafana.ini
+    ports: ["3000:3000"]
+    depends_on: [prometheus]

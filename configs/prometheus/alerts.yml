@@ -1,0 +1,42 @@
+# Prometheus 알람 규칙 (FastAPI 파이프라인)
+# Alertmanager에 보내려면 prometheus.yml 에 alerting 설정 필요
+groups:
+  - name: fastapi_alerts
+    interval: 30s
+    rules:
+      # API 인스턴스 다운 (스크랩 실패)
+      - alert: ApiDown
+        expr: up{job="fastapi"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "FastAPI instance down"
+          description: "{{ $labels.instance }} (pipeline: {{ $labels.pipeline }}) has been down for more than 1 minute."
+
+      # API는 up이지만 처리량이 없음 (소프트 다운 / 멈춤)
+      - alert: ApiSoftDead_NoThroughput
+        expr: |
+          (sum(up{job="fastapi"}) >= 1)
+          and on()
+          (sum(rate(analysis_requests_total{job="fastapi",status="success"}[5m])) or vector(0)) < 0.01
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "FastAPI up but no throughput"
+          description: "At least one FastAPI instance is up but success rate is near zero for 5m (soft dead)."
+
+      # new_async 파이프라인 워커 포화 (활용률 지속적으로 높음)
+      - alert: AsyncWorkersSaturated
+        expr: |
+          (
+            sum by (pipeline) (app_worker_busy{job="fastapi",pipeline="new_async"})
+            / (count by (pipeline) (app_worker_busy{job="fastapi",pipeline="new_async"}) + 1e-9)
+          ) > 0.95
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Async workers saturated"
+          description: "new_async pipeline worker utilization has been > 95% for 5m."

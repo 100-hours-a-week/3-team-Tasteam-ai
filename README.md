@@ -82,6 +82,35 @@ python test_all_task.py --benchmark --iterations 5
 python test_all_task.py --benchmark --save-results results.json
 ```
 
+## Docker 이미지 빌드 및 Docker Hub 푸시
+
+API 이미지를 빌드한 뒤 Docker Hub에 푸시하려면:
+
+1. **Docker Hub 로그인** (최초 1회)
+   ```bash
+   docker login
+   ```
+
+2. **환경 변수 설정** (선택: `.env`에 넣거나 export)
+   ```bash
+   export DOCKERHUB_USERNAME=your-dockerhub-username
+   # 선택: export DOCKER_IMAGE_NAME=tasteam-review-api
+   ```
+
+3. **빌드 및 푸시**
+   ```bash
+   # CUDA 이미지 (기본), 태그 1.0.0 + latest
+   ./scripts/build_and_push.sh 1.0.0 cuda
+
+   # CPU 이미지
+   ./scripts/build_and_push.sh 1.0.0 cpu
+
+   # 버전 생략 시 latest 사용
+   ./scripts/build_and_push.sh latest cpu
+   ```
+
+푸시된 이미지 예: `your-dockerhub-username/tasteam-review-api:1.0.0`, `your-dockerhub-username/tasteam-review-api:latest-cpu`
+
 ## 프로젝트 구조
 
 ```
@@ -98,5 +127,7 @@ python test_all_task.py --benchmark --save-results results.json
 ## 참고 문서
 
 - [PIPELINE_OPERATIONS.md](PIPELINE_OPERATIONS.md) - 파이프라인 동작 (Strength, Summary, Sentiment, Vector)
+- [etc_md/OBSERVABILITY_PROM_GRAFANA.md](etc_md/OBSERVABILITY_PROM_GRAFANA.md) - Prometheus/Grafana 사용법 및 현재 수집 범위
+- [.env.example](.env.example) - 환경 변수 예시 (Docker Hub 푸시용 `DOCKERHUB_USERNAME`, `DOCKER_IMAGE_NAME` 포함)
 - [LLM_SERVICE_STEP/API_SPECIFICATION.md](LLM_SERVICE_STEP/API_SPECIFICATION.md) - API 명세서
 - [LLM_SERVICE_STEP/ARCHITECTURE.md](LLM_SERVICE_STEP/ARCHITECTURE.md) - 시스템 아키텍처

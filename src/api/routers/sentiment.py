@@ -116,6 +116,7 @@ async def analyze_sentiment(
             )
 
             # 메트릭 수집
+            processing_time_ms = (time.time() - start_time) * 1000
             request_id = metrics.collect_metrics(
                 restaurant_id=request.restaurant_id,
                 analysis_type="sentiment",
@@ -123,6 +124,8 @@ async def analyze_sentiment(
                 tokens_used=result.get("tokens_used"),
                 batch_size=len(request.reviews),
             )
+            # TTFUR = t1 - t0 (요청 수신 시각 t0 → 응답 반환 직전 t1)
+            metrics.record_llm_ttft(analysis_type="sentiment", ttft_ms=processing_time_ms)
 
             # 디버그 모드에 따라 응답 반환 (restaurant_name은 요청에서 반환)
             result["restaurant_name"] = getattr(request, "restaurant_name", None)
@@ -167,6 +170,7 @@ async def analyze_sentiment(
 async def analyze_sentiment_batch(
     request: SentimentAnalysisBatchRequest,
     analyzer: SentimentAnalyzer = Depends(get_sentiment_analyzer),
+    metrics: MetricsCollector = Depends(get_metrics_collector),
 ):
     """
     여러 레스토랑의 **전체 리뷰**를 sentiment 모델로 분류하여 결과를 반환합니다.
@@ -180,6 +184,7 @@ async def analyze_sentiment_batch(
     Returns:
         각 레스토랑별 감성 분석 결과 리스트
     """
+    start_time = time.time()
     try:
         results = await analyzer.analyze_multiple_restaurants_async(restaurants_data=request.restaurants)
         # 각 결과에 restaurant_name 병합 (요청 항목 순서 대응)
@@ -190,6 +195,9 @@ async def analyze_sentiment_batch(
                 r["restaurant_name"] = item.get("restaurant_name") if isinstance(item, dict) else getattr(item, "restaurant_name", None)
             else:
                 r["restaurant_name"] = None
+        # TTFUR = t1 - t0 (요청 수신 시각 t0 → 응답 반환 직전 t1)
+        elapsed_ms = (time.time() - start_time) * 1000
+        metrics.record_llm_ttft(analysis_type="sentiment", ttft_ms=elapsed_ms)
         return SentimentAnalysisBatchResponse(results=[
             SentimentAnalysisResponse(**result) for result in results
         ])

@@ -32,6 +32,7 @@
   python scripts/run_all_restaurants_api.py --input tasteam_app_data.json --output all_restaurants_results.json
   python scripts/run_all_restaurants_api.py -i tasteam_app_data.json -o results.json --no-upload  # 업로드 생략
   python scripts/run_all_restaurants_api.py -i tasteam_app_data.json -o results.json --base-url http://localhost:8001 --batch-size 5 --limit 3
+  python scripts/run_all_restaurants_api.py -i data.json -o results.json --ports 8001 8002 8003  # 3개 포트에 동시 전송, 결과는 results_by_port로 저장
 """
 
 import argparse
@@ -39,8 +40,9 @@ import asyncio
 import json
 import sys
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 try:
     import httpx
@@ -216,7 +218,7 @@ async def call_comparison_batch_async(
 
 async def run_async(
     input_path: Path,
-    output_path: Path,
+    output_path: Optional[Path] = None,
     base_url: str = DEFAULT_BASE_URL,
     batch_size: int = DEFAULT_BATCH_SIZE,
     limit_restaurants: Optional[int] = None,
@@ -226,8 +228,8 @@ async def run_async(
     timeout: int = 600,
     do_upload: bool = True,
     upload_timeout: int = DEFAULT_UPLOAD_TIMEOUT,
-) -> None:
-    """메인: 데이터 로드 → (선택) 벡터 업로드 → 청크별 3 API 병렬 호출 → 결과 JSON 저장."""
+) -> Dict[str, Any]:
+    """메인: 데이터 로드 → (선택) 벡터 업로드 → 청크별 3 API 병렬 호출. output_path가 있으면 저장, 없으면 결과 dict 반환."""
     if httpx is None:
         raise RuntimeError("httpx 패키지가 필요합니다: pip install httpx")
 
@@ -247,9 +249,10 @@ async def run_async(
     if not restaurants:
         print("경고: restaurants가 비어 있습니다. 종료합니다.", file=sys.stderr)
         out = {"meta": {"base_url": base_url, "total_restaurants": 0, "requested_at": datetime.now().isoformat(), "batch_size": batch_size}, "results": []}
-        with open(output_path, "w", encoding="utf-8") as f:
-            json.dump(out, f, ensure_ascii=False, indent=2)
-        return
+        if output_path:
+            with open(output_path, "w", encoding="utf-8") as f:
+                json.dump(out, f, ensure_ascii=False, indent=2)
+        return out
 
     if limit_restaurants is not None:
         restaurants = restaurants[:limit_restaurants]
@@ -311,9 +314,11 @@ async def run_async(
         "apis": apis,
     }
     out = {"meta": meta, "results": results}
-    with open(output_path, "w", encoding="utf-8") as f:
-        json.dump(out, f, ensure_ascii=False, indent=2)
-    print(f"저장 완료: {output_path} (레스토랑 {total}개)")
+    if output_path:
+        with open(output_path, "w", encoding="utf-8") as f:
+            json.dump(out, f, ensure_ascii=False, indent=2)
+        print(f"저장 완료: {output_path} (레스토랑 {total}개)")
+    return out
 
 
 def main() -> None:
@@ -324,7 +329,8 @@ def main() -> None:
     )
     parser.add_argument("--input", "-i", type=Path, default=PROJECT_ROOT / "tasteam_app_data.json", help="입력 JSON (reviews, restaurants)")
     parser.add_argument("--output", "-o", type=Path, default=PROJECT_ROOT / "all_restaurants_results.json", help="출력 JSON 경로")
-    parser.add_argument("--base-url", "-b", type=str, default=DEFAULT_BASE_URL, help="API 서버 URL")
+    parser.add_argument("--base-url", "-b", type=str, default=DEFAULT_BASE_URL, help="API 서버 URL (--ports 사용 시 무시)")
+    parser.add_argument("--ports", "-p", type=int, nargs="+", default=None, help="여러 포트에 동시 전송. 예: --ports 8001 8002 8003 (각 포트에 동일 작업 수행)")
     parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE, help="배치당 레스토랑 수")
     parser.add_argument("--limit", "-n", type=int, default=None, help="처리할 최대 레스토랑 수 (테스트용)")
     parser.add_argument("--summary-limit", type=int, default=DEFAULT_SUMMARY_LIMIT, help="요약 API 카테고리당 리뷰 수")
@@ -339,19 +345,55 @@ def main() -> None:
         print(f"오류: 입력 파일이 없습니다: {args.input}", file=sys.stderr)
         sys.exit(1)
 
-    asyncio.run(run_async(
-        input_path=args.input,
-        output_path=args.output,
-        base_url=args.base_url,
-        batch_size=args.batch_size,
-        limit_restaurants=args.limit,
-        summary_limit=args.summary_limit,
-        sentiment_reviews_limit=args.sentiment_reviews_limit,
-        apis=args.apis,
-        timeout=args.timeout,
-        do_upload=not args.no_upload,
-        upload_timeout=args.upload_timeout,
-    ))
+    def _run_one_port(port: int) -> Tuple[int, Dict[str, Any]]:
+        url = f"http://localhost:{port}"
+        result = asyncio.run(run_async(
+            input_path=args.input,
+            output_path=None,
+            base_url=url,
+            batch_size=args.batch_size,
+            limit_restaurants=args.limit,
+            summary_limit=args.summary_limit,
+            sentiment_reviews_limit=args.sentiment_reviews_limit,
+            apis=args.apis,
+            timeout=args.timeout,
+            do_upload=not args.no_upload,
+            upload_timeout=args.upload_timeout,
+        ))
+        return port, result
+
+    if args.ports:
+        print(f"동시 실행: 포트 {args.ports}에 각각 동일 작업 전송")
+        results_by_port: Dict[str, Dict[str, Any]] = {}
+        with ThreadPoolExecutor(max_workers=len(args.ports)) as executor:
+            futures = {executor.submit(_run_one_port, p): p for p in args.ports}
+            for future in as_completed(futures):
+                port = futures[future]
+                try:
+                    p, out = future.result()
+                    results_by_port[str(p)] = out
+                    print(f"  포트 {p} 완료: 레스토랑 {out['meta']['total_restaurants']}개")
+                except Exception as e:
+                    print(f"  포트 {port} 실패: {e}", file=sys.stderr)
+                    results_by_port[str(port)] = {"meta": {"base_url": f"http://localhost:{port}", "error": str(e)}, "results": []}
+        out_combined = {"meta": {"ports": args.ports, "requested_at": datetime.now().isoformat()}, "results_by_port": results_by_port}
+        with open(args.output, "w", encoding="utf-8") as f:
+            json.dump(out_combined, f, ensure_ascii=False, indent=2)
+        print(f"저장 완료: {args.output} (포트별 결과)")
+    else:
+        asyncio.run(run_async(
+            input_path=args.input,
+            output_path=args.output,
+            base_url=args.base_url,
+            batch_size=args.batch_size,
+            limit_restaurants=args.limit,
+            summary_limit=args.summary_limit,
+            sentiment_reviews_limit=args.sentiment_reviews_limit,
+            apis=args.apis,
+            timeout=args.timeout,
+            do_upload=not args.no_upload,
+            upload_timeout=args.upload_timeout,
+        ))
 
 
 if __name__ == "__main__":

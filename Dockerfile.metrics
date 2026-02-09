@@ -1,0 +1,10 @@
+# Prometheus 메트릭 서버 (jobmgr) 전용 경량 이미지
+FROM python:3.11-slim
+
+WORKDIR /app
+RUN pip install --no-cache-dir prometheus_client
+
+COPY prometheus.py /app/
+EXPOSE 1041
+
+CMD ["python", "prometheus.py", "--port", "1041"]

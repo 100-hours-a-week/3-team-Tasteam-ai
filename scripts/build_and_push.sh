@@ -1,35 +1,68 @@
 #!/bin/bash
-# build_and_push.sh
+# API 이미지 빌드 후 Docker Hub 푸시
+# 사용: ./scripts/build_and_push.sh [VERSION] [cuda|cpu]
+# 예:   ./scripts/build_and_push.sh 1.0.0 cuda
+#      ./scripts/build_and_push.sh latest cpu
 
 set -e
 
 # ============================================
-# 설정
+# 설정 (환경 변수 또는 기본값)
 # ============================================
-DOCKERHUB_USERNAME="jinsoo1218"
-IMAGE_NAME="runpod_vllm"
+# docker-compose는 DOCKERHUB_USER 사용 → 스크립트도 DOCKERHUB_USER fallback
+DOCKERHUB_USERNAME="${DOCKERHUB_USERNAME:-$DOCKERHUB_USER}"
+IMAGE_NAME="${DOCKER_IMAGE_NAME:-tasteam_pipeline}"
 VERSION="${1:-latest}"
-PLATFORM="linux/amd64"
+VARIANT="${2:-cuda}"   # cuda | cpu
+PLATFORM="${PLATFORM:-linux/amd64}"
+
+if [ -z "$DOCKERHUB_USERNAME" ]; then
+  echo "❌ DOCKERHUB_USERNAME이 비어 있습니다."
+  echo "   예: DOCKERHUB_USERNAME=myuser ./scripts/build_and_push.sh 1.0.0 cuda"
+  echo "   또는 .env에 DOCKERHUB_USERNAME=myuser 설정 후: source .env 2>/dev/null; ./scripts/build_and_push.sh"
+  echo "   (docker-compose와 맞추려면 .env에 DOCKERHUB_USER=myuser, IMAGE_TAG=1.0.0 도 설정)"
+  exit 1
+fi
+
+case "$VARIANT" in
+  cuda)
+    DOCKERFILE="dockerfile"
+    TAG_SUFFIX=""
+    ;;
+  cpu)
+    DOCKERFILE="Dockerfile.cpu"
+    TAG_SUFFIX="-cpu"
+    ;;
+  *)
+    echo "❌ VARIANT는 cuda 또는 cpu 여야 합니다. (입력: $VARIANT)"
+    exit 1
+    ;;
+esac
 
 FULL_IMAGE_NAME="${DOCKERHUB_USERNAME}/${IMAGE_NAME}"
+TAG_VERSION="${FULL_IMAGE_NAME}:${VERSION}${TAG_SUFFIX}"
+TAG_LATEST="${FULL_IMAGE_NAME}:latest${TAG_SUFFIX}"
 
 # ============================================
 # 이미지 빌드 및 푸시
 # ============================================
 echo "============================================"
-echo "Docker 이미지 빌드 및 푸시"
+echo "Docker 이미지 빌드 및 푸시 (Docker Hub)"
 echo "============================================"
-echo "이미지: ${FULL_IMAGE_NAME}:${VERSION}"
-echo "플랫폼: ${PLATFORM}"
+echo "  레지스트리: Docker Hub"
+echo "  이미지:     ${FULL_IMAGE_NAME}"
+echo "  Dockerfile: ${DOCKERFILE} (${VARIANT})"
+echo "  태그:       ${TAG_VERSION}, ${TAG_LATEST}"
+echo "  플랫폼:     ${PLATFORM}"
 echo "============================================"
 echo ""
 
-echo "🔨 이미지 빌드 중..."
-# 로그인이 안 되어 있으면 자동으로 에러가 발생하므로 확인 생략 가능
+echo "🔨 이미지 빌드 중... (docker buildx build)"
 docker buildx build \
-  --platform ${PLATFORM} \
-  --tag ${FULL_IMAGE_NAME}:${VERSION} \
-  --tag ${FULL_IMAGE_NAME}:latest \
+  --platform "${PLATFORM}" \
+  --file "${DOCKERFILE}" \
+  --tag "${TAG_VERSION}" \
+  --tag "${TAG_LATEST}" \
   --push \
   --progress=plain \
   .
@@ -38,8 +71,13 @@ echo ""
 echo "✅ 빌드 및 푸시 완료!"
 echo ""
 echo "📦 푸시된 이미지:"
-echo "   - ${FULL_IMAGE_NAME}:${VERSION}"
-echo "   - ${FULL_IMAGE_NAME}:latest"
+echo "   - ${TAG_VERSION}"
+echo "   - ${TAG_LATEST}"
 echo ""
 echo "🚀 이미지 실행 예제:"
-echo "   docker run -p 8001:8001 ${FULL_IMAGE_NAME}:latest"
+if [ "$VARIANT" = "cuda" ]; then
+  echo "   docker run --gpus all -p 8001:8001 ${TAG_LATEST}"
+else
+  echo "   docker run -p 8001:8001 ${TAG_LATEST}"
+fi
+echo ""

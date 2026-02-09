@@ -7,7 +7,8 @@ HTTP API 호출만으로 테스트를 수행합니다. hybrid_search/final_pipel
 테스트 대상 API:
     - 감성 분석: /api/v1/sentiment/analyze, /api/v1/sentiment/analyze/batch
     - 요약: /api/v1/llm/summarize, /api/v1/llm/summarize/batch
-    - 비교: /api/v1/llm/comparison (Kiwi+lift)
+    - 비교: /api/v1/llm/comparison, api/v1/llm/comparison/batch
+ (Kiwi+lift)
     - 벡터: /api/v1/vector/upload, /api/v1/vector/search/similar
 
 --benchmark 시 (메트릭 + CPU + GPU 모두 활성화, 기존 동작):
@@ -33,9 +34,9 @@ HTTP API 호출만으로 테스트를 수행합니다. hybrid_search/final_pipel
     # 결과 JSON 저장
     python test_all_task.py --benchmark --save-results result.json
 
-    # 여러 모델 비교
+    # 여러 모델 비교 (8001, 8002, 8003 등에 동시 요청)
     python test_all_task.py --compare-models --models "Qwen/Qwen2.5-7B-Instruct" "meta-llama/Llama-3.1-8B-Instruct" \\
-        --benchmark --save-results compare.json
+        --ports 8001 8002 --benchmark --save-results compare.json
 
     # 부하테스트
     python test_all_task.py --load-test --total-requests 500 --concurrent-users 10 --ramp-up 20
@@ -54,7 +55,8 @@ HTTP API 호출만으로 테스트를 수행합니다. hybrid_search/final_pipel
     --provider P        LLM 제공자: openai|local|runpod
     --model M           테스트할 LLM 모델명
     --compare-models    여러 모델 비교 모드 (--models, --ports와 함께)
-    --load-test         부하테스트 (--total-requests, --concurrent-users, --ramp-up)
+    --load-test         부하테스트 (처리량/지연 측정). --total-requests, --concurrent-users, --ramp-up
+    --load-test-data    부하테스트용 대형 JSON (예: real_service_simul_review_data_640k.json). 미지정 시 기본 테스트 데이터
     --generate-from-kr3 kr3.tsv 기반 테스트 데이터 생성 (--kr3-sample, --kr3-restaurants)
 
 측정 지표 (--benchmark / QUANTITATIVE_METRICS.md):
@@ -77,9 +79,10 @@ try:
 except ImportError:
     psutil = None  # optional: CPU/메모리 통계는 생략
 from pathlib import Path
-from typing import Dict, List, Any, Optional, Tuple
+from typing import Dict, List, Any, Optional, Tuple, Union, Callable
 from datetime import datetime
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed, wait, FIRST_COMPLETED
+import threading
 
 # 프로젝트 루트를 경로에 추가
 project_root = Path(__file__).parent
@@ -149,6 +152,13 @@ def print_header(msg: str):
 # RunPod Pod 서버 URL (환경 변수로 오버라이드 가능)
 #BASE_URL = "http://213.192.2.74:40162"  # RunPod Pod IP:포트로 변경 (예: http://213.192.2.68:40183)
 BASE_URL = "http://localhost:8001"
+# 스레드별 base_url (compare_models 병렬 실행 시 포트별로 구분)
+_thread_local = threading.local()
+
+def get_base_url() -> str:
+    """현재 스레드의 base_url이 있으면 반환, 없으면 전역 BASE_URL 반환"""
+    return getattr(_thread_local, "base_url", None) or BASE_URL
+
 API_PREFIX = "/api/v1"
 METRICS_DB_PATH = "metrics.db"
 
@@ -232,20 +242,20 @@ def check_server_health():
     """서버 헬스 체크 (RunPod Pod 서버용)"""
     try:
         start_time = time.time()
-        response = requests.get(f"{BASE_URL}/health", timeout=10, headers=get_request_headers())
+        response = requests.get(f"{get_base_url()}/health", timeout=10, headers=get_request_headers())
         elapsed_time = time.time() - start_time
         result = safe_json_response(response, "헬스 체크 실패")
         if result:
             print_success(f"서버 연결 성공: {result}")
             print_info(f"   ⏱️ 응답 시간: {elapsed_time:.2f}초")
-            print_info(f"   서버 URL: {BASE_URL}")
+            print_info(f"   서버 URL: {get_base_url()}")
             return True
         else:
             print_error("헬스 체크 실패: 응답을 파싱할 수 없습니다")
             return False
     except Exception as e:
         print_error(f"헬스 체크 실패: {e}")
-        print_info(f"서버 URL: {BASE_URL}")
+        print_info(f"서버 URL: {get_base_url()}")
         print_info("서버가 실행 중인지 확인하세요 (RunPod Pod에서 FastAPI 서버 확인)")
         return False
 
@@ -454,7 +464,7 @@ def upload_data_to_qdrant(data: Dict[str, Any]):
         print_warning("Upload할 데이터가 없습니다.")
         return False
     
-    url = f"{BASE_URL}{API_PREFIX}/vector/upload"
+    url = f"{get_base_url()}{API_PREFIX}/vector/upload"
     
     # 모든 리뷰와 레스토랑 정보를 수집
     all_reviews = []
@@ -512,8 +522,109 @@ def upload_data_to_qdrant(data: Dict[str, Any]):
         return False
 
 
-# 배치 테스트별 레스토랑 수 (--save-results data_info용)
-BATCH_RESTAURANTS = {"sentiment_batch": 10, "summarize_batch": 2}
+def _build_upload_payload_from_load_test_data(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """
+    load_test_data 형식을 벡터 업로드 API payload로 변환.
+    지원 형식:
+      - {"restaurants": [{restaurant_id, reviews: [...]}]}  (nested)
+      - {"reviews": [...], "restaurants": [{id, name}]}    (flat, run_all_restaurants_api 형식)
+    Returns: {"reviews": [...], "restaurants": [...]} 또는 None
+    """
+    if not data:
+        return None
+    # Flat 형식: reviews + restaurants (run_all_restaurants_api 형식)
+    flat_reviews = data.get("reviews") or []
+    flat_restaurants = data.get("restaurants") or []
+    if flat_reviews and flat_restaurants:
+        reviews_ok = []
+        for r in flat_reviews:
+            if not isinstance(r, dict) or not r.get("content"):
+                continue
+            reviews_ok.append({
+                "id": r.get("id"),
+                "restaurant_id": r.get("restaurant_id"),
+                "content": r.get("content", ""),
+                "created_at": r.get("created_at") or "",
+            })
+        if reviews_ok:
+            rests = []
+            for r in flat_restaurants:
+                rid = r.get("id") or r.get("restaurant_id")
+                if rid is not None:
+                    rid = int(rid) if isinstance(rid, str) and str(rid).isdigit() else rid
+                    rests.append({"id": rid, "name": r.get("name", "")})
+            if rests:
+                return {"reviews": reviews_ok, "restaurants": rests}
+    # Nested 형식: restaurants 내 reviews 포함
+    all_reviews: List[Dict[str, Any]] = []
+    all_restaurants: List[Dict[str, Any]] = []
+    for r in data.get("restaurants") or []:
+        rid = r.get("restaurant_id")
+        if rid is None:
+            continue
+        rid = int(rid) if isinstance(rid, str) and str(rid).isdigit() else rid
+        all_restaurants.append({
+            "id": rid,
+            "name": r.get("restaurant_name") or r.get("name") or f"Restaurant {rid}",
+        })
+        for rev in r.get("reviews") or []:
+            if isinstance(rev, dict) and rev.get("content") is not None:
+                rev_copy = {
+                    "id": rev.get("id"),
+                    "restaurant_id": rev.get("restaurant_id", rid),
+                    "content": rev.get("content", ""),
+                    "created_at": rev.get("created_at") or "",
+                }
+                all_reviews.append(rev_copy)
+    if not all_reviews:
+        return None
+    return {"reviews": all_reviews, "restaurants": all_restaurants}
+
+
+def upload_load_test_data_to_ports(
+    load_test_data: Dict[str, Any],
+    ports: Optional[List[int]],
+    timeout: int = 3600,
+) -> bool:
+    """
+    부하테스트용 데이터를 벡터 DB에 업로드.
+    ports가 있으면 각 포트에, 없으면 get_base_url()에 1회 업로드.
+    Returns: 모두 성공 시 True, 하나라도 실패 시 False
+    """
+    payload = _build_upload_payload_from_load_test_data(load_test_data)
+    if not payload:
+        print_warning("업로드할 리뷰가 없습니다.")
+        return False
+    n_reviews = len(payload["reviews"])
+    n_restaurants = len(payload["restaurants"])
+    if ports:
+        urls = [f"http://localhost:{p}" for p in ports]
+        print_header(f"벡터 DB 업로드 (리뷰 {n_reviews}개, 레스토랑 {n_restaurants}개) → {len(urls)}개 포트")
+    else:
+        urls = [get_base_url()]
+        print_header(f"벡터 DB 업로드 (리뷰 {n_reviews}개, 레스토랑 {n_restaurants}개)")
+    all_ok = True
+    for url in urls:
+        full_url = f"{url.rstrip('/')}{API_PREFIX}/vector/upload"
+        try:
+            start = time.time()
+            resp = requests.post(full_url, json=payload, timeout=timeout, headers=get_request_headers())
+            elapsed = time.time() - start
+            if resp.status_code == 200:
+                data = safe_json_response(resp, "")
+                pts = data.get("points_count", 0) if data else 0
+                print_success(f"  {url} 업로드 완료: {pts}개 포인트 ({elapsed:.1f}초)")
+            else:
+                print_warning(f"  {url} 업로드 실패: {resp.status_code}")
+                all_ok = False
+        except Exception as e:
+            print_warning(f"  {url} 업로드 오류: {e}")
+            all_ok = False
+    return all_ok
+
+
+# 배치 테스트별 레스토랑 수 (--save-results data_info용). load_test 시나리오 없을 때 요약/비교도 10개 전체 사용
+BATCH_RESTAURANTS = {"sentiment_batch": 10, "summarize_batch": 10, "comparison_batch": 10}
 
 
 def _effective_model_info() -> Dict[str, str]:
@@ -609,7 +720,7 @@ def measure_performance(
     if endpoint.startswith(("http://", "https://")):
         url = endpoint
     else:
-        url = f"{BASE_URL}{endpoint}"
+        url = f"{get_base_url()}{endpoint}"
     latencies = []
     success_count = 0
     error_count = 0
@@ -745,63 +856,68 @@ def measure_performance(
 
 def load_test(
     endpoint: str,
-    payload: Dict[str, Any],
+    payload: Union[Dict[str, Any], Callable[[int], Dict[str, Any]]],
     total_requests: int = 100,
     concurrent_users: int = 10,
     timeout: int = 60,
-    ramp_up_seconds: int = 0
+    ramp_up_seconds: int = 0,
+    consecutive_connection_errors_abort: int = 10,
 ) -> Tuple[bool, Optional[Dict[str, Any]]]:
     """
-    부하테스트 (동시 요청 처리 능력 측정)
-    
+    부하테스트: payload를 반복 전송하여 처리량(req/s)과 지연(P50/P95/P99)을 측정합니다.
+    서버 다운 시 연속 연결 실패가 consecutive_connection_errors_abort회 이상이면 조기 종료하고
+    그때까지의 결과를 부분 통계로 반환합니다.
+
     Args:
-        endpoint: API 엔드포인트 경로
-        payload: 요청 페이로드
+        endpoint: API 엔드포인트 경로 (또는 전체 URL)
+        payload: 요청 페이로드 (고정 dict 또는 (request_index) -> dict callable)
         total_requests: 총 요청 수
-        concurrent_users: 동시 사용자 수 (동시 실행할 요청 수)
+        concurrent_users: 동시 사용자 수
         timeout: 요청 타임아웃 (초)
-        ramp_up_seconds: 점진적 부하 증가 시간 (초, 0이면 즉시 시작)
-    
+        ramp_up_seconds: 점진적 부하 증가 시간 (초)
+        consecutive_connection_errors_abort: 연속 연결 실패 N회 시 조기 종료 (0이면 비활성화)
+
     Returns:
-        (성공 여부, 부하테스트 통계 딕셔너리)
+        (성공 여부, 부하테스트 통계 딕셔너리. 조기 종료 시에도 attempted 수 기준 부분 통계 반환)
     """
-    # endpoint가 이미 전체 URL인지 확인
     if endpoint.startswith(("http://", "https://")):
         url = endpoint
     else:
-        url = f"{BASE_URL}{endpoint}"
-    
-    latencies = []
+        url = f"{get_base_url()}{endpoint}"
+
+    latencies: List[float] = []
     success_count = 0
     error_count = 0
     error_4xx_count = 0
     error_5xx_count = 0
-    status_codes = []
-    request_timestamps = []
-    
-    def make_request(request_id: int) -> Tuple[int, float, int, Optional[Dict[str, Any]]]:
-        """단일 요청 실행"""
+    status_codes: List[int] = []
+    request_timestamps: List[float] = []
+
+    def make_request(request_id: int, req_payload: Dict[str, Any]) -> Tuple[int, float, int, Optional[Dict[str, Any]], bool]:
+        """단일 요청 실행. 반환: (request_id, latency, status_code, result, is_connection_error)."""
         try:
             start_time = time.perf_counter()
-            response = requests.post(url, json=payload, timeout=timeout, headers=get_request_headers())
+            response = requests.post(url, json=req_payload, timeout=timeout, headers=get_request_headers())
             end_time = time.perf_counter()
-            
             latency = end_time - start_time
             status_code = response.status_code
-            
             result = None
             if response.status_code == 200:
                 try:
                     result = response.json()
-                except:
+                except Exception:
                     pass
-            
-            return request_id, latency, status_code, result
+            return request_id, latency, status_code, result, False
         except Exception as e:
-            # 에러는 나중에 집계
-            return request_id, -1, 0, None
-    
-    # CPU/메모리 메트릭 수집 시작
+            is_conn = isinstance(e, (
+                requests.exceptions.ConnectionError,
+                getattr(requests.exceptions, "ConnectTimeout", type(None)) or type(None),
+                getattr(requests.exceptions, "ReadTimeout", type(None)) or type(None),
+            ))
+            if not is_conn and type(e).__name__ in ("ConnectTimeout", "ReadTimeout"):
+                is_conn = "requests" in (getattr(type(e), "__module__", "") or "")
+            return request_id, -1, 0, None, bool(is_conn)
+
     if psutil:
         cpu_before = psutil.cpu_percent(interval=None)
         mem_before = psutil.virtual_memory()
@@ -811,50 +927,94 @@ def load_test(
     print_info(f"부하테스트 시작: 총 {total_requests}개 요청, 동시 사용자 {concurrent_users}명")
     if ramp_up_seconds > 0:
         print_info(f"점진적 부하 증가: {ramp_up_seconds}초 동안 부하 증가")
-    
-    # 부하테스트 실행
+    if consecutive_connection_errors_abort > 0:
+        print_info(f"서버 다운 감지 시 연속 {consecutive_connection_errors_abort}회 연결 실패 후 조기 종료")
+
     test_start_time = time.perf_counter()
-    
+    abort = False
+    consecutive_connection_errors = 0
+    attempted_count = 0
+
     with ThreadPoolExecutor(max_workers=concurrent_users) as executor:
-        # 요청 제출
-        futures = []
-        for i in range(total_requests):
-            # 점진적 부하 증가 (ramp-up)
-            if ramp_up_seconds > 0:
-                delay = (ramp_up_seconds / total_requests) * i
-                if delay > 0:
-                    time.sleep(delay)
-            
-            future = executor.submit(make_request, i)
-            futures.append(future)
-        
-        # 결과 수집
-        for future in as_completed(futures):
-            try:
-                request_id, latency, status_code, result = future.result()
-                request_timestamps.append(time.perf_counter())
-                
-                if latency >= 0:
-                    latencies.append(latency)
-                    status_codes.append(status_code)
-                    
-                    if status_code == 200:
-                        success_count += 1
-                    elif 400 <= status_code < 500:
-                        error_4xx_count += 1
-                        error_count += 1
-                    elif 500 <= status_code < 600:
-                        error_5xx_count += 1
-                        error_count += 1
+        futures: Dict[Any, int] = {}
+        next_i = 0
+
+        while next_i < total_requests and not abort:
+            while len(futures) < concurrent_users and next_i < total_requests:
+                if ramp_up_seconds > 0:
+                    delay = (ramp_up_seconds / total_requests) * next_i
+                    if delay > 0:
+                        time.sleep(delay)
+                req_payload = payload(next_i) if callable(payload) else payload
+                fut = executor.submit(make_request, next_i, req_payload)
+                futures[fut] = next_i
+                next_i += 1
+            if not futures:
+                break
+            done, _ = wait(futures.keys(), return_when=FIRST_COMPLETED)
+            for f in done:
+                i = futures.pop(f)
+                attempted_count += 1
+                try:
+                    request_id, latency, status_code, result, is_connection_error = f.result()
+                    request_timestamps.append(time.perf_counter())
+                    if is_connection_error:
+                        consecutive_connection_errors += 1
+                    else:
+                        consecutive_connection_errors = 0
+
+                    if latency >= 0:
+                        latencies.append(latency)
+                        status_codes.append(status_code)
+                        if status_code == 200:
+                            success_count += 1
+                        elif 400 <= status_code < 500:
+                            error_4xx_count += 1
+                            error_count += 1
+                        elif 500 <= status_code < 600:
+                            error_5xx_count += 1
+                            error_count += 1
+                        else:
+                            error_count += 1
                     else:
                         error_count += 1
-                else:
+                except Exception:
                     error_count += 1
-            except Exception as e:
-                error_count += 1
-    
+                    consecutive_connection_errors += 1
+
+                if consecutive_connection_errors_abort > 0 and consecutive_connection_errors >= consecutive_connection_errors_abort:
+                    abort = True
+                    print_warning(f"서버 다운 감지(연속 연결 실패 {consecutive_connection_errors}회). 조기 종료. 시도한 요청: {attempted_count}/{total_requests}")
+                    break
+            if abort:
+                break
+
+        if abort and futures:
+            for f in as_completed(futures):
+                attempted_count += 1
+                try:
+                    request_id, latency, status_code, result, is_connection_error = f.result()
+                    request_timestamps.append(time.perf_counter())
+                    if latency >= 0:
+                        latencies.append(latency)
+                        status_codes.append(status_code)
+                        if status_code == 200:
+                            success_count += 1
+                        elif 400 <= status_code < 500:
+                            error_4xx_count += 1
+                            error_count += 1
+                        elif 500 <= status_code < 600:
+                            error_5xx_count += 1
+                            error_count += 1
+                        else:
+                            error_count += 1
+                    else:
+                        error_count += 1
+                except Exception:
+                    error_count += 1
+
     test_end_time = time.perf_counter()
-    
+
     # CPU/메모리 메트릭 수집 종료
     if psutil:
         cpu_after = psutil.cpu_percent(interval=None)
@@ -862,36 +1022,41 @@ def load_test(
     else:
         cpu_after, mem_after = None, None
 
+    total_time = test_end_time - test_start_time
+    effective_total = attempted_count if attempted_count > 0 else total_requests
+
+    if attempted_count == 0:
+        print_error("부하테스트 실패: 시도한 요청이 없습니다.")
+        return False, None
+
     if not latencies:
-        print_error(f"부하테스트 실패: 성공한 요청이 없습니다.")
+        print_error("부하테스트: 성공한 요청이 없습니다 (모두 실패 또는 조기 종료).")
         if status_codes:
             print_info(f"  상태 코드 분포: {status_codes}")
-            print_info(f"  4xx 오류: {error_4xx_count}개, 5xx 오류: {error_5xx_count}개")
-        return False, None
-    
-    # 통계 계산
-    total_time = test_end_time - test_start_time
+        print_info(f"  시도/실패: {attempted_count}, 4xx: {error_4xx_count}, 5xx: {error_5xx_count}")
+        if abort:
+            print_info("  부분 결과만 저장됩니다.")
+
     throughput_req_per_sec = len(latencies) / total_time if total_time > 0 else 0
-    
-    # 요청 간격 계산 (RPS 측정용)
     if len(request_timestamps) > 1:
         intervals = [request_timestamps[i] - request_timestamps[i-1] for i in range(1, len(request_timestamps))]
         avg_interval = statistics.mean(intervals) if intervals else 0
         actual_rps = 1.0 / avg_interval if avg_interval > 0 else 0
     else:
         actual_rps = throughput_req_per_sec
-    
-    avg_latency = statistics.mean(latencies)
-    min_latency = min(latencies)
-    max_latency = max(latencies)
-    p50_latency = calculate_percentile(latencies, 50)
-    p95_latency = calculate_percentile(latencies, 95)
-    p99_latency = calculate_percentile(latencies, 99)
-    
-    # 동시 처리 능력 계산
+
+    if latencies:
+        avg_latency = statistics.mean(latencies)
+        min_latency = min(latencies)
+        max_latency = max(latencies)
+        p50_latency = calculate_percentile(latencies, 50)
+        p95_latency = calculate_percentile(latencies, 95)
+        p99_latency = calculate_percentile(latencies, 99)
+    else:
+        avg_latency = min_latency = max_latency = p50_latency = p95_latency = p99_latency = 0.0
+
     if len(request_timestamps) > 1:
-        # 시간 윈도우에서 최대 동시 요청 수 추정
-        time_window = 1.0  # 1초 윈도우
+        time_window = 1.0
         max_concurrent = 0
         for ts in request_timestamps:
             window_end = ts + time_window
@@ -899,15 +1064,16 @@ def load_test(
             max_concurrent = max(max_concurrent, concurrent_count)
     else:
         max_concurrent = 1
-    
+
     stats = {
-        "total_requests": total_requests,
+        "total_requests": effective_total,
+        "attempted_requests": attempted_count,
         "concurrent_users": concurrent_users,
         "success_count": success_count,
         "error_count": error_count,
         "error_4xx_count": error_4xx_count,
         "error_5xx_count": error_5xx_count,
-        "success_rate": (success_count / total_requests) * 100 if total_requests > 0 else 0,
+        "success_rate": (success_count / effective_total) * 100 if effective_total > 0 else 0,
         "avg_latency_sec": avg_latency,
         "min_latency_sec": min_latency,
         "max_latency_sec": max_latency,
@@ -919,9 +1085,9 @@ def load_test(
         "max_concurrent_requests": max_concurrent,
         "total_test_time_sec": total_time,
         "ramp_up_seconds": ramp_up_seconds,
+        "aborted_early": abort,
     }
-    
-    # CPU/메모리 메트릭 추가
+
     if cpu_after is not None:
         stats["cpu_usage_percent"] = cpu_after
     if mem_after is not None:
@@ -930,6 +1096,90 @@ def load_test(
         stats["memory_total_mb"] = mem_after.total / (1024 ** 2)
 
     return True, stats
+
+
+def fetch_prometheus_metrics(
+    prometheus_url: str,
+    start_ts: float,
+    end_ts: float,
+    step: str = "15s",
+) -> Dict[str, Any]:
+    """
+    부하테스트 구간(start_ts ~ end_ts)에 해당하는 Prometheus 메트릭을 query_range로 조회해
+    JSON 저장용 딕셔너리로 반환합니다. 실패 시 빈 dict 또는 부분 결과 반환.
+    """
+    base = prometheus_url.rstrip("/")
+    api = f"{base}/api/v1/query_range"
+    out = {"time_range": {"start": start_ts, "end": end_ts}, "queries": {}}
+    queries = [
+        ("ttfur_p95", "histogram_quantile(0.95, sum by (le, pipeline, analysis_type) (rate(llm_ttft_seconds_bucket{job=\"fastapi\"}[5m])))"),
+        ("analysis_success_rate", "sum by (pipeline) (rate(analysis_requests_total{job=\"fastapi\",status=\"success\"}[5m])) / (sum by (pipeline) (rate(analysis_requests_total{job=\"fastapi\"}[5m])) + 1e-9)"),
+        ("completion_time_p95", "histogram_quantile(0.95, sum by (le, pipeline, analysis_type) (rate(analysis_processing_time_seconds_bucket{job=\"fastapi\"}[5m])))"),
+        ("completed_jobs_per_sec", "sum by (pipeline, analysis_type) (rate(analysis_requests_total{job=\"fastapi\",status=\"success\"}[5m]))"),
+        ("queue_depth", "app_queue_depth{job=\"fastapi\"}"),
+        ("worker_utilization", "sum by (pipeline) (app_worker_busy{job=\"fastapi\"}) / (count by (pipeline) (app_worker_busy{job=\"fastapi\"}) + 1e-9)"),
+    ]
+    for name, query in queries:
+        try:
+            r = requests.get(api, params={"query": query, "start": start_ts, "end": end_ts, "step": step}, timeout=30)
+            if r.status_code == 200:
+                data = r.json()
+                if data.get("status") == "success" and "data" in data:
+                    out["queries"][name] = {"query": query, "data": data["data"]}
+                else:
+                    out["queries"][name] = {"query": query, "error": data.get("error", "unknown")}
+            else:
+                out["queries"][name] = {"query": query, "error": f"HTTP {r.status_code}"}
+        except Exception as e:
+            out["queries"][name] = {"query": query, "error": str(e)}
+    return out
+
+
+def save_container_logs_on_abort(
+    results_by_port: Dict[str, Dict[str, Any]],
+    log_dir: Union[str, Path],
+    container_prefix: str = "tasteam-new-async",
+) -> None:
+    """
+    results_by_port 중 하나라도 aborted_early이면, old_sync/new_sync/new_async 컨테이너의
+    docker logs를 log_dir 아래 logs_rampup_old_sync.txt 등으로 저장합니다.
+    """
+    any_aborted = False
+    for port_data in (results_by_port or {}).values():
+        for st in (port_data or {}).values():
+            if isinstance(st, dict) and st.get("aborted_early"):
+                any_aborted = True
+                break
+        if any_aborted:
+            break
+    if not any_aborted:
+        return
+    log_path = Path(log_dir)
+    log_path.mkdir(parents=True, exist_ok=True)
+    containers = [
+        ("old_sync", f"{container_prefix}-old_sync-1"),
+        ("new_sync", f"{container_prefix}-new_sync-1"),
+        ("new_async", f"{container_prefix}-new_async-1"),
+    ]
+    for name, cid in containers:
+        out_file = log_path / f"logs_rampup_{name}.txt"
+        try:
+            with open(out_file, "w", encoding="utf-8") as f:
+                subprocess.run(
+                    ["docker", "logs", cid],
+                    stdout=f,
+                    stderr=subprocess.STDOUT,
+                    timeout=60,
+                    check=False,
+                )
+            print_info(f"컨테이너 로그 저장: {out_file}")
+        except FileNotFoundError:
+            print_warning(f"docker 미설치 또는 PATH 없음. {cid} 로그 저장 생략.")
+            break
+        except subprocess.TimeoutExpired:
+            print_warning(f"docker logs {cid} 타임아웃. {out_file} (부분 저장됨)")
+        except Exception as e:
+            print_warning(f"docker logs {cid} 실패: {e}. {out_file} 생략.")
 
 
 def query_metrics_from_db(analysis_type: str, limit: int = 10) -> Optional[Dict[str, Any]]:
@@ -1074,7 +1324,7 @@ def evaluate_accuracy(
     try:
         if analysis_type == "sentiment":
             evaluator = SentimentAnalysisEvaluator(
-                base_url=BASE_URL,
+                base_url=get_base_url(),
                 ground_truth_path=ground_truth_path
             )
             if not evaluator.ground_truth:
@@ -1110,7 +1360,7 @@ def evaluate_accuracy(
         
         elif analysis_type == "summary":
             evaluator = SummaryEvaluator(
-                base_url=BASE_URL,
+                base_url=get_base_url(),
                 ground_truth_path=ground_truth_path
             )
             if not evaluator.ground_truth:
@@ -1154,7 +1404,7 @@ def evaluate_accuracy(
         
         elif analysis_type == "comparison":
             evaluator = StrengthExtractionEvaluator(
-                base_url=BASE_URL,
+                base_url=get_base_url(),
                 ground_truth_path=ground_truth_path
             )
             if not evaluator.ground_truth:
@@ -1242,7 +1492,7 @@ def test_sentiment_analysis(enable_benchmark: bool = False, num_iterations: int 
     """
     print_header("1. 감성 분석 테스트")
     
-    url = f"{BASE_URL}{API_PREFIX}/sentiment/analyze"
+    url = f"{get_base_url()}{API_PREFIX}/sentiment/analyze"
     # reviews는 ReviewModel 형식이어야 함 (필수)
     if not SAMPLE_REVIEWS:
         print_warning("테스트 리뷰가 없습니다. Qdrant에서 자동 조회를 시도합니다.")
@@ -1380,7 +1630,7 @@ def test_sentiment_analysis(enable_benchmark: bool = False, num_iterations: int 
         else:
             # 기본 테스트 모드
             start_time = time.time()
-            response = requests.post(url, json=payload, timeout=60, headers=get_request_headers())
+            response = requests.post(url, json=payload, timeout=120, headers=get_request_headers())
             elapsed_time = time.time() - start_time
             
             if response.status_code == 200:
@@ -1426,7 +1676,7 @@ def test_sentiment_analysis_batch(enable_benchmark: bool = False, num_iterations
     """
     print_header("2. 배치 감성 분석 테스트")
     
-    url = f"{BASE_URL}{API_PREFIX}/sentiment/analyze/batch"
+    url = f"{get_base_url()}{API_PREFIX}/sentiment/analyze/batch"
     # 10개 레스토랑 배치 생성 (QUANTITATIVE_METRICS.md 요구사항)
     restaurants_payload = []
     # SentimentReviewInput 형식 (id, restaurant_id, content, created_at)
@@ -1559,7 +1809,7 @@ def test_summarize(enable_benchmark: bool = False, num_iterations: int = 5):
     """
     print_header("3. 리뷰 요약 테스트")
     
-    url = f"{BASE_URL}{API_PREFIX}/llm/summarize"
+    url = f"{get_base_url()}{API_PREFIX}/llm/summarize"
     payload = {
         "restaurant_id": SAMPLE_RESTAURANT_ID,
         "limit": 10,
@@ -1764,7 +2014,7 @@ def test_summarize_batch(enable_benchmark: bool = False, num_iterations: int = 5
     """
     print_header("4. 배치 리뷰 요약 테스트")
     
-    url = f"{BASE_URL}{API_PREFIX}/llm/summarize/batch"
+    url = f"{get_base_url()}{API_PREFIX}/llm/summarize/batch"
     payload = {
         "restaurants": [
             {"restaurant_id": SAMPLE_RESTAURANT_ID},
@@ -1928,7 +2178,7 @@ def test_comparison(enable_benchmark: bool = False, num_iterations: int = 5):
     """
     print_header("5. 비교 테스트 (다른 음식점들과의 비교)")
     
-    url = f"{BASE_URL}{API_PREFIX}/llm/comparison"
+    url = f"{get_base_url()}{API_PREFIX}/llm/comparison"
     # comparison_in_aspect와 맞추기: test_data에 4가 있으면 4, 없으면 SAMPLE_RESTAURANT_ID
     rid = STRENGTH_TARGET_RESTAURANT_ID if STRENGTH_TARGET_RESTAURANT_ID is not None else SAMPLE_RESTAURANT_ID
     payload = {
@@ -2195,7 +2445,7 @@ def test_comparison_batch(enable_benchmark: bool = False, num_iterations: int = 
     """
     print_header("5-2. 배치 비교 테스트")
     
-    url = f"{BASE_URL}{API_PREFIX}/llm/comparison/batch"
+    url = f"{get_base_url()}{API_PREFIX}/llm/comparison/batch"
     rid = STRENGTH_TARGET_RESTAURANT_ID if STRENGTH_TARGET_RESTAURANT_ID is not None else SAMPLE_RESTAURANT_ID
     payload = {
         "restaurants": [
@@ -2244,7 +2494,7 @@ def test_vector_search(enable_benchmark: bool = False, num_iterations: int = 5):
     """벡터 검색 테스트"""
     print_header("6. 벡터 검색 테스트")
     
-    url = f"{BASE_URL}{API_PREFIX}/vector/search/similar"
+    url = f"{get_base_url()}{API_PREFIX}/vector/search/similar"
     payload = {
         "query_text": "맛있다 좋다 만족",
         "restaurant_id": SAMPLE_RESTAURANT_ID,
@@ -2303,7 +2553,7 @@ def test_vector_search(enable_benchmark: bool = False, num_iterations: int = 5):
                         ground_truth_path = str(project_root / "scripts" / "Ground_truth_vector_search.json")
                         if Path(ground_truth_path).exists():
                             evaluator = PrecisionAtKEvaluator(
-                                base_url=BASE_URL,
+                                base_url=get_base_url(),
                                 ground_truth_path=ground_truth_path
                             )
                             
@@ -2424,6 +2674,7 @@ def run_tests_for_model(
     enable_benchmark: bool = False,
     iterations: int = 5,
     tests: Optional[List[str]] = None,
+    base_url: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     특정 모델에 대한 테스트 실행
@@ -2433,14 +2684,15 @@ def run_tests_for_model(
         provider: LLM 제공자 ("openai", "local", "runpod")
         enable_benchmark: 성능 측정 모드 활성화 여부
         iterations: 성능 측정 반복 횟수
+        base_url: 이 스레드에서 사용할 서버 URL (None이면 전역/스레드별 BASE_URL 사용)
         
     Returns:
         테스트 결과 딕셔너리
     """
-    # 환경 변수 설정
+    if base_url is not None:
+        _thread_local.base_url = base_url
     original_provider = os.getenv("LLM_PROVIDER")
     original_model = os.getenv("OPENAI_MODEL") if provider == "openai" else os.getenv("LLM_MODEL")
-    
     try:
         os.environ["LLM_PROVIDER"] = provider
         if provider == "openai":
@@ -2449,7 +2701,7 @@ def run_tests_for_model(
             os.environ["LLM_MODEL"] = model_name
         
         print_header(f"모델 테스트: {model_name} ({provider})")
-        print_info(f"서버 URL: {BASE_URL}")
+        print_info(f"서버 URL: {get_base_url()}")
         
         # test_metrics 초기화 (모델별로 독립적으로 관리)
         global test_metrics
@@ -2514,22 +2766,75 @@ def run_tests_for_model(
             "test_metrics": model_test_metrics,  # 모든 메트릭 원본 (디버깅/후처리용)
         }
     finally:
+        # 스레드별 base_url 해제 (병렬 compare_models용)
+        if base_url is not None:
+            setattr(_thread_local, "base_url", None)
         # 환경 변수 복원
-        if original_provider:
+        if original_provider is not None:
             os.environ["LLM_PROVIDER"] = original_provider
         else:
             os.environ.pop("LLM_PROVIDER", None)
         
         if provider == "openai":
-            if original_model:
+            if original_model is not None:
                 os.environ["OPENAI_MODEL"] = original_model
             else:
                 os.environ.pop("OPENAI_MODEL", None)
         else:
-            if original_model:
+            if original_model is not None:
                 os.environ["LLM_MODEL"] = original_model
             else:
                 os.environ.pop("LLM_MODEL", None)
+
+
+def _run_one_model_worker(
+    model_name: str,
+    port: int,
+    provider: str,
+    enable_benchmark: bool,
+    iterations: int,
+    tests: Optional[List[str]],
+    test_data: Optional[Dict[str, Any]],
+) -> Tuple[str, Dict[str, Any]]:
+    """단일 모델 테스트를 스레드에서 실행 (compare_models 병렬용). (model_name, result) 반환."""
+    url = f"http://localhost:{port}"
+    _thread_local.base_url = url
+    try:
+        try:
+            response = requests.get(f"{url}/health", timeout=5, headers=get_request_headers())
+            if response.status_code != 200:
+                return (model_name, {
+                    "model_name": model_name,
+                    "provider": provider,
+                    "success_count": 0,
+                    "total_count": 0,
+                    "success_rate": 0,
+                    "results": [],
+                    "error": f"서버 응답 실패 (포트 {port}, status={response.status_code})",
+                })
+        except Exception as e:
+            return (model_name, {
+                "model_name": model_name,
+                "provider": provider,
+                "success_count": 0,
+                "total_count": 0,
+                "success_rate": 0,
+                "results": [],
+                "error": f"서버 연결 실패 (포트 {port}): {e}",
+            })
+        if test_data:
+            upload_data_to_qdrant(test_data)
+        result = run_tests_for_model(
+            model_name=model_name,
+            provider=provider,
+            enable_benchmark=enable_benchmark,
+            iterations=iterations,
+            tests=tests,
+            base_url=url,
+        )
+        return (model_name, result)
+    finally:
+        setattr(_thread_local, "base_url", None)
 
 
 def compare_models(
@@ -2543,6 +2848,7 @@ def compare_models(
     base_ports: Optional[List[int]] = None,
     test_data: Optional[Dict[str, Any]] = None,
     data_info: Optional[Dict[str, Any]] = None,
+    use_pipeline_labels: bool = False,
 ) -> Dict[str, Any]:
     """
     여러 모델 비교 테스트
@@ -2560,47 +2866,54 @@ def compare_models(
     Returns:
         비교 결과 딕셔너리
     """
-    global BASE_URL
-    
     # 포트 자동 할당 (지정되지 않은 경우)
     if base_ports is None:
         base_ports = [8001 + i for i in range(len(models))]
     
     if len(base_ports) != len(models):
-        print_error(f"포트 개수({len(base_ports)})와 모델 개수({len(models)})가 일치하지 않습니다.")
+        unit = "파이프라인" if use_pipeline_labels else "모델"
+        print_error(f"포트 개수({len(base_ports)})와 {unit} 개수({len(models)})가 일치하지 않습니다.")
         sys.exit(1)
     
-    print_header(f"여러 모델 비교 테스트 ({len(models)}개 모델)")
+    unit = "파이프라인" if use_pipeline_labels else "모델"
+    print_header(f"여러 {unit} 비교 테스트 ({len(models)}개 {unit})")
     print_info(f"제공자: {provider}")
-    print_info(f"모델 목록: {', '.join(models)}")
-    print_info("\n각 모델은 별도 포트에서 실행 중이어야 합니다:")
+    print_info(f"{unit} 목록: {', '.join(models)}")
+    print_info(f"\n각 {unit}은 별도 포트에서 실행 중이어야 합니다:")
     for model, port in zip(models, base_ports):
         print_info(f"  - {model}: http://localhost:{port}")
     
     all_results = {}
-    original_base_url = BASE_URL
-    
-    for i, (model_name, port) in enumerate(zip(models, base_ports), 1):
-        print(f"\n{'='*60}")
-        print(f"모델 {i}/{len(models)}: {model_name} (포트: {port})")
-        print(f"{'='*60}\n")
-        
-        # BASE_URL을 해당 모델의 포트로 임시 변경
-        BASE_URL = f"http://localhost:{port}"
-        
-        try:
-            # 서버 연결 확인
+    # 8001, 8002, 8003 등 여러 포트에 동시에 요청 (스레드 풀)
+    print_info(f"동시 실행: {len(models)}개 {unit}에 병렬로 요청을 보냅니다.")
+    with ThreadPoolExecutor(max_workers=len(models)) as executor:
+        futures = {
+            executor.submit(
+                _run_one_model_worker,
+                model_name,
+                port,
+                provider,
+                enable_benchmark,
+                iterations,
+                tests,
+                test_data,
+            ): (model_name, port)
+            for model_name, port in zip(models, base_ports)
+        }
+        for future in as_completed(futures):
+            model_name, port = futures[future]
             try:
-                response = requests.get(f"{BASE_URL}/health", timeout=5, headers=get_request_headers())
-                if response.status_code != 200:
-                    print_warning(f"포트 {port}의 서버가 응답하지 않습니다. (상태 코드: {response.status_code})")
-            except Exception as e:
-                print_error(f"포트 {port}의 서버에 연결할 수 없습니다: {e}")
-                print_info(f"다음 명령으로 서버를 시작하세요:")
-                if provider == "openai":
-                    print_info(f"  LLM_PROVIDER={provider} OPENAI_MODEL={model_name} uvicorn app:app --port {port}")
+                name, result = future.result()
+                all_results[name] = result
+                err = result.get("error")
+                lbl = "파이프라인" if use_pipeline_labels else "모델"
+                if err:
+                    print_warning(f"{lbl} {name} (포트 {port}): {err}")
                 else:
-                    print_info(f"  LLM_PROVIDER={provider} LLM_MODEL={model_name} uvicorn app:app --port {port}")
+                    print_success(f"{lbl} {name} (포트 {port}) 테스트 완료: {result.get('success_count', 0)}/{result.get('total_count', 0)} 성공")
+            except Exception as e:
+                lbl = "파이프라인" if use_pipeline_labels else "모델"
+                print_error(f"{lbl} {model_name} (포트 {port}) 예외: {e}")
                 all_results[model_name] = {
                     "model_name": model_name,
                     "provider": provider,
@@ -2608,38 +2921,13 @@ def compare_models(
                     "total_count": 0,
                     "success_rate": 0,
                     "results": [],
-                    "error": f"서버 연결 실패 (포트 {port})"
+                    "error": str(e),
                 }
-                continue
-            
-            # 각 포트별로 데이터 업로드
-            if test_data:
-                print_info(f"포트 {port}에 테스트 데이터 업로드 중...")
-                if upload_data_to_qdrant(test_data):
-                    print_success(f"포트 {port}에 데이터 업로드 완료")
-                else:
-                    print_warning(f"포트 {port}에 데이터 업로드 실패. 테스트가 실패할 수 있습니다.")
-            
-            result = run_tests_for_model(
-                model_name=model_name,
-                provider=provider,
-                enable_benchmark=enable_benchmark,
-                iterations=iterations,
-                tests=tests,
-            )
-            all_results[model_name] = result
-        finally:
-            # BASE_URL 복원
-            BASE_URL = original_base_url
-        
-        # 모델 간 간격
-        if i < len(models):
-            print_info("다음 모델 테스트로 이동...")
-            time.sleep(2)  # 짧은 대기
     
     # 비교 리포트 생성
     if generate_report:
-        print_header("모델 비교 리포트")
+        report_title = "파이프라인 비교 리포트" if use_pipeline_labels else "모델 비교 리포트"
+        print_header(report_title)
         print("\n성공률 비교:")
         for model_name, result in all_results.items():
             success_rate = result.get("success_rate", 0)
@@ -2745,6 +3033,11 @@ def main():
         help="비교할 모델명 리스트 (--compare-models와 함께 사용)"
     )
     parser.add_argument(
+        "--pipelines",
+        action="store_true",
+        help="출력 문구를 파이프라인 기준으로 표시 (--compare-models와 함께 사용, 예: old_sync/new_sync/new_async)"
+    )
+    parser.add_argument(
         "--save-results",
         type=str,
         help="결과를 저장할 JSON 파일 경로"
@@ -2783,6 +3076,62 @@ def main():
         type=int,
         default=0,
         help="부하테스트 점진적 부하 증가 시간(초) (기본값: 0, 즉시 시작)"
+    )
+    parser.add_argument(
+        "--load-test-data",
+        type=str,
+        default=None,
+        help="부하테스트용 데이터 JSON 경로 (예: real_service_simul_review_data_640k.json). 미지정 시 기본 테스트 데이터 사용"
+    )
+    parser.add_argument(
+        "--load-test-max-reviews-per-restaurant",
+        type=int,
+        default=100,
+        help="부하테스트 감성 배치 시 레스토랑당 최대 리뷰 수 (--load-test-data 사용 시, 기본값: 100)"
+    )
+    parser.add_argument(
+        "--load-test-ports",
+        type=int,
+        nargs="+",
+        default=None,
+        help="부하테스트를 여러 포트에 동시 전송. 예: --load-test-ports 8001 8002 8003 (포트별 처리량/지연 수집)"
+    )
+    parser.add_argument(
+        "--load-test-scenario",
+        type=str,
+        default=None,
+        help="부하테스트 요청 순서 시나리오 파일 (한 줄에 restaurant_id 하나, convert_kr3_tsv.py --output-scenario로 생성). --load-test-data와 함께 사용"
+    )
+    parser.add_argument(
+        "--no-load-test-upload",
+        action="store_true",
+        help="--load-test-data 지정 시에도 벡터 업로드 생략 (이미 업로드된 경우). 기본값: false (업로드 수행)"
+    )
+    parser.add_argument(
+        "--load-test-upload-timeout",
+        type=int,
+        default=3600,
+        help="부하테스트 벡터 업로드 요청 타임아웃(초). 대용량 JSON 시 조정 (기본값: 3600)"
+    )
+    parser.add_argument(
+        "--prometheus-url",
+        type=str,
+        default="",
+        help="부하테스트 결과 저장 시 해당 구간 Prometheus 메트릭을 조회해 JSON에 포함 (예: http://localhost:9090). 비우면 생략"
+    )
+    parser.add_argument(
+        "--abort-after-connection-errors",
+        type=int,
+        default=10,
+        metavar="N",
+        help="부하테스트 시 연속 N회 연결 실패 시 조기 종료 (기본값: 10, 0이면 비활성화)"
+    )
+    parser.add_argument(
+        "--save-container-logs",
+        type=str,
+        default="",
+        metavar="DIR",
+        help="부하테스트 중 앱 다운(조기 종료) 시 docker logs로 old_sync/new_sync/new_async 컨테이너 로그를 DIR에 저장 (예: . 또는 ./logs). 비우면 미실행"
     )
     parser.add_argument(
         "--generate-from-kr3",
@@ -2825,7 +3174,7 @@ def main():
     enable_benchmark_mode = args.benchmark or benchmark_metrics or benchmark_cpu or benchmark_gpu
 
     print_header("API 전체 기능 통합 테스트")
-    print_info(f"서버 URL: {BASE_URL}")
+    print_info(f"서버 URL: {get_base_url()}")
     print_info("FastAPI 서버를 테스트합니다")
 
     # 현재 테스트 모델 (환경 변수 기준, 서버와 동일한 env 사용 시 일치)
@@ -2974,10 +3323,12 @@ def main():
             base_ports=args.ports,
             test_data=test_data,
             data_info=compare_data_info,
+            use_pipeline_labels=getattr(args, "pipelines", False),
         )
         
         # 결과 요약 출력
-        print_header("모델 비교 테스트 완료")
+        done_title = "파이프라인 비교 테스트 완료" if getattr(args, "pipelines", False) else "모델 비교 테스트 완료"
+        print_header(done_title)
         if args.save_results:
             print_success(f"결과가 저장되었습니다: {args.save_results}")
         
@@ -3006,7 +3357,54 @@ def main():
         except Exception:
             pass
     
-    # 부하테스트 모드 처리
+    # -------------------------------------------------------------------------
+    # 부하테스트 모드 (--load-test)
+    # -------------------------------------------------------------------------
+    def _run_load_test_one_port(
+        port: int,
+        sentiment_pl: Union[Dict[str, Any], Callable[[int], Dict[str, Any]]],
+        summary_pl: Union[Dict[str, Any], Callable[[int], Dict[str, Any]]],
+        comparison_pl: Union[Dict[str, Any], Callable[[int], Dict[str, Any]]],
+        total_requests: int,
+        concurrent_users: int,
+        ramp_up: int,
+        abort_threshold: int = 10,
+    ) -> Tuple[int, Dict[str, Any]]:
+        """한 포트에 대해 감성/요약/비교 부하테스트 실행. (port, load_test_results) 반환."""
+        _thread_local.base_url = f"http://localhost:{port}"
+        try:
+            results = {}
+            kw = dict(total_requests=total_requests, concurrent_users=concurrent_users, ramp_up_seconds=ramp_up, consecutive_connection_errors_abort=abort_threshold)
+            success, stats = load_test(endpoint=f"{get_base_url()}{API_PREFIX}/sentiment/analyze/batch", payload=sentiment_pl, timeout=120, **kw)
+            if success and stats:
+                results["배치 감성 분석"] = stats
+            success, stats = load_test(endpoint=f"{get_base_url()}{API_PREFIX}/llm/summarize/batch", payload=summary_pl, timeout=180, **kw)
+            if success and stats:
+                results["배치 리뷰 요약"] = stats
+            success, stats = load_test(endpoint=f"{get_base_url()}{API_PREFIX}/llm/comparison/batch", payload=comparison_pl, timeout=300, **kw)
+            if success and stats:
+                results["배치 비교"] = stats
+            return (port, results)
+        finally:
+            setattr(_thread_local, "base_url", None)
+    # 목적: API 처리량(req/s) 및 지연(P50/P95/P99) 측정.
+    #
+    # 사용 시나리오별 목적:
+    #   1) run_all_restaurants_api.py + 640k JSON
+    #      → 대규모 데이터를 한 번 끝까지 처리할 수 있는지 검증 (E2E/배치 검증).
+    #   2) 기존 load_test (--load-test만, --load-test-data 없음)
+    #      → 작은 payload로 처리량/지연 측정 (소형 요청 기준).
+    #   3) load_test + --load-test-data real_service_simul_review_data_640k.json
+    #      → 큰 payload로 처리량/지연 측정 (대형 요청 기준). 2번과 대비 시,
+    #        감성 배치는 레스토랑당 리뷰를 --load-test-max-reviews-per-restaurant(기본 100)로
+    #        통일해 두면 요청 크기가 고정되어 비교가 명확해짐.
+    #
+    # payload 구성:
+    #   - 감성 배치: 10개 레스토랑, 각 레스토랑당 리뷰(기본 최대 100개). 동일 payload 반복 전송.
+    #   - 요약/비교 배치: restaurant_id 목록만 전송(서버가 Qdrant 등에서 조회).
+    #     현재는 파일/기본 데이터에서 첫 번째·두 번째 restaurant_id 2개만 사용(기본값).
+    #     "다수 음식점 배치 처리"를 보려면 배치 크기(레스토랑 수)를 늘리는 옵션 확장을 고려.
+    # -------------------------------------------------------------------------
     if args.load_test:
         print_header("부하테스트 모드")
         print_info(f"총 요청 수: {args.total_requests}")
@@ -3014,29 +3412,222 @@ def main():
         if args.ramp_up > 0:
             print_info(f"점진적 부하 증가: {args.ramp_up}초")
         
-        # 각 엔드포인트에 대해 부하테스트 실행
-        load_test_results = {}
+        # 부하테스트용 payload: --load-test-data 지정 시 해당 JSON에서 생성
+        load_test_sentiment_payload = None
+        load_test_rid1 = SAMPLE_RESTAURANT_ID
+        load_test_rid2 = SAMPLE_RESTAURANT_ID + 1
+        load_test_rids_10: List[int] = [SAMPLE_RESTAURANT_ID + i for i in range(10)]  # 시나리오 없을 때 요약/비교 배치용 10개
+        restaurants_list: List[Dict[str, Any]] = []
+        load_test_data: Optional[Dict[str, Any]] = None
+        if getattr(args, "load_test_data", None):
+            load_test_data_path = Path(args.load_test_data)
+            if not load_test_data_path.is_absolute():
+                load_test_data_path = project_root / load_test_data_path
+            if load_test_data_path.exists():
+                try:
+                    with open(load_test_data_path, "r", encoding="utf-8") as f:
+                        load_test_data = json.load(f)
+                    restaurants_list = load_test_data.get("restaurants") or []
+                    max_reviews = getattr(args, "load_test_max_reviews_per_restaurant", 100) or 100
+                    if restaurants_list:
+                        # 감성 배치: 상위 10개 레스토랑, 레스토랑당 최대 max_reviews개 리뷰
+                        restaurants_payload = []
+                        for r in restaurants_list[:10]:
+                            rid = r.get("restaurant_id", 0)
+                            reviews = (r.get("reviews") or [])[:max_reviews]
+                            reviews_serial = []
+                            for rev in reviews:
+                                if isinstance(rev, dict) and rev.get("content") is not None:
+                                    reviews_serial.append({
+                                        "id": rev.get("id"),
+                                        "restaurant_id": rev.get("restaurant_id", rid),
+                                        "content": rev.get("content", ""),
+                                        "created_at": rev.get("created_at"),
+                                    })
+                            restaurants_payload.append({"restaurant_id": rid, "reviews": reviews_serial})
+                        if restaurants_payload:
+                            load_test_sentiment_payload = {"restaurants": restaurants_payload}
+                        if len(restaurants_list) >= 2:
+                            load_test_rid1 = restaurants_list[0].get("restaurant_id", SAMPLE_RESTAURANT_ID)
+                            load_test_rid2 = restaurants_list[1].get("restaurant_id", SAMPLE_RESTAURANT_ID + 1)
+                        load_test_rids_10 = [r.get("restaurant_id", SAMPLE_RESTAURANT_ID + i) for i, r in enumerate(restaurants_list[:10])]
+                        print_info(f"부하테스트 데이터: {load_test_data_path.name} (레스토랑 {len(restaurants_list)}개, 감성 배치 레스토랑당 최대 {max_reviews}리뷰)")
+                except Exception as e:
+                    print_warning(f"부하테스트 데이터 로드 실패 ({args.load_test_data}): {e}. 기본 데이터 사용.")
+            else:
+                print_warning(f"부하테스트 데이터 파일 없음: {load_test_data_path}. 기본 데이터 사용.")
         
-        # 1. 배치 감성 분석 부하테스트
+        # 감성 배치 payload (단일/다중 포트 공통)
+        if load_test_sentiment_payload is not None:
+            sentiment_payload = load_test_sentiment_payload
+        else:
+            restaurants_payload = []
+            for i in range(10):
+                restaurants_payload.append({
+                    "restaurant_id": SAMPLE_RESTAURANT_ID + i,
+                    "reviews": SAMPLE_REVIEWS  # 모든 레스토랑에 동일한 리뷰 사용
+                })
+            sentiment_payload = {"restaurants": restaurants_payload}
+        
+        # 시나리오 없을 때: 배치 요약·비교는 상위 10개 레스토랑 전체 사용. 시나리오 있을 때는 요청별 2개만 사용
+        sentiment_payload_or_fn: Union[Dict[str, Any], Callable[[int], Dict[str, Any]]] = sentiment_payload
+        rids_10 = load_test_rids_10
+        summary_payload_or_fn: Union[Dict[str, Any], Callable[[int], Dict[str, Any]]] = (lambda rids=rids_10: lambda i: {"restaurants": [{"restaurant_id": rid} for rid in rids], "limit": 10, "min_score": 0.0})()
+        comparison_payload_or_fn: Union[Dict[str, Any], Callable[[int], Dict[str, Any]]] = (lambda rids=rids_10: lambda i: {"restaurants": [{"restaurant_id": rid} for rid in rids]})()
+        if getattr(args, "load_test_scenario", None) and restaurants_list:
+            scenario_path = Path(args.load_test_scenario)
+            if not scenario_path.is_absolute():
+                scenario_path = project_root / scenario_path
+            if scenario_path.exists():
+                try:
+                    with open(scenario_path, "r", encoding="utf-8") as f:
+                        scenario_rids = [int(line.strip()) for line in f if line.strip()]
+                    if scenario_rids:
+                        max_reviews_scenario = getattr(args, "load_test_max_reviews_per_restaurant", 100) or 100
+                        rest_by_id = {r.get("restaurant_id"): r for r in restaurants_list}
+                        default_sentiment = sentiment_payload
+
+                        def _sentiment_fn(i: int) -> Dict[str, Any]:
+                            rid = scenario_rids[i % len(scenario_rids)]
+                            r = rest_by_id.get(rid)
+                            if not r:
+                                return default_sentiment
+                            reviews = (r.get("reviews") or [])[:max_reviews_scenario]
+                            reviews_serial = []
+                            for rev in reviews:
+                                if isinstance(rev, dict) and rev.get("content") is not None:
+                                    reviews_serial.append({
+                                        "id": rev.get("id"),
+                                        "restaurant_id": rev.get("restaurant_id", rid),
+                                        "content": rev.get("content", ""),
+                                        "created_at": rev.get("created_at"),
+                                    })
+                            return {"restaurants": [{"restaurant_id": rid, "reviews": reviews_serial}]}
+
+                        batch_size = 10
+
+                        def _summary_fn(i: int) -> Dict[str, Any]:
+                            L = len(scenario_rids)
+                            n = min(batch_size, L)
+                            rids = [scenario_rids[(i + k) % L] for k in range(n)]
+                            return {"restaurants": [{"restaurant_id": rid} for rid in rids], "limit": 10, "min_score": 0.0}
+
+                        def _comparison_fn(i: int) -> Dict[str, Any]:
+                            L = len(scenario_rids)
+                            n = min(batch_size, L)
+                            rids = [scenario_rids[(i + k) % L] for k in range(n)]
+                            return {"restaurants": [{"restaurant_id": rid} for rid in rids]}
+
+                        sentiment_payload_or_fn = _sentiment_fn
+                        summary_payload_or_fn = _summary_fn
+                        comparison_payload_or_fn = _comparison_fn
+                        print_info(f"부하테스트 시나리오: {scenario_path.name} ({len(scenario_rids)} 요청 순서)")
+                except Exception as e:
+                    print_warning(f"시나리오 파일 로드 실패 ({args.load_test_scenario}): {e}. 고정 payload 사용.")
+            else:
+                print_warning(f"시나리오 파일 없음: {scenario_path}. 고정 payload 사용.")
+        
+        # --load-test-data 지정 시 벡터 DB 업로드 (요약/비교 API에서 검색 가능하도록)
+        if (
+            load_test_data is not None
+            and restaurants_list
+            and not getattr(args, "no_load_test_upload", False)
+        ):
+            ports_for_upload = getattr(args, "load_test_ports", None)
+            upload_timeout = getattr(args, "load_test_upload_timeout", 3600) or 3600
+            if not upload_load_test_data_to_ports(load_test_data, ports_for_upload, timeout=upload_timeout):
+                print_warning("벡터 업로드 실패. 요약/비교 API가 빈 결과를 반환할 수 있습니다.")
+        elif load_test_data is not None and getattr(args, "no_load_test_upload", False):
+            print_info("--no-load-test-upload: 벡터 업로드 생략")
+        
+        load_test_ports = getattr(args, "load_test_ports", None)
+        abort_threshold = getattr(args, "abort_after_connection_errors", 10)
+        if load_test_ports:
+            # 여러 포트에 동시 부하테스트
+            print_info(f"동시 실행: 포트 {load_test_ports}에 각각 부하테스트 전송")
+            results_by_port = {}
+            load_test_global_start = time.time()
+            with ThreadPoolExecutor(max_workers=len(load_test_ports)) as executor:
+                futures = {
+                    executor.submit(
+                        _run_load_test_one_port,
+                        port,
+                        sentiment_payload_or_fn,
+                        summary_payload_or_fn,
+                        comparison_payload_or_fn,
+                        args.total_requests,
+                        args.concurrent_users,
+                        args.ramp_up,
+                        abort_threshold,
+                    ): port
+                    for port in load_test_ports
+                }
+                for future in as_completed(futures):
+                    port = futures[future]
+                    try:
+                        p, res = future.result()
+                        results_by_port[str(p)] = res
+                        for name, st in (res or {}).items():
+                            thr = st.get("throughput_req_per_sec") or 0
+                            print_success(f"포트 {p} {name}: {thr:.2f} req/s")
+                    except Exception as e:
+                        print_error(f"포트 {port} 부하테스트 예외: {e}")
+                        results_by_port[str(port)] = {}
+            load_test_global_end = time.time()
+            save_container_logs_dir = getattr(args, "save_container_logs", "") or ""
+            if save_container_logs_dir.strip():
+                save_container_logs_on_abort(
+                    results_by_port,
+                    save_container_logs_dir.strip(),
+                    container_prefix=os.getenv("DOCKER_COMPOSE_PROJECT", "tasteam-new-async"),
+                )
+            if args.save_results:
+                load_test_data_info = build_data_info(
+                    test_data=test_data,
+                    data_source_name="test_data_sample.json",
+                    generate_from_kr3=args.generate_from_kr3,
+                    kr3_sample=args.kr3_sample,
+                    kr3_restaurants=args.kr3_restaurants,
+                    selected_tests=[],
+                )
+                load_test_output = {
+                    "timestamp": datetime.now().isoformat(),
+                    "load_test_mode": True,
+                    "load_test_ports": load_test_ports,
+                    "model_info": _effective_model_info(),
+                    "data_info": load_test_data_info,
+                    "total_requests": args.total_requests,
+                    "concurrent_users": args.concurrent_users,
+                    "ramp_up_seconds": args.ramp_up,
+                    "results_by_port": results_by_port,
+                }
+                prometheus_url = getattr(args, "prometheus_url", "") or ""
+                if prometheus_url.strip():
+                    try:
+                        load_test_output["prometheus_metrics"] = fetch_prometheus_metrics(
+                            prometheus_url.strip(), load_test_global_start, load_test_global_end
+                        )
+                        print_info("Prometheus 메트릭을 결과 JSON에 포함했습니다.")
+                    except Exception as e:
+                        load_test_output["prometheus_metrics"] = {"error": str(e)}
+                with open(args.save_results, "w", encoding="utf-8") as f:
+                    json.dump(load_test_output, f, ensure_ascii=False, indent=2)
+                print_success(f"\n부하테스트 결과가 저장되었습니다: {args.save_results}")
+            sys.exit(0)
+        
+        # 단일 포트: 기존 순차 실행
+        load_test_results = {}
+        load_test_global_start = time.time()
         print_header("1. 배치 감성 분석 부하테스트")
-        url = f"{BASE_URL}{API_PREFIX}/sentiment/analyze/batch"
-        # 10개 레스토랑 배치 생성
-        restaurants_payload = []
-        for i in range(10):
-            restaurants_payload.append({
-                "restaurant_id": SAMPLE_RESTAURANT_ID + i,
-                "reviews": SAMPLE_REVIEWS  # 모든 레스토랑에 동일한 리뷰 사용
-            })
-        payload = {
-            "restaurants": restaurants_payload
-        }
+        url = f"{get_base_url()}{API_PREFIX}/sentiment/analyze/batch"
         success, stats = load_test(
             endpoint=url,
-            payload=payload,
+            payload=sentiment_payload_or_fn,
             total_requests=args.total_requests,
             concurrent_users=args.concurrent_users,
             timeout=120,
-            ramp_up_seconds=args.ramp_up
+            ramp_up_seconds=args.ramp_up,
+            consecutive_connection_errors_abort=abort_threshold,
         )
         if success and stats:
             print_success("배치 감성 분석 부하테스트 완료")
@@ -3051,22 +3642,15 @@ def main():
         
         # 2. 배치 리뷰 요약 부하테스트 (새 파이프라인)
         print_header("2. 배치 리뷰 요약 부하테스트")
-        url = f"{BASE_URL}{API_PREFIX}/llm/summarize/batch"
-        payload = {
-            "restaurants": [
-                {"restaurant_id": SAMPLE_RESTAURANT_ID},
-                {"restaurant_id": SAMPLE_RESTAURANT_ID + 1},
-            ],
-            "limit": 10,
-            "min_score": 0.0,
-        }
+        url = f"{get_base_url()}{API_PREFIX}/llm/summarize/batch"
         success, stats = load_test(
             endpoint=url,
-            payload=payload,
+            payload=summary_payload_or_fn,
             total_requests=args.total_requests,
             concurrent_users=args.concurrent_users,
             timeout=180,
-            ramp_up_seconds=args.ramp_up
+            ramp_up_seconds=args.ramp_up,
+            consecutive_connection_errors_abort=abort_threshold,
         )
         if success and stats:
             print_success("배치 리뷰 요약 부하테스트 완료")
@@ -3079,6 +3663,40 @@ def main():
             print(f"  - 최대 동시 요청 수: {stats.get('max_concurrent_requests', 'N/A')}")
             load_test_results["배치 리뷰 요약"] = stats
         
+        # 3. 배치 비교 부하테스트
+        print_header("3. 배치 비교 부하테스트")
+        url = f"{get_base_url()}{API_PREFIX}/llm/comparison/batch"
+        success, stats = load_test(
+            endpoint=url,
+            payload=comparison_payload_or_fn,
+            total_requests=args.total_requests,
+            concurrent_users=args.concurrent_users,
+            timeout=300,
+            ramp_up_seconds=args.ramp_up,
+            consecutive_connection_errors_abort=abort_threshold,
+        )
+        load_test_global_end = time.time()
+        if success and stats:
+            print_success("배치 비교 부하테스트 완료")
+            print(f"  - 평균 응답 시간: {stats['avg_latency_sec']:.3f}초")
+            print(f"  - P50 응답 시간: {stats.get('p50_latency_sec', 'N/A'):.3f}초" if stats.get('p50_latency_sec') else "  - P50 응답 시간: N/A")
+            print(f"  - P95 응답 시간: {stats['p95_latency_sec']:.3f}초")
+            print(f"  - P99 응답 시간: {stats['p99_latency_sec']:.3f}초")
+            print(f"  - 처리량: {stats['throughput_req_per_sec']:.2f} req/s")
+            print(f"  - 성공률: {stats['success_rate']:.1f}% ({stats['success_count']}/{stats['total_requests']})")
+            print(f"  - 최대 동시 요청 수: {stats.get('max_concurrent_requests', 'N/A')}")
+            load_test_results["배치 비교"] = stats
+
+        save_container_logs_dir = getattr(args, "save_container_logs", "") or ""
+        if save_container_logs_dir.strip() and any(
+            (st or {}).get("aborted_early") for st in load_test_results.values()
+        ):
+            save_container_logs_on_abort(
+                {"1": load_test_results},
+                save_container_logs_dir.strip(),
+                container_prefix=os.getenv("DOCKER_COMPOSE_PROJECT", "tasteam-new-async"),
+            )
+
         # 결과 저장
         if args.save_results:
             load_test_data_info = build_data_info(
@@ -3091,7 +3709,7 @@ def main():
             )
             load_test_output = {
                 "timestamp": datetime.now().isoformat(),
-                "server_url": BASE_URL,
+                "server_url": get_base_url(),
                 "load_test_mode": True,
                 "model_info": _effective_model_info(),
                 "data_info": load_test_data_info,
@@ -3100,10 +3718,19 @@ def main():
                 "ramp_up_seconds": args.ramp_up,
                 "test_results": load_test_results,
             }
+            prometheus_url = getattr(args, "prometheus_url", "") or ""
+            if prometheus_url.strip():
+                try:
+                    load_test_output["prometheus_metrics"] = fetch_prometheus_metrics(
+                        prometheus_url.strip(), load_test_global_start, load_test_global_end
+                    )
+                    print_info("Prometheus 메트릭을 결과 JSON에 포함했습니다.")
+                except Exception as e:
+                    load_test_output["prometheus_metrics"] = {"error": str(e)}
             with open(args.save_results, 'w', encoding='utf-8') as f:
                 json.dump(load_test_output, f, ensure_ascii=False, indent=2)
             print_success(f"\n부하테스트 결과가 저장되었습니다: {args.save_results}")
-        
+
         sys.exit(0)
     
     # 단일 모델 테스트 (기존 로직)
@@ -3150,7 +3777,7 @@ def main():
         )
         results_dict = {
             "timestamp": datetime.now().isoformat(),
-            "server_url": BASE_URL,
+            "server_url": get_base_url(),
             "benchmark_mode": enable_benchmark_mode,
             "benchmark_metrics": benchmark_metrics,
             "benchmark_cpu": benchmark_cpu,

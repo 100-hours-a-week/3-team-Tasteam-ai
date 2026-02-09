@@ -28,6 +28,26 @@ try:
 except ImportError:
     Py4JNetworkError = Exception  # no py4j
 
+# Spark/JVM 실패 시 폴백용: JAVA_GATEWAY_EXITED 등 Py4J 이외 예외도 잡기 위함
+def _is_spark_or_jvm_error(e: Exception) -> bool:
+    msg = str(e).upper()
+    return (
+        "JAVA_GATEWAY" in msg
+        or "PY4J" in msg
+        or "SPARK" in msg
+        or isinstance(e, (Py4JNetworkError, BrokenPipeError, ConnectionError, OSError, EOFError))
+    )
+
+
+def _spark_disabled() -> bool:
+    """Docker 등 JVM 없는 환경에서 Spark 비활성화 시 True."""
+    try:
+        from .config import Config
+        return getattr(Config, "DISABLE_SPARK", False)
+    except Exception:
+        return False
+
+
 _spark_session = None
 
 
@@ -517,15 +537,18 @@ def calculate_single_restaurant_ratios(
     texts = [s for s in reviews if s and isinstance(s, str)]
     if not texts:
         return {"service": 0.0, "price": 0.0}
-    if SPARK_AVAILABLE:
+    if SPARK_AVAILABLE and not _spark_disabled():
         try:
             spark = _get_spark()
             rdd = spark.sparkContext.parallelize(texts, numSlices=max(1, min(len(texts) // 50, 32)))
             out = _spark_calculate_ratios(rdd, stopwords)
             return {"service": round(out["service"], 2), "price": round(out["price"], 2)}
-        except (Py4JNetworkError, BrokenPipeError, ConnectionError, OSError, EOFError) as e:
-            logger.warning("Spark/Py4J 오류, Python 폴백 사용: %s", e)
-            _reset_spark()
+        except Exception as e:
+            if _is_spark_or_jvm_error(e):
+                logger.warning("Spark/JVM 오류, Python 폴백 사용: %s", e)
+                _reset_spark()
+            else:
+                raise
     out = _python_calculate_ratios(texts, stopwords)
     return {"service": round(out["service"], 2), "price": round(out["price"], 2)}
 
@@ -596,6 +619,18 @@ def calculate_all_average_ratios_from_file(
         logger.warning("pyspark 미설치. calculate_all_average_ratios_from_file 불가.")
         return None
 
+    # Docker 등 JVM 없는 환경: Spark 건너뛰고 Python 경로만 사용
+    if _spark_disabled():
+        try:
+            rows = load_reviews_from_aspect_data_file(path, project_root)
+            texts = [(r.get("content") or r.get("text") or "").strip() for r in rows if isinstance(r, dict)]
+            texts = [t for t in texts if t]
+            if texts:
+                return _python_calculate_ratios(texts, stopwords)
+        except Exception as e:
+            logger.warning("DISABLE_SPARK 시 Python 경로 실패: %s", e)
+        return None
+
     try:
         from pyspark.sql.functions import col, length, explode
 
@@ -632,20 +667,20 @@ def calculate_all_average_ratios_from_file(
 
         texts_rdd = base_df.select("text").rdd.map(lambda r: r["text"])
         return _spark_calculate_ratios(texts_rdd, stopwords)
-    except (Py4JNetworkError, BrokenPipeError, ConnectionError, OSError, EOFError) as e:
-        logger.warning("Spark/Py4J 오류, Python 폴백 시도: %s", e)
-        _reset_spark()
-        try:
-            rows = load_reviews_from_aspect_data_file(path, project_root)
-            texts = [(r.get("content") or r.get("text") or "").strip() for r in rows if isinstance(r, dict)]
-            texts = [t for t in texts if t]
-            if texts:
-                return _python_calculate_ratios(texts, stopwords)
-        except Exception as fb:
-            logger.warning("Python 폴백 실패: %s", fb)
-        return None
     except Exception as e:
-        logger.warning("calculate_all_average_ratios_from_file 실패: %s — %s", path, e)
+        if _is_spark_or_jvm_error(e):
+            logger.warning("Spark/JVM 오류, Python 폴백 시도: %s", e)
+            _reset_spark()
+            try:
+                rows = load_reviews_from_aspect_data_file(path, project_root)
+                texts = [(r.get("content") or r.get("text") or "").strip() for r in rows if isinstance(r, dict)]
+                texts = [t for t in texts if t]
+                if texts:
+                    return _python_calculate_ratios(texts, stopwords)
+            except Exception as fb:
+                logger.warning("Python 폴백 실패: %s", fb)
+        else:
+            logger.warning("calculate_all_average_ratios_from_file 실패: %s — %s", path, e)
         return None
 
 
@@ -727,16 +762,19 @@ def calculate_all_average_ratios_from_reviews(
     texts = [t for t in texts if t and isinstance(t, str)]
     if not texts:
         return {"service": 0.0, "price": 0.0}
-    if SPARK_AVAILABLE:
+    if SPARK_AVAILABLE and not _spark_disabled():
         try:
             spark = _get_spark()
             rdd = spark.sparkContext.parallelize(
                 texts, numSlices=max(1, min(len(texts) // 100, 256))
             )
             return _spark_calculate_ratios(rdd, stopwords)
-        except (Py4JNetworkError, BrokenPipeError, ConnectionError, OSError, EOFError) as e:
-            logger.warning("Spark/Py4J 오류, Python 폴백 사용: %s", e)
-            _reset_spark()
+        except Exception as e:
+            if _is_spark_or_jvm_error(e):
+                logger.warning("Spark/JVM 오류, Python 폴백 사용: %s", e)
+                _reset_spark()
+            else:
+                raise
     return _python_calculate_ratios(texts, stopwords)
 
 
