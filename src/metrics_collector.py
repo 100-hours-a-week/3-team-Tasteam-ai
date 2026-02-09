@@ -1,5 +1,7 @@
 """
 메트릭 수집 및 저장 통합 모듈
+- SQLite + 로그 저장
+- Prometheus 메트릭 노출 (prometheus_client 설치 시 /metrics에 포함)
 """
 
 import uuid
@@ -14,6 +16,91 @@ from .config import Config
 from .goodput_tracker import GoodputTracker
 
 logger = logging.getLogger(__name__)
+
+# Prometheus 메트릭 (prometheus_client 설치 시 기본 레지스트리에 등록 → /metrics에 노출)
+_PROMETHEUS_AVAILABLE = False
+_analysis_processing_seconds: Optional[Any] = None
+_analysis_requests_total: Optional[Any] = None
+_analysis_tokens_total: Optional[Any] = None
+_llm_ttft_seconds: Optional[Any] = None
+_llm_tps: Optional[Any] = None
+_llm_tokens_total: Optional[Any] = None
+_app_queue_depth: Optional[Any] = None
+_app_worker_busy: Optional[Any] = None
+_in_flight_count: int = 0  # inc/dec와 동기화해 worker_busy 계산용
+
+try:
+    from prometheus_client import Counter, Histogram, Gauge
+    _PROMETHEUS_AVAILABLE = True
+    _analysis_processing_seconds = Histogram(
+        "analysis_processing_time_seconds",
+        "API 처리 시간 (초)",
+        ["analysis_type", "status"],
+        buckets=(0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0),
+    )
+    _analysis_requests_total = Counter(
+        "analysis_requests_total",
+        "분석 요청 수",
+        ["analysis_type", "status"],
+    )
+    _analysis_tokens_total = Counter(
+        "analysis_tokens_used_total",
+        "사용 토큰 수",
+        ["analysis_type"],
+    )
+    _llm_ttft_seconds = Histogram(
+        "llm_ttft_seconds",
+        "Time to first token (초)",
+        ["analysis_type"],
+        buckets=(0.1, 0.25, 0.5, 1.0, 2.0, 5.0),
+    )
+    _llm_tps = Histogram(
+        "llm_tps",
+        "Tokens per second",
+        ["analysis_type"],
+        buckets=(1, 5, 10, 20, 50, 100, 200),
+    )
+    _llm_tokens_total = Counter(
+        "llm_tokens_total",
+        "vLLM 생성 토큰 수",
+        ["analysis_type"],
+    )
+    _app_queue_depth = Gauge(
+        "app_queue_depth",
+        "현재 처리 중인 요청 수 (in-flight, queue depth)",
+    )
+    _app_worker_busy = Gauge(
+        "app_worker_busy",
+        "이 워커가 요청 처리 중이면 1, 유휴면 0 (worker utilization용)",
+    )
+except ImportError:
+    pass
+
+
+def app_queue_depth_inc() -> None:
+    """요청 진입 시 호출 (queue depth +1, worker busy=1)."""
+    global _in_flight_count
+    if _PROMETHEUS_AVAILABLE and _app_queue_depth is not None:
+        try:
+            _in_flight_count += 1
+            _app_queue_depth.inc()
+            if _app_worker_busy is not None:
+                _app_worker_busy.set(1)
+        except Exception:
+            pass
+
+
+def app_queue_depth_dec() -> None:
+    """요청 완료/이탈 시 호출 (queue depth -1, 유휴 시 worker busy=0)."""
+    global _in_flight_count
+    if _PROMETHEUS_AVAILABLE and _app_queue_depth is not None:
+        try:
+            _app_queue_depth.dec()
+            _in_flight_count = max(0, _in_flight_count - 1)
+            if _app_worker_busy is not None:
+                _app_worker_busy.set(1 if _in_flight_count > 0 else 0)
+        except Exception:
+            pass
 
 
 class MetricsCollector:
@@ -96,7 +183,7 @@ class MetricsCollector:
         """
         request_id = str(uuid.uuid4())
         processing_time_ms = (time.time() - start_time) * 1000
-        
+
         # 모델 버전 기본값
         if model_version is None:
             model_version = Config.LLM_MODEL
@@ -163,8 +250,71 @@ class MetricsCollector:
                 n_tokens=tokens_used,
                 processing_time_ms=processing_time_ms,
             )
-        
+
+        # Prometheus 메트릭 갱신 (같은 레지스트리 → FastAPI /metrics에 포함)
+        if _PROMETHEUS_AVAILABLE and _analysis_processing_seconds is not None and _analysis_requests_total is not None:
+            try:
+                at = analysis_type or "unknown"
+                st = status or "unknown"
+                _analysis_processing_seconds.labels(
+                    analysis_type=at,
+                    status=st,
+                ).observe(processing_time_ms / 1000.0)
+                _analysis_requests_total.labels(
+                    analysis_type=at,
+                    status=st,
+                ).inc()
+                if tokens_used is not None and tokens_used > 0 and _analysis_tokens_total is not None:
+                    _analysis_tokens_total.labels(analysis_type=at).inc(tokens_used)
+                # vLLM 미사용 경로: ttft_ms가 전달되면 동일한 Prometheus 히스토그램에 기록 (그라파나 TTFUR P95 집계용)
+                if ttft_ms is not None and _llm_ttft_seconds is not None:
+                    _llm_ttft_seconds.labels(analysis_type=at).observe(ttft_ms / 1000.0)
+                if ttft_ms is not None and tokens_used is not None and tokens_used > 0 and _llm_tps is not None:
+                    tps = (tokens_used / (ttft_ms / 1000.0)) if ttft_ms > 0 else 0
+                    if tps > 0:
+                        _llm_tps.labels(analysis_type=at).observe(tps)
+                if tokens_used is not None and tokens_used > 0 and _llm_tokens_total is not None:
+                    _llm_tokens_total.labels(analysis_type=at).inc(tokens_used)
+            except Exception as e:
+                logger.debug("Prometheus 메트릭 갱신 실패: %s", e)
+
         return request_id
+
+    def record_llm_ttft(
+        self,
+        analysis_type: str,
+        ttft_ms: float,
+        tokens_used: Optional[int] = None,
+        tps: Optional[float] = None,
+    ) -> None:
+        """
+        TTFUR(Time To First User Response)를 Prometheus에 기록. 그라파나 TTFUR P95 집계용.
+
+        TTFUR 정의: t0 = 서버가 요청을 받은 시각, t1 = 클라이언트가 첫 chunk/byte/token을
+        받은 시각(응답 반환 직전) → TTFUR = t1 - t0. API 경계에서 독립적으로 측정.
+
+        Args:
+            analysis_type: 분석 타입 ('sentiment', 'summary', 'comparison')
+            ttft_ms: TTFUR(밀리초). 보통 (t1 - t0) * 1000.
+            tokens_used: 사용 토큰 수 (있으면 _llm_tokens_total 갱신)
+            tps: 초당 토큰 수 (있으면 _llm_tps 갱신, 없고 tokens_used+ttft_ms 있으면 자동 계산)
+        """
+        if not _PROMETHEUS_AVAILABLE:
+            return
+        try:
+            at = analysis_type or "unknown"
+            if _llm_ttft_seconds is not None:
+                _llm_ttft_seconds.labels(analysis_type=at).observe(ttft_ms / 1000.0)
+            if tokens_used is not None and tokens_used > 0 and _llm_tokens_total is not None:
+                _llm_tokens_total.labels(analysis_type=at).inc(tokens_used)
+            if tps is not None and tps > 0 and _llm_tps is not None:
+                _llm_tps.labels(analysis_type=at).observe(float(tps))
+            elif tokens_used is not None and tokens_used > 0 and ttft_ms > 0 and _llm_tps is not None:
+                tps_val = tokens_used / (ttft_ms / 1000.0)
+                if tps_val > 0:
+                    _llm_tps.labels(analysis_type=at).observe(tps_val)
+        except Exception as e:
+            logger.debug("Prometheus LLM TTFT 메트릭 갱신 실패: %s", e)
     
     def get_performance_stats(
         self,
@@ -251,6 +401,22 @@ class MetricsCollector:
                 )
             except Exception as e:
                 logger.error(f"vLLM 메트릭 DB 저장 실패: {e}")
+
+        # Prometheus vLLM 메트릭 갱신
+        if _PROMETHEUS_AVAILABLE:
+            try:
+                at = analysis_type or "unknown"
+                ttft_ms = vllm_metrics.get("ttft_ms")
+                if ttft_ms is not None and _llm_ttft_seconds is not None:
+                    _llm_ttft_seconds.labels(analysis_type=at).observe(ttft_ms / 1000.0)
+                tps = vllm_metrics.get("tps")
+                if tps is not None and _llm_tps is not None:
+                    _llm_tps.labels(analysis_type=at).observe(float(tps))
+                n_tokens = vllm_metrics.get("total_tokens")
+                if n_tokens is not None and n_tokens > 0 and _llm_tokens_total is not None:
+                    _llm_tokens_total.labels(analysis_type=at).inc(n_tokens)
+            except Exception as e:
+                logger.debug("Prometheus vLLM 메트릭 갱신 실패: %s", e)
     
     def get_goodput_stats(self, recent_n: Optional[int] = None) -> Dict[str, float]:
         """

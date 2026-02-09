@@ -18,3 +18,12 @@ qdrant_data/
 **/qdrant_data/
 *.sqlite
 *.db
+
+tasteam_app_all_restaurants_ai_api_results.json
+tasteam_app_all_restaurants_ai_api_results.sql
+tasteam_all_seed_reviews.csv
+tasteam_app_all_review_data.json
+merged.csv
+260202_api_result.md
+tasteam_app_kr3_640k_even.json
+service_simul_data/

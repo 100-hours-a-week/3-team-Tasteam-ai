@@ -337,6 +337,7 @@ async def summarize_reviews(
         
         # 메트릭 수집
         total_reviews_count = sum(len(hits_dict.get(cat, [])) for cat in ["service", "price", "food"])
+        processing_time_ms = (time.time() - start_time) * 1000
         request_id = metrics.collect_metrics(
             restaurant_id=request.restaurant_id,
             analysis_type="summary",
@@ -344,7 +345,9 @@ async def summarize_reviews(
             tokens_used=None,
             batch_size=total_reviews_count,
         )
-        
+        # TTFUR = t1 - t0 (요청 수신 시각 t0 → 응답 반환 직전 t1)
+        metrics.record_llm_ttft(analysis_type="summary", ttft_ms=processing_time_ms)
+
         # 항상 SummaryDisplayResponse (positive_reviews 등 미사용 필드 제외)
         return SummaryDisplayResponse(
             restaurant_id=request.restaurant_id,
@@ -353,7 +356,7 @@ async def summarize_reviews(
             categories=categories_dict if categories_dict else None,
             debug=DebugInfo(
                 request_id=request_id,
-                processing_time_ms=(time.time() - start_time) * 1000,
+                processing_time_ms=processing_time_ms,
                 tokens_used=None,
                 model_version=None,
             ) if debug else None,
@@ -484,8 +487,11 @@ async def compare(
             analysis_type="comparison",
             start_time=start_time,
             batch_size=result.get("total_candidates", 0),
-            )
-            
+        )
+        # TTFUR = t1 - t0 (요청 수신 시각 t0 → 응답 반환 직전 t1)
+        ttfur_ms = (time.time() - start_time) * 1000
+        metrics.record_llm_ttft(analysis_type="comparison", ttft_ms=ttfur_ms)
+
         # 디버그 정보 추가
         if debug:
             result["debug"] = DebugInfo(
@@ -536,6 +542,7 @@ async def compare_batch(
     Returns:
         각 레스토랑별 비교 결과 리스트
     """
+    start_time = time.time()
     try:
         pipeline = ComparisonPipeline(
             llm_utils=llm_utils,
@@ -545,6 +552,9 @@ async def compare_batch(
             restaurants=request.restaurants,
             all_average_data_path=request.all_average_data_path,
         )
+        # TTFUR = t1 - t0 (요청 수신 시각 t0 → 응답 반환 직전 t1)
+        elapsed_ms = (time.time() - start_time) * 1000
+        metrics.record_llm_ttft(analysis_type="comparison", ttft_ms=elapsed_ms)
         return ComparisonBatchResponse(results=[ComparisonResponse(**r) for r in results])
     except Exception as e:
         logger.error(f"배치 비교 중 오류: {str(e)}", exc_info=True)
@@ -586,6 +596,7 @@ async def summarize_reviews_batch(
     Returns:
         각 레스토랑별 요약 결과 리스트 (categories 기반)
     """
+    start_time = time.time()
     try:
         seed_list = [DEFAULT_SERVICE_SEEDS, DEFAULT_PRICE_SEEDS, DEFAULT_FOOD_SEEDS]
         name_list = ["service", "price", "food"]
@@ -593,6 +604,9 @@ async def summarize_reviews_batch(
 
         if Config.SUMMARY_SEARCH_ASYNC or Config.SUMMARY_RESTAURANT_ASYNC:
             results = await _batch_summarize_async(request, vector_search, llm_utils, seed_list, name_list)
+            # TTFUR = t1 - t0 (요청 수신 시각 t0 → 응답 반환 직전 t1)
+            elapsed_ms = (time.time() - start_time) * 1000
+            metrics.record_llm_ttft(analysis_type="summary", ttft_ms=elapsed_ms)
             return SummaryBatchResponse(results=[SummaryDisplayResponse(**r) for r in results])
 
         # search_async=false, restaurant_async=false: 레스토랑·aspect 완전 순차
@@ -644,7 +658,10 @@ async def summarize_reviews_batch(
                 per_category_max=request.limit,
             )
             results.append(_build_category_result(result, restaurant_id, restaurant_data.get("restaurant_name")))
-        
+
+        # TTFUR = t1 - t0 (요청 수신 시각 t0 → 응답 반환 직전 t1)
+        elapsed_ms = (time.time() - start_time) * 1000
+        metrics.record_llm_ttft(analysis_type="summary", ttft_ms=elapsed_ms)
         return SummaryBatchResponse(results=[
             SummaryDisplayResponse(**r) for r in results
         ])

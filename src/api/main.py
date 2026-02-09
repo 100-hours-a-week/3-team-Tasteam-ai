@@ -14,6 +14,13 @@ import uuid
 
 from .routers import sentiment, vector, llm, test
 from ..cpu_monitor import get_cpu_monitor
+from ..metrics_collector import app_queue_depth_inc, app_queue_depth_dec
+
+try:
+    from prometheus_fastapi_instrumentator import Instrumentator
+    _INSTRUMENTATOR_AVAILABLE = True
+except ImportError:
+    _INSTRUMENTATOR_AVAILABLE = False
 
 # 로거 설정 (콘솔 출력)
 # basicConfig는 한 번만 실행되므로, root 로거에 직접 핸들러 추가
@@ -72,6 +79,17 @@ async def add_request_id(request: Request, call_next):
     response = await call_next(request)
     response.headers["X-Request-Id"] = request_id
     return response
+
+
+# Queue depth (in-flight 요청 수) — Prometheus app_queue_depth 집계용
+@app.middleware("http")
+async def track_queue_depth(request: Request, call_next):
+    app_queue_depth_inc()
+    try:
+        response = await call_next(request)
+        return response
+    finally:
+        app_queue_depth_dec()
 
 
 def _error_payload(*, code: int, message: str, details, request_id: str) -> dict:
@@ -157,4 +175,15 @@ async def health():
         "status": "healthy",
         "version": "1.0.0",
     }
+
+
+# Prometheus 메트릭 (요청 수, 지연 시간 등 자동 수집, 패키지 설치 시에만 노출)
+if _INSTRUMENTATOR_AVAILABLE:
+    Instrumentator().instrument(app).expose(app)
+else:
+    import logging
+    logging.getLogger(__name__).warning(
+        "prometheus_fastapi_instrumentator 미설치: /metrics 비활성화. "
+        "설치: pip install prometheus-client prometheus-fastapi-instrumentator"
+    )
 
