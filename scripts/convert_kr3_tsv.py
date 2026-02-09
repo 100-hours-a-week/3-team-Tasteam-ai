@@ -15,6 +15,12 @@ python scripts/convert_kr3_tsv.py --input kr3.tsv --output test_large.json --sam
 프로덕션 테스트:
 # 전체 데이터 변환 (시간이 오래 걸릴 수 있음)
 python scripts/convert_kr3_tsv.py --input kr3.tsv --output test_production.json
+
+실제 서비스와 유사한 불균등 분포 (파워로우 + 핫키 + Zipf 시나리오):
+# 파워로우 분포: 상위 3개 5000/2000/1000, 나머지 min=10~max=5000
+python scripts/convert_kr3_tsv.py --input data/kr3.tsv --output tasteam_app_all_review_data.json --power-law --restaurants 100
+# Zipf(80-20) 요청 시나리오도 함께 출력 (부하테스트 시 인기 레스토랑이 더 자주 요청되도록)
+python scripts/convert_kr3_tsv.py --input data/kr3.tsv --output data.json --power-law --output-scenario scenario.txt --scenario-requests 20000
 """
 
 import csv
@@ -22,7 +28,7 @@ import json
 import argparse
 import random
 from datetime import datetime, timedelta
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 from pathlib import Path
 
 
@@ -110,7 +116,62 @@ def parse_args():
         default=42,
         help="랜덤 시드 (기본값: 42)"
     )
-    
+    # 파워로우(파레토) 분포: 레스토랑별 리뷰 수를 실제 서비스처럼 불균등하게
+    parser.add_argument(
+        "--power-law",
+        action="store_true",
+        help="레스토랑별 리뷰 수를 파워로우(파레토) 분포로 생성 (대부분 소량, 소수 핫키 다량)"
+    )
+    parser.add_argument(
+        "--min-reviews",
+        type=int,
+        default=10,
+        help="레스토랑당 리뷰 수 하한 (--power-law 시, 기본값: 10)"
+    )
+    parser.add_argument(
+        "--max-reviews",
+        type=int,
+        default=5000,
+        help="레스토랑당 리뷰 수 상한 (--power-law 시, 기본값: 5000)"
+    )
+    parser.add_argument(
+        "--hot-top-n",
+        type=int,
+        default=3,
+        help="상위 N개 레스토랑을 핫키로 고정 (--power-law 시, 기본값: 3)"
+    )
+    parser.add_argument(
+        "--hot-counts",
+        type=int,
+        nargs="+",
+        default=[5000, 2000, 1000],
+        help="핫키 레스토랑별 리뷰 수 (순서대로 상위 1~N개). 예: 5000 2000 1000 (기본값)"
+    )
+    parser.add_argument(
+        "--power-law-alpha",
+        type=float,
+        default=2.0,
+        help="파워로우 지수 (alpha>1, 클수록 소량 레스토랑 비중 증가, 기본값: 2.0)"
+    )
+    # Zipf/80-20 요청 시나리오 (부하테스트 시 인기 레스토랑이 더 자주 요청되도록)
+    parser.add_argument(
+        "--output-scenario",
+        type=str,
+        default=None,
+        help="Zipf(80-20)로 샘플링한 요청 시나리오 파일 출력 (한 줄에 restaurant_id 하나)"
+    )
+    parser.add_argument(
+        "--scenario-requests",
+        type=int,
+        default=10000,
+        help="시나리오에 넣을 요청 수 (--output-scenario 시, 기본값: 10000)"
+    )
+    parser.add_argument(
+        "--zipf-alpha",
+        type=float,
+        default=1.0,
+        help="Zipf 분포 지수 (alpha=1이면 80-20에 가깝게, 기본값: 1.0)"
+    )
     return parser.parse_args()
 
 
@@ -215,12 +276,79 @@ def convert_to_review_model(
     }
 
 
+def compute_target_counts_powerlaw(
+    num_restaurants: int,
+    total_reviews: int,
+    min_reviews: int,
+    max_reviews: int,
+    hot_top_n: int,
+    hot_counts: List[int],
+    power_law_alpha: float,
+    seed: int,
+) -> Dict[int, int]:
+    """
+    파워로우(파레토) + 상위 N개 핫키 고정으로 레스토랑별 리뷰 수 목표 생성.
+    목표 합이 total_reviews가 되도록 정규화.
+    """
+    random.seed(seed)
+    if hot_top_n <= 0 or not hot_counts:
+        hot_top_n = 0
+        hot_counts = []
+    hot_counts = list(hot_counts)[:hot_top_n]
+    while len(hot_counts) < hot_top_n:
+        hot_counts.append(max_reviews)  # 부족하면 상한으로 채움
+    hot_sum = sum(hot_counts)
+    rest_n = num_restaurants - hot_top_n
+    if rest_n <= 0:
+        # 전부 핫키면 합이 total_reviews 되도록 잘라서 반환
+        out = {i + 1: hot_counts[i] for i in range(min(num_restaurants, len(hot_counts)))}
+        s = sum(out.values())
+        if s > total_reviews:
+            out[1] = max(0, out.get(1, 0) + total_reviews - s)
+        return out
+    # 나머지 레스토랑: 파워로우 샘플. P(x) ∝ 작은 값에 치우침 -> count = min + (max-min)*u^alpha (u~U(0,1), alpha>1)
+    remaining_budget = total_reviews - hot_sum
+    if remaining_budget < 0:
+        # 핫키 합이 이미 초과면 핫키만 줄여서 합 맞춤
+        scale = total_reviews / hot_sum
+        target = {i + 1: max(min_reviews, int(hot_counts[i] * scale)) for i in range(hot_top_n)}
+        adj = total_reviews - sum(target.values())
+        target[1] = target.get(1, 0) + adj
+        return target
+    # 파워로우: 대부분 min 근처, 소수만 max 근처
+    raw = []
+    for _ in range(rest_n):
+        u = random.random()
+        # u^alpha: u가 작으면 더 작은 값 -> 리뷰 수는 min에 가깝게
+        x = min_reviews + (max_reviews - min_reviews) * (u ** power_law_alpha)
+        raw.append(int(round(min(max(x, min_reviews), max_reviews))))
+    raw_sum = sum(raw)
+    if raw_sum <= 0:
+        raw = [min_reviews] * rest_n
+        raw_sum = rest_n * min_reviews
+    # 정규화: remaining_budget에 맞추기
+    if raw_sum != remaining_budget:
+        scale = remaining_budget / raw_sum
+        raw = [max(min_reviews, min(max_reviews, int(round(r * scale)))) for r in raw]
+        delta = remaining_budget - sum(raw)
+        # 나머지는 첫 번째 비핫 레스토랑에
+        if delta != 0 and raw:
+            raw[0] = max(min_reviews, min(max_reviews, raw[0] + delta))
+    target = {}
+    for i in range(hot_top_n):
+        target[i + 1] = hot_counts[i]
+    for i in range(rest_n):
+        target[hot_top_n + 1 + i] = raw[i]
+    return target
+
+
 def group_reviews_by_restaurant(
     reviews: List[Dict[str, str]],
     num_restaurants: Optional[int] = None,
     reviews_per_restaurant: Optional[int] = None,
     single_restaurant: bool = False,
-    seed: int = 42
+    seed: int = 42,
+    target_counts: Optional[Dict[int, int]] = None,
 ) -> Dict[int, List[Dict]]:
     """
     리뷰를 레스토랑별로 그룹화
@@ -231,11 +359,28 @@ def group_reviews_by_restaurant(
         reviews_per_restaurant: 레스토랑당 리뷰 수 (None이면 균등 분배)
         single_restaurant: 단일 레스토랑으로 그룹화 여부
         seed: 랜덤 시드
+        target_counts: 레스토랑별 목표 리뷰 수 {rid: count} (지정 시 이 수만큼만 분배)
         
     Returns:
         {restaurant_id: [review1, review2, ...]} 형식 딕셔너리
     """
     random.seed(seed)
+    
+    # 파워로우 등으로 목표 개수 지정된 경우: 그 수만큼 순서대로 할당
+    if target_counts is not None and target_counts:
+        shuffled = list(reviews)
+        random.shuffle(shuffled)
+        restaurants: Dict[int, List[Dict]] = {}
+        idx = 0
+        for rid in sorted(target_counts.keys()):
+            cnt = target_counts[rid]
+            chunk = shuffled[idx : idx + cnt]
+            idx += cnt
+            if chunk:
+                restaurants[rid] = chunk
+        if idx < len(shuffled):
+            restaurants[sorted(restaurants.keys())[0]].extend(shuffled[idx:])
+        return restaurants
     
     # 단일 레스토랑으로 그룹화
     if single_restaurant:
@@ -340,6 +485,26 @@ def convert_to_api_format(
     return api_format
 
 
+def generate_zipf_scenario(
+    restaurant_ids: List[int],
+    num_requests: int,
+    zipf_alpha: float,
+    seed: int,
+) -> List[int]:
+    """
+    Zipf(80-20) 분포로 요청 시나리오 생성. rank 1(첫 번째 ID)이 가장 자주 나옴.
+    """
+    random.seed(seed)
+    n = len(restaurant_ids)
+    if n == 0:
+        return []
+    # weight[k] ∝ 1/(k+1)^alpha (rank 1 = index 0가 가장 큼)
+    weights = [1.0 / ((i + 1) ** zipf_alpha) for i in range(n)]
+    total_w = sum(weights)
+    weights = [w / total_w for w in weights]
+    return random.choices(restaurant_ids, weights=weights, k=num_requests)
+
+
 def main():
     """메인 함수"""
     args = parse_args()
@@ -372,12 +537,53 @@ def main():
     
     # 2. 레스토랑별로 그룹화
     print("\n🏪 레스토랑별로 그룹화 중...")
+    target_counts = None
+    if args.power_law:
+        # 파워로우: 레스토랑 수 결정
+        num_restaurants = args.restaurants
+        if num_restaurants is None:
+            if len(reviews) <= 100:
+                num_restaurants = 1
+            elif len(reviews) <= 1000:
+                num_restaurants = 10
+            else:
+                num_restaurants = min(100, len(reviews) // 10)
+        hot_top_n = min(args.hot_top_n, num_restaurants)
+        hot_counts = (args.hot_counts or [5000, 2000, 1000])[:hot_top_n]
+        while len(hot_counts) < hot_top_n:
+            hot_counts.append(args.max_reviews)
+        target_counts = compute_target_counts_powerlaw(
+            num_restaurants=num_restaurants,
+            total_reviews=len(reviews),
+            min_reviews=args.min_reviews,
+            max_reviews=args.max_reviews,
+            hot_top_n=hot_top_n,
+            hot_counts=hot_counts,
+            power_law_alpha=args.power_law_alpha,
+            seed=args.seed,
+        )
+        total_alloc = sum(target_counts.values())
+        if total_alloc > len(reviews):
+            # 정규화 후에도 초과할 수 있음: 잘라서 맞춤
+            scale = len(reviews) / total_alloc
+            new_counts = {}
+            rem = len(reviews)
+            for rid in sorted(target_counts.keys()):
+                c = max(1, int(round(target_counts[rid] * scale)))
+                c = min(c, rem)
+                if c > 0:
+                    new_counts[rid] = c
+                    rem -= c
+            target_counts = new_counts
+        print(f"   파워로우 분포: 상위 {hot_top_n}개 핫키 {hot_counts}, 나머지 min={args.min_reviews}~max={args.max_reviews}")
+    
     restaurants = group_reviews_by_restaurant(
         reviews=reviews,
         num_restaurants=args.restaurants,
         reviews_per_restaurant=args.reviews_per_restaurant,
         single_restaurant=args.single_restaurant,
-        seed=args.seed
+        seed=args.seed,
+        target_counts=target_counts,
     )
     
     print(f"✅ {len(restaurants)}개 레스토랑 생성 완료")
@@ -396,7 +602,23 @@ def main():
     with open(args.output, 'w', encoding='utf-8') as f:
         json.dump(api_format, f, ensure_ascii=False, indent=2)
     
-    # 5. 통계 정보 출력
+    # 5. Zipf 요청 시나리오 출력 (80-20 부하 시뮬레이션용)
+    if args.output_scenario:
+        rids = sorted(restaurants.keys())
+        scenario = generate_zipf_scenario(
+            restaurant_ids=rids,
+            num_requests=args.scenario_requests,
+            zipf_alpha=args.zipf_alpha,
+            seed=args.seed,
+        )
+        scenario_path = Path(args.output_scenario)
+        scenario_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(scenario_path, "w", encoding="utf-8") as f:
+            for rid in scenario:
+                f.write(f"{rid}\n")
+        print(f"📋 Zipf 시나리오 저장: {args.output_scenario} ({len(scenario)} 요청, alpha={args.zipf_alpha})")
+    
+    # 6. 통계 정보 출력
     total_reviews = sum(len(r['reviews']) for r in api_format['restaurants'])
     
     print()
@@ -408,6 +630,8 @@ def main():
     print(f"   - 총 리뷰 수: {total_reviews}")
     print(f"   - 레스토랑당 평균 리뷰 수: {total_reviews / len(api_format['restaurants']):.1f}")
     print(f"   - 출력 파일: {args.output}")
+    if args.output_scenario:
+        print(f"   - 시나리오 파일: {args.output_scenario}")
     print()
     print("📝 사용 예시:")
     print(f'   curl -X POST "http://localhost:8000/api/v1/sentiment/analyze/batch" \\')
