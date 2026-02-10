@@ -34,14 +34,18 @@ def search_similar_reviews(
     - **query_text**: 검색 쿼리 텍스트
     - **restaurant_id**: 레스토랑 ID 필터 (선택사항, None이면 전체 검색)
     - **limit**: 반환할 최대 개수 (기본값: 3, 최대: 100)
-    - **min_score**: 최소 유사도 점수 (기본값: 0.0)
+    - **fallback_min_score**: 폴백(Dense만) 경로에서만 적용되는 최소 유사도 (기본 0.2)
+    - **dense_prefetch_limit**: 하이브리드 Dense prefetch 개수 (기본 200)
+    - **sparse_prefetch_limit**: 하이브리드 Sparse prefetch 개수 (기본 300)
     """
     try:
         results = vector_search.query_similar_reviews(
             query_text=request.query_text,
             restaurant_id=request.restaurant_id,
             limit=request.limit,
-            min_score=request.min_score,
+            fallback_min_score=request.fallback_min_score,
+            dense_prefetch_limit=request.dense_prefetch_limit,
+            sparse_prefetch_limit=request.sparse_prefetch_limit,
         )
         # VectorSearchResult 형식으로 변환 (review와 score 포함)
         # payload의 id/review_id가 없을 수 있어 ReviewModel 호환 dict로 변환

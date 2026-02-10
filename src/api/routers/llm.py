@@ -83,7 +83,9 @@ async def _process_one_restaurant_async(
                 query_text,
                 restaurant_id=restaurant_id,
                 limit=request.limit,
-                min_score=request.min_score,
+                fallback_min_score=Config.FALLBACK_MIN_SCORE,
+                dense_prefetch_limit=Config.DENSE_PREFETCH_LIMIT,
+                sparse_prefetch_limit=Config.SPARSE_PREFETCH_LIMIT,
             )
         contents = []
         data_list = []
@@ -196,7 +198,6 @@ async def summarize_reviews(
     Args:
         restaurant_id: 레스토랑 ID
         limit: 각 카테고리당 검색할 최대 리뷰 수 (기본값: 10)
-        min_score: 최소 유사도 점수 (기본값: 0.0, 사용 안 함)
     
     Returns:
         - restaurant_id: 레스토랑 ID
@@ -272,12 +273,14 @@ async def summarize_reviews(
             query_seeds = seeds[:10] if len(seeds) > 10 else seeds
             query_text = " ".join(query_seeds)
             
-            # 하이브리드 검색 수행
+            # 하이브리드 검색 수행 (Config 하이브리드 인자 사용, Vector API와 동일)
             hits = vector_search.query_hybrid_search(
                 query_text=query_text,
                 restaurant_id=request.restaurant_id,
                 limit=request.limit,
-                min_score=0.0,
+                fallback_min_score=Config.FALLBACK_MIN_SCORE,
+                dense_prefetch_limit=Config.DENSE_PREFETCH_LIMIT,
+                sparse_prefetch_limit=Config.SPARSE_PREFETCH_LIMIT,
             )
             
             # 카테고리별 리스트 초기화
@@ -591,7 +594,6 @@ async def summarize_reviews_batch(
         request: 배치 리뷰 요약 요청
             - restaurants: 레스토랑 데이터 리스트 (각 항목: restaurant_id)
             - limit: 각 카테고리당 검색할 최대 리뷰 수 (전체 레스토랑 공통, 기본값: 10)
-            - min_score: 최소 유사도 점수 (전체 레스토랑 공통, 기본값: 0.0)
     
     Returns:
         각 레스토랑별 요약 결과 리스트 (categories 기반)
@@ -623,12 +625,14 @@ async def summarize_reviews_batch(
                 query_seeds = seeds[:10] if len(seeds) > 10 else seeds
                 query_text = " ".join(query_seeds)
                 
-                # 하이브리드 검색 수행
+                # 하이브리드 검색 수행 (Config 하이브리드 인자 사용, Vector API와 동일)
                 hits = vector_search.query_hybrid_search(
                     query_text=query_text,
                     restaurant_id=restaurant_id,
                     limit=request.limit,
-                    min_score=request.min_score,
+                    fallback_min_score=Config.FALLBACK_MIN_SCORE,
+                    dense_prefetch_limit=Config.DENSE_PREFETCH_LIMIT,
+                    sparse_prefetch_limit=Config.SPARSE_PREFETCH_LIMIT,
                 )
                 
                 # 카테고리별 리스트 초기화

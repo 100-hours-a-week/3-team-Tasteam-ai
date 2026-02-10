@@ -21,7 +21,9 @@ from ..gpu_monitor import get_or_create_benchmark_gpu_monitor
 _qdrant_client_instance: Optional[QdrantClient] = None
 _qdrant_client_lock = threading.Lock()
 _vector_search_singleton: Optional[VectorSearch] = None
+_vector_search_lock = threading.Lock()
 _sentiment_analyzer_singleton: Optional[SentimentAnalyzer] = None
+_sentiment_analyzer_lock = threading.Lock()
 _default_metrics_collector: Optional[MetricsCollector] = None
 _benchmark_metrics_collector: Optional[MetricsCollector] = None
 
@@ -148,21 +150,29 @@ def get_debug_mode(
 def get_vector_search(
     qdrant_client: QdrantClient = Depends(get_qdrant_client),
 ) -> VectorSearch:
-    """벡터 검색 의존성 (싱글톤 — FastEmbed Dense+Sparse, 초기화 비용 재사용)"""
+    """벡터 검색 의존성 (싱글톤 + DCL — 동시 초기화/캐시 race 방지)"""
     global _vector_search_singleton
-    if _vector_search_singleton is None:
+    if _vector_search_singleton is not None:
+        return _vector_search_singleton
+    with _vector_search_lock:
+        if _vector_search_singleton is not None:
+            return _vector_search_singleton
         _vector_search_singleton = VectorSearch(
             qdrant_client=qdrant_client,
             collection_name=Config.COLLECTION_NAME,
         )
-    return _vector_search_singleton
+        return _vector_search_singleton
 
 
 def get_sentiment_analyzer(
     vector_search: VectorSearch = Depends(get_vector_search),
 ) -> SentimentAnalyzer:
-    """감성 분석기 의존성 (싱글톤 — HF pipeline 로딩 비용 재사용)"""
+    """감성 분석기 의존성 (싱글톤 + DCL — HF pipeline 로딩 비용 재사용)"""
     global _sentiment_analyzer_singleton
-    if _sentiment_analyzer_singleton is None:
+    if _sentiment_analyzer_singleton is not None:
+        return _sentiment_analyzer_singleton
+    with _sentiment_analyzer_lock:
+        if _sentiment_analyzer_singleton is not None:
+            return _sentiment_analyzer_singleton
         _sentiment_analyzer_singleton = SentimentAnalyzer(vector_search=vector_search)
-    return _sentiment_analyzer_singleton
+        return _sentiment_analyzer_singleton

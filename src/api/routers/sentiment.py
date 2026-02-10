@@ -5,13 +5,12 @@
 import logging
 import time
 from fastapi import APIRouter, HTTPException, Depends
-from typing import List, Union
+from typing import List
 
 from ...sentiment_analysis import SentimentAnalyzer
 from ...models import (
-    SentimentAnalysisRequest, 
+    SentimentAnalysisRequest,
     SentimentAnalysisResponse,
-    SentimentAnalysisDisplayResponse,
     SentimentAnalysisBatchRequest,
     SentimentAnalysisBatchResponse,
     DebugInfo
@@ -23,7 +22,7 @@ from ...cache import acquire_lock
 router = APIRouter()
 
 
-@router.post("/analyze", response_model=Union[SentimentAnalysisResponse, SentimentAnalysisDisplayResponse])
+@router.post("/analyze", response_model=SentimentAnalysisResponse)
 async def analyze_sentiment(
     request: SentimentAnalysisRequest,
     analyzer: SentimentAnalyzer = Depends(get_sentiment_analyzer),
@@ -83,31 +82,22 @@ async def analyze_sentiment(
                         status="skipped",
                     )
                     
-                    # SKIP 응답 (기존 응답 형식 유지하되 skipped 플래그 추가)
-                    if debug:
-                        return SentimentAnalysisResponse(
-                            restaurant_id=request.restaurant_id,
-                            restaurant_name=getattr(request, "restaurant_name", None),
-                            positive_count=0,
-                            negative_count=0,
-                            neutral_count=0,
-                            total_count=len(request.reviews),
-                            positive_ratio=0,
-                            negative_ratio=0,
-                            neutral_ratio=0,
-                            debug=DebugInfo(
-                                request_id=request_id,
-                                processing_time_ms=(time.time() - start_time) * 1000,
-                            ),
-                        )
-                    else:
-                        # SKIP된 경우에도 기본 응답 반환 (클라이언트 호환성)
-                        return SentimentAnalysisDisplayResponse(
-                            restaurant_id=request.restaurant_id,
-                            restaurant_name=getattr(request, "restaurant_name", None),
-                            positive_ratio=0,
-                            negative_ratio=0,
-                        )
+                    # SKIP 응답 (항상 SentimentAnalysisResponse, debug 시에만 debug 필드 추가)
+                    return SentimentAnalysisResponse(
+                        restaurant_id=request.restaurant_id,
+                        restaurant_name=getattr(request, "restaurant_name", None),
+                        positive_count=0,
+                        negative_count=0,
+                        neutral_count=0,
+                        total_count=len(request.reviews),
+                        positive_ratio=0,
+                        negative_ratio=0,
+                        neutral_ratio=0,
+                        debug=DebugInfo(
+                            request_id=request_id,
+                            processing_time_ms=(time.time() - start_time) * 1000,
+                        ) if debug else None,
+                    )
             
             # 대표 벡터 기반 TOP-K 방식 사용 (analyze_async: SENTIMENT_CLASSIFIER_USE_THREAD/SENTIMENT_LLM_ASYNC 토글 적용)
             result = await analyzer.analyze_async(
@@ -127,25 +117,17 @@ async def analyze_sentiment(
             # TTFUR = t1 - t0 (요청 수신 시각 t0 → 응답 반환 직전 t1)
             metrics.record_llm_ttft(analysis_type="sentiment", ttft_ms=processing_time_ms)
 
-            # 디버그 모드에 따라 응답 반환 (restaurant_name은 요청에서 반환)
+            # 항상 SentimentAnalysisResponse 반환, debug 시에만 debug 필드 추가
             result["restaurant_name"] = getattr(request, "restaurant_name", None)
-            if debug:
-                return SentimentAnalysisResponse(
-                    **result,
-                    debug=DebugInfo(
-                        request_id=request_id,
-                        processing_time_ms=(time.time() - start_time) * 1000,
-                        tokens_used=result.get("tokens_used"),
-                        model_version=result.get("model_version"),
-                    )
-                )
-            else:
-                return SentimentAnalysisDisplayResponse(
-                    restaurant_id=result["restaurant_id"],
-                    restaurant_name=result.get("restaurant_name"),
-                    positive_ratio=result["positive_ratio"],
-                    negative_ratio=result["negative_ratio"],
-                )
+            return SentimentAnalysisResponse(
+                **result,
+                debug=DebugInfo(
+                    request_id=request_id,
+                    processing_time_ms=(time.time() - start_time) * 1000,
+                    tokens_used=result.get("tokens_used"),
+                    model_version=result.get("model_version"),
+                ) if debug else None,
+            )
     except RuntimeError as e:
         # 락 획득 실패 (중복 실행 방지)
         if "중복 실행 방지" in str(e):
@@ -171,9 +153,11 @@ async def analyze_sentiment_batch(
     request: SentimentAnalysisBatchRequest,
     analyzer: SentimentAnalyzer = Depends(get_sentiment_analyzer),
     metrics: MetricsCollector = Depends(get_metrics_collector),
+    debug: bool = Depends(get_debug_mode),
 ):
     """
     여러 레스토랑의 **전체 리뷰**를 sentiment 모델로 분류하여 결과를 반환합니다.
+    응답은 항상 restaurant_id, positive_count, negative_count 등 동일 구조. X-Debug: true 시에만 각 항목에 debug 필드 추가.
     
     Args:
         request: 배치 감성 분석 요청
@@ -182,22 +166,24 @@ async def analyze_sentiment_batch(
                 - reviews: 리뷰 리스트 (id, restaurant_id, content, created_at 필수)
     
     Returns:
-        각 레스토랑별 감성 분석 결과 리스트
+        각 레스토랑별 감성 분석 결과 리스트 (동일 스키마, debug 시에만 debug 필드 포함)
     """
     start_time = time.time()
     try:
         results = await analyzer.analyze_multiple_restaurants_async(restaurants_data=request.restaurants)
         # 각 결과에 restaurant_name 병합 (요청 항목 순서 대응)
         restaurants_list = request.restaurants
-        for i, r in enumerate(results):
-            if i < len(restaurants_list):
-                item = restaurants_list[i]
-                r["restaurant_name"] = item.get("restaurant_name") if isinstance(item, dict) else getattr(item, "restaurant_name", None)
-            else:
-                r["restaurant_name"] = None
-        # TTFUR = t1 - t0 (요청 수신 시각 t0 → 응답 반환 직전 t1)
         elapsed_ms = (time.time() - start_time) * 1000
         metrics.record_llm_ttft(analysis_type="sentiment", ttft_ms=elapsed_ms)
+
+        if debug:
+            debug_info = DebugInfo(processing_time_ms=elapsed_ms)
+            for r in results:
+                r["debug"] = debug_info
+        else:
+            for r in results:
+                r["debug"] = None
+
         return SentimentAnalysisBatchResponse(results=[
             SentimentAnalysisResponse(**result) for result in results
         ])
