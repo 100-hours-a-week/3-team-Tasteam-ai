@@ -185,7 +185,7 @@ def _build_category_result(result: Dict[str, Any], restaurant_id: int, restauran
             cat_summary = result.get(cat, {}).get("summary", "")
             if cat_summary:
                 summaries.append(cat_summary)
-        overall_summary = " ".join(summaries) if summaries else "요약할 리뷰가 없습니다."
+        overall_summary = " ".join(summaries) if summaries else "요약할 리뷰가 없어요."
     from ...models import CategorySummary
     categories_dict = {}
     for cat in ["service", "price", "food"]:
@@ -465,7 +465,7 @@ async def summarize_reviews(
                 cat_summary = result.get(cat, {}).get("summary", "")
                 if cat_summary:
                     summaries.append(cat_summary)
-            overall_summary = " ".join(summaries) if summaries else "요약할 리뷰가 없습니다."
+            overall_summary = " ".join(summaries) if summaries else "요약할 리뷰가 없어요."
         
         # categories를 CategorySummary 모델로 변환
         from ...models import CategorySummary

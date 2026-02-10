@@ -78,12 +78,13 @@ def summarize_aspects_new(
 }
 
 규칙:
+- 말투: 모든 summary, bullets, overall_summary는 반드시 "~해요" 체로 쓴다(예: 좋아요, 있어요, 없어요).
 - 각 카테고리 summary: 1문장, 과장 금지
 - bullets: 3~5개, 중복 제거, 구체적으로
 - evidence: 근거로 쓴 리뷰의 인덱스(각 카테고리 리스트에서 0-based)
 - price는 '가격 숫자'가 없으면 '가성비/양/구성/만족감' 같은 우회표현을 근거로 요약하라.
 - overall_summary는 2~3문장으로 종합 요약하라.
-- 근거(입력 리뷰)에 없는 내용은 추측하지 말고 "언급이 적다"라고 표현하라.
+- 근거(입력 리뷰)에 없는 내용은 추측하지 말고 "언급이 적어요"처럼 해요체로 표현하라.
 """
 
     if not llm_utils:
@@ -108,7 +109,7 @@ def summarize_aspects_new(
             "service": {"summary": "", "bullets": [], "evidence": []},
             "price": {"summary": "", "bullets": [], "evidence": []},
             "food": {"summary": "", "bullets": [], "evidence": []},
-            "overall_summary": {"summary": "요약 생성에 실패했습니다."}
+            "overall_summary": {"summary": "요약 생성에 실패했어요."}
         }
 
     # JSON 파싱
@@ -148,7 +149,7 @@ def summarize_aspects_new(
                 "service": {"summary": "", "bullets": [], "evidence": []},
                 "price": {"summary": "", "bullets": [], "evidence": []},
                 "food": {"summary": "", "bullets": [], "evidence": []},
-                "overall_summary": {"summary": "요약 생성에 실패했습니다."}
+                "overall_summary": {"summary": "요약 생성에 실패했어요."}
             }
 
     # Evidence 인덱스를 실제 evidence 객체로 변환
@@ -183,11 +184,11 @@ def summarize_aspects_new(
     # evidence는 이제 객체 리스트이므로 snippet을 직접 가져옴
     ev_texts = [ev.get("snippet", "") for ev in price_ev if isinstance(ev, dict)] if price_ev else []
     if ev_texts and not any(_has_price_signal(t) for t in ev_texts):
-        out["price"]["summary"] = "가격 관련 언급이 많지 않아, 전반적인 만족감/구성(양 등) 중심으로만 해석 가능합니다."
+        out["price"]["summary"] = "가격 관련 언급이 많지 않아요. 전반적인 만족감이나 구성(양 등) 중심으로만 해석 가능해요."
         # bullets도 너무 단정적으로 쓰지 않게 최소화
         out["price"]["bullets"] = [
-            "가격을 직접 언급한 리뷰가 많지 않습니다.",
-            "대신 만족/구성/양(푸짐함) 관련 표현이 간접적으로 나타납니다."
+            "가격을 직접 언급한 리뷰가 많지 않아요.",
+            "대신 만족/구성/양(푸짐함) 관련 표현이 간접적으로 나타나요."
         ]
 
     return out
@@ -227,12 +228,13 @@ async def summarize_aspects_new_async(
 }
 
 규칙:
+- 말투: 모든 summary, bullets, overall_summary는 반드시 "~해요" 체로 쓴다(예: 좋아요, 있어요, 없어요).
 - 각 카테고리 summary: 1문장, 과장 금지
 - bullets: 3~5개, 중복 제거, 구체적으로
 - evidence: 근거로 쓴 리뷰의 인덱스(각 카테고리 리스트에서 0-based)
 - price는 '가격 숫자'가 없으면 '가성비/양/구성/만족감' 같은 우회표현을 근거로 요약하라.
 - overall_summary는 2~3문장으로 종합 요약하라.
-- 근거(입력 리뷰)에 없는 내용은 추측하지 말고 "언급이 적다"라고 표현하라.
+- 근거(입력 리뷰)에 없는 내용은 추측하지 말고 "언급이 적어요"처럼 해요체로 표현하라.
 """
 
     if not llm_utils:
@@ -254,7 +256,7 @@ async def summarize_aspects_new_async(
             "service": {"summary": "", "bullets": [], "evidence": []},
             "price": {"summary": "", "bullets": [], "evidence": []},
             "food": {"summary": "", "bullets": [], "evidence": []},
-            "overall_summary": {"summary": "요약 생성에 실패했습니다."}
+            "overall_summary": {"summary": "요약 생성에 실패했어요."}
         }
 
     try:
@@ -286,7 +288,7 @@ async def summarize_aspects_new_async(
                 "service": {"summary": "", "bullets": [], "evidence": []},
                 "price": {"summary": "", "bullets": [], "evidence": []},
                 "food": {"summary": "", "bullets": [], "evidence": []},
-                "overall_summary": {"summary": "요약 생성에 실패했습니다."}
+                "overall_summary": {"summary": "요약 생성에 실패했어요."}
             }
 
     evidence_data_map = {
@@ -311,10 +313,10 @@ async def summarize_aspects_new_async(
     price_ev = out.get("price", {}).get("evidence", [])
     ev_texts = [ev.get("snippet", "") for ev in price_ev if isinstance(ev, dict)] if price_ev else []
     if ev_texts and not any(_has_price_signal(t) for t in ev_texts):
-        out["price"]["summary"] = "가격 관련 언급이 많지 않아, 전반적인 만족감/구성(양 등) 중심으로만 해석 가능합니다."
+        out["price"]["summary"] = "가격 관련 언급이 많지 않아요. 전반적인 만족감이나 구성(양 등) 중심으로만 해석 가능해요."
         out["price"]["bullets"] = [
-            "가격을 직접 언급한 리뷰가 많지 않습니다.",
-            "대신 만족/구성/양(푸짐함) 관련 표현이 간접적으로 나타납니다."
+            "가격을 직접 언급한 리뷰가 많지 않아요.",
+            "대신 만족/구성/양(푸짐함) 관련 표현이 간접적으로 나타나요."
         ]
 
     return out
