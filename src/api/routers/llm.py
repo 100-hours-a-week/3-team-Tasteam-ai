@@ -32,6 +32,149 @@ from ...aspect_seeds import DEFAULT_SERVICE_SEEDS, DEFAULT_PRICE_SEEDS, DEFAULT_
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
+_CATEGORY_KEYWORDS = {
+    "service": ["서비스", "친절", "응대", "직원", "사장", "사장님", "불친절", "불편", "대응", "예약", "안내"],
+    "price": ["가격", "가성비", "저렴", "비싸", "비쌈", "합리", "구성", "양", "푸짐", "리필", "무한", "혜자", "할인"],
+    "food": ["맛", "음식", "메뉴", "신선", "양념", "간", "재료", "식감", "국물", "고기", "면", "디저트"],
+}
+
+_BROAD_QUERY = {
+    "service": "서비스 친절 응대 직원 사장님 안내 예약",
+    "price": "가격 가성비 합리 구성 양 푸짐 리필 무한 만족",
+    "food": "음식 맛 메뉴 신선 재료 식감 양념 분위기",
+}
+
+
+def _text_keyword_hit_ratio(texts: List[str], keywords: List[str], *, top_n: int = 8) -> float:
+    """상위 N개 텍스트 중 키워드가 1개라도 포함된 비율."""
+    xs = [t for t in (texts or []) if t and str(t).strip()]
+    if not xs:
+        return 0.0
+    n = min(len(xs), max(1, top_n))
+    hits = 0
+    for t in xs[:n]:
+        if any(k in t for k in keywords):
+            hits += 1
+    return hits / n
+
+
+def _dedup_hits_by_review_id(hits: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """hit(payload, score) 리스트를 review_id/id 기준으로 dedup."""
+    out: List[Dict[str, Any]] = []
+    seen: set = set()
+    for h in hits or []:
+        payload = (h or {}).get("payload", {}) or {}
+        rid = payload.get("review_id") or payload.get("id") or (h or {}).get("id")
+        key = str(rid) if rid is not None else (payload.get("content") or "")
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(h)
+    return out
+
+
+def _hits_to_texts(hits: List[Dict[str, Any]]) -> List[str]:
+    texts: List[str] = []
+    for h in hits or []:
+        payload = (h or {}).get("payload", {}) or {}
+        texts.append(payload.get("content", "") or "")
+    return texts
+
+
+def _recent_payloads_to_hits(payloads: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """VectorSearch.get_recent_restaurant_reviews 결과(payload 리스트)를 hit 형태로 래핑."""
+    hits: List[Dict[str, Any]] = []
+    for p in payloads or []:
+        if not isinstance(p, dict):
+            continue
+        hits.append({"payload": p, "score": 0.0})
+    return hits
+
+
+def _retrieve_category_hits_accuracy_first(
+    *,
+    vector_search: VectorSearch,
+    category_name: str,
+    query_text: str,
+    restaurant_id: int,
+    final_limit: int,
+) -> List[Dict[str, Any]]:
+    """
+    정확도 위주의 카테고리별 리뷰 회수:
+    1) Dense-only로 후보 확보(큰 topK, min_score≈0)
+    2) Dense 결과가 부족/불명확하면 Hybrid(RRF) 수행
+    3) 여전히 부족하면 카테고리만 넓은 쿼리 1회 재검색 → 그래도 부족하면 최근 리뷰 N개로 채움
+    """
+    k_min = min(3, max(1, final_limit))
+    # 1차 Dense-only 후보: LLM에 넣을 final_limit보다 넓게
+    dense_candidate_limit = max(final_limit * 8, 50)
+    dense_hits = vector_search._query_dense_only(
+        query_text=query_text,
+        restaurant_id=restaurant_id,
+        limit=dense_candidate_limit,
+        min_score=0.0,
+    )
+
+    keywords = _CATEGORY_KEYWORDS.get(category_name, [])
+    dense_texts = _hits_to_texts(dense_hits)
+    dense_ratio = _text_keyword_hit_ratio(dense_texts, keywords, top_n=8) if keywords else 0.0
+    dense_top_score = float(dense_hits[0].get("score", 0.0)) if dense_hits else 0.0
+    dense_flat = False
+    if len(dense_hits) >= 5:
+        s0 = float(dense_hits[0].get("score", 0.0) or 0.0)
+        s4 = float(dense_hits[4].get("score", 0.0) or 0.0)
+        dense_flat = (s0 - s4) < 0.02
+
+    # 2차 Hybrid 필요 조건 (정확도 관점: 부족/불명확/카테고리 키워드 적합도 낮음)
+    need_hybrid = (len(dense_hits) < k_min) or (dense_ratio < 0.25) or (dense_top_score < 0.25) or dense_flat
+    hybrid_hits: List[Dict[str, Any]] = []
+    if need_hybrid:
+        hybrid_hits = vector_search.query_hybrid_search(
+            query_text=query_text,
+            restaurant_id=restaurant_id,
+            limit=max(final_limit * 3, 30),
+            fallback_min_score=Config.FALLBACK_MIN_SCORE,
+            dense_prefetch_limit=Config.DENSE_PREFETCH_LIMIT,
+            sparse_prefetch_limit=Config.SPARSE_PREFETCH_LIMIT,
+        )
+
+    # Dense vs Hybrid 중 더 적합한 쪽 선택(키워드 적합도 우선, 그 다음 결과 수)
+    best_hits = dense_hits
+    if hybrid_hits:
+        hybrid_texts = _hits_to_texts(hybrid_hits)
+        hybrid_ratio = _text_keyword_hit_ratio(hybrid_texts, keywords, top_n=8) if keywords else 0.0
+        if (hybrid_ratio > dense_ratio) or (len(dense_hits) < k_min and len(hybrid_hits) >= len(dense_hits)):
+            best_hits = hybrid_hits
+
+    best_hits = _dedup_hits_by_review_id(best_hits)
+
+    # 3차: 부족하면 넓은 쿼리 1회
+    if len(best_hits) < k_min:
+        broad = _BROAD_QUERY.get(category_name)
+        if broad:
+            broad_query = f"{query_text} {broad}"
+            retry_hits = vector_search.query_hybrid_search(
+                query_text=broad_query,
+                restaurant_id=restaurant_id,
+                limit=max(final_limit * 3, 30),
+                fallback_min_score=Config.FALLBACK_MIN_SCORE,
+                dense_prefetch_limit=Config.DENSE_PREFETCH_LIMIT,
+                sparse_prefetch_limit=Config.SPARSE_PREFETCH_LIMIT,
+            )
+            merged = _dedup_hits_by_review_id(best_hits + retry_hits)
+            best_hits = merged
+
+    # 4차: 그래도 부족하면 최근 리뷰로 채움(마지막 수단)
+    if len(best_hits) < k_min:
+        recent_payloads = vector_search.get_recent_restaurant_reviews(
+            restaurant_id=restaurant_id,
+            limit=max(final_limit, k_min),
+        )
+        recent_hits = _recent_payloads_to_hits(recent_payloads)
+        best_hits = _dedup_hits_by_review_id(best_hits + recent_hits)
+
+    return best_hits
+
 
 def _build_category_result(result: Dict[str, Any], restaurant_id: int, restaurant_name: Optional[str] = None) -> Dict[str, Any]:
     """요약 파이프라인 결과를 SummaryDisplayResponse용 dict로 변환."""
@@ -79,13 +222,12 @@ async def _process_one_restaurant_async(
         query_text = " ".join(query_seeds)
         async with search_sem:
             hits = await asyncio.to_thread(
-                vector_search.query_hybrid_search,
-                query_text,
+                _retrieve_category_hits_accuracy_first,
+                vector_search=vector_search,
+                category_name=name,
+                query_text=query_text,
                 restaurant_id=restaurant_id,
-                limit=request.limit,
-                fallback_min_score=Config.FALLBACK_MIN_SCORE,
-                dense_prefetch_limit=Config.DENSE_PREFETCH_LIMIT,
-                sparse_prefetch_limit=Config.SPARSE_PREFETCH_LIMIT,
+                final_limit=request.limit,
             )
         contents = []
         data_list = []
@@ -274,13 +416,12 @@ async def summarize_reviews(
             query_text = " ".join(query_seeds)
             
             # 하이브리드 검색 수행 (Config 하이브리드 인자 사용, Vector API와 동일)
-            hits = vector_search.query_hybrid_search(
+            hits = _retrieve_category_hits_accuracy_first(
+                vector_search=vector_search,
+                category_name=name,
                 query_text=query_text,
                 restaurant_id=request.restaurant_id,
-                limit=request.limit,
-                fallback_min_score=Config.FALLBACK_MIN_SCORE,
-                dense_prefetch_limit=Config.DENSE_PREFETCH_LIMIT,
-                sparse_prefetch_limit=Config.SPARSE_PREFETCH_LIMIT,
+                final_limit=request.limit,
             )
             
             # 카테고리별 리스트 초기화
@@ -626,13 +767,12 @@ async def summarize_reviews_batch(
                 query_text = " ".join(query_seeds)
                 
                 # 하이브리드 검색 수행 (Config 하이브리드 인자 사용, Vector API와 동일)
-                hits = vector_search.query_hybrid_search(
+                hits = _retrieve_category_hits_accuracy_first(
+                    vector_search=vector_search,
+                    category_name=name,
                     query_text=query_text,
                     restaurant_id=restaurant_id,
-                    limit=request.limit,
-                    fallback_min_score=Config.FALLBACK_MIN_SCORE,
-                    dense_prefetch_limit=Config.DENSE_PREFETCH_LIMIT,
-                    sparse_prefetch_limit=Config.SPARSE_PREFETCH_LIMIT,
+                    final_limit=request.limit,
                 )
                 
                 # 카테고리별 리스트 초기화
