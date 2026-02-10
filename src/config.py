@@ -112,12 +112,19 @@ class _InferenceConfig:
 
 # --- Retrieval (Qdrant, embedding, top_k, rerank 등) ---
 class _RetrievalConfig:
-    """검색/검열: Qdrant URL, collection, top_k, rerank_k, aspect seed, 벡터 on_disk"""
+    """검색/검열: Qdrant URL, collection, top_k, rerank_k, aspect seed, 벡터 on_disk. 하이브리드 인자는 Summary·Vector API 공통."""
     QDRANT_URL: Optional[str] = os.getenv("QDRANT_URL", "./qdrant_data")
     QDRANT_VECTORS_ON_DISK: bool = os.getenv("QDRANT_VECTORS_ON_DISK", "false").lower() == "true"
     COLLECTION_NAME: str = os.getenv("COLLECTION_NAME", DEFAULT_COLLECTION_NAME)
+    # 임베딩/HF 캐시: None이면 라이브러리 기본(/tmp 등). 설정 시 공유 볼륨 권장 (재시작·동시성 안정)
+    EMBEDDING_CACHE_DIR: Optional[str] = os.getenv("EMBEDDING_CACHE_DIR", os.getenv("FASTEMBED_CACHE_PATH"))
     SCORE_THRESHOLD: float = float(os.getenv("SCORE_THRESHOLD", str(DEFAULT_SCORE_THRESHOLD)))
     LLM_KEYWORDS: list = DEFAULT_LLM_KEYWORDS
+
+    # 하이브리드 검색 (Summary·Vector API 공통. Summary는 이 값을 전달, Vector API는 요청 생략 시 이 값을 기본으로 사용)
+    DENSE_PREFETCH_LIMIT: int = int(os.getenv("DENSE_PREFETCH_LIMIT", "200"))
+    SPARSE_PREFETCH_LIMIT: int = int(os.getenv("SPARSE_PREFETCH_LIMIT", "300"))
+    FALLBACK_MIN_SCORE: float = float(os.getenv("FALLBACK_MIN_SCORE", "0.2"))
 
     ENABLE_SENTIMENT_SAMPLING: bool = os.getenv("ENABLE_SENTIMENT_SAMPLING", "false").lower() == "true"
     SENTIMENT_RECENT_TOP_K: int = int(os.getenv("SENTIMENT_RECENT_TOP_K", "100"))

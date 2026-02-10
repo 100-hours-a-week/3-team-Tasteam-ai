@@ -7,12 +7,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
+import asyncio
 from contextlib import asynccontextmanager
 import logging
 import sys
 import uuid
 
 from .routers import sentiment, vector, llm, test
+from .dependencies import get_qdrant_client, get_vector_search, get_sentiment_analyzer
 from ..cpu_monitor import get_cpu_monitor
 from ..metrics_collector import app_queue_depth_inc, app_queue_depth_dec
 
@@ -45,20 +47,43 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def _warm_up_services():
+    """모델·토크나이저·첫 inference까지 강제 warm-up (첫 요청에서 로드 방지)."""
+    try:
+        client = get_qdrant_client()
+        vector_search = get_vector_search(client)
+        list(vector_search.encoder.encode(["warmup"]))
+        logger.info("VectorSearch(임베딩) warm-up 완료")
+        analyzer = get_sentiment_analyzer(vector_search)
+        pl = analyzer._get_sentiment_pipeline()
+        if pl is not None:
+            pl("웜업")
+        logger.info("Sentiment pipeline warm-up 완료")
+    except Exception as e:
+        logger.warning("warm-up 중 일부 실패 (첫 요청에서 로드될 수 있음): %s", e)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """애플리케이션 생명주기 관리"""
-    # 시작 시 초기화
     logger.info("FastAPI 애플리케이션 시작")
-    
+    app.state.ready = False
+
     # CPU 모니터 시작 (Config.CPU_MONITOR_ENABLE=true일 때만)
     cpu_monitor = get_cpu_monitor()
     if cpu_monitor:
         cpu_monitor.start()
-    
+
+    # 모델 + 토크나이저 + 첫 inference warm-up (블로킹이므로 스레드에서 실행)
+    try:
+        await asyncio.to_thread(_warm_up_services)
+        app.state.ready = True
+        logger.info("서비스 warm-up 완료, readiness=True")
+    except Exception as e:
+        logger.warning("warm-up 실패, /ready는 503 반환: %s", e)
+
     yield
-    
-    # 종료 시 정리
+
     if cpu_monitor:
         await cpu_monitor.stop()
     logger.info("FastAPI 애플리케이션 종료")
@@ -175,6 +200,15 @@ async def health():
         "status": "healthy",
         "version": "1.0.0",
     }
+
+
+@app.get("/ready")
+async def ready(request: Request):
+    """Readiness: warm-up 완료 후 200, 미완료 시 503 (K8s readinessProbe 등)."""
+    if getattr(request.app.state, "ready", False):
+        return {"status": "ready"}
+    from fastapi.responses import Response
+    return Response(content='{"status":"not ready"}', status_code=503, media_type="application/json")
 
 
 # Prometheus 메트릭 (요청 수, 지연 시간 등 자동 수집, 패키지 설치 시에만 노출)

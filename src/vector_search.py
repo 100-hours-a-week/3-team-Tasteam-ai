@@ -3,6 +3,8 @@
 - Dense / Sparse 모델명은 Config.EMBEDDING_MODEL, Config.SPARSE_EMBEDDING_MODEL 사용
 """
 
+import os
+import threading
 import uuid
 import hashlib
 import logging
@@ -59,6 +61,9 @@ class VectorSearch:
             qdrant_client: Qdrant 클라이언트
             collection_name: 컬렉션 이름
         """
+        # 캐시 경로: EMBEDDING_CACHE_DIR 설정 시 공유 볼륨 등 안정 경로 사용 (/tmp 휘발 방지)
+        if getattr(Config, "EMBEDDING_CACHE_DIR", None):
+            os.environ["FASTEMBED_CACHE_PATH"] = Config.EMBEDDING_CACHE_DIR
         # FastEmbed Dense (Config.EMBEDDING_MODEL)
         self._dense_model = TextEmbedding(Config.EMBEDDING_MODEL)
         logger.info(f"Dense 벡터 모델 로드 완료: {Config.EMBEDDING_MODEL}")
@@ -69,8 +74,9 @@ class VectorSearch:
         self.client = qdrant_client
         self.collection_name = collection_name
         
-        # Sparse 벡터 모델 캐싱 (초기화 비용이 크므로 재사용)
+        # Sparse 벡터 모델 캐싱 (초기화 비용이 크므로 재사용, 동시 초기화 방지용 락)
         self._sparse_model = None
+        self._sparse_lock = threading.Lock()
         
         # 컬렉션이 없으면 생성 (하이브리드 검색: Dense + Sparse)
         try:
@@ -108,17 +114,22 @@ class VectorSearch:
             self._get_sparse_model()
 
     def _get_sparse_model(self):
-        """Sparse 벡터 모델 lazy 로드 (한 번만, 로그 1회). --no-upload 시에도 __init__에서 컬렉션에 sparse 있으면 호출해 로그 출력."""
+        """Sparse 벡터 모델 lazy 로드 (DCL — 동시 초기화/캐시 race 방지)."""
         if self._sparse_model is not None:
             return self._sparse_model
-        try:
-            self._sparse_model = SparseTextEmbedding(Config.SPARSE_EMBEDDING_MODEL)
-            logger.info(f"Sparse 벡터 모델 로드 완료: {Config.SPARSE_EMBEDDING_MODEL}")
-            return self._sparse_model
-        except Exception as e:
-            logger.warning(f"Sparse 벡터 모델 로드 실패, Dense만 사용: {e}")
-            self._sparse_model = None
-            return None
+        with self._sparse_lock:
+            if self._sparse_model is not None:
+                return self._sparse_model
+            try:
+                if getattr(Config, "EMBEDDING_CACHE_DIR", None):
+                    os.environ["FASTEMBED_CACHE_PATH"] = Config.EMBEDDING_CACHE_DIR
+                self._sparse_model = SparseTextEmbedding(Config.SPARSE_EMBEDDING_MODEL)
+                logger.info(f"Sparse 벡터 모델 로드 완료: {Config.SPARSE_EMBEDDING_MODEL}")
+                return self._sparse_model
+            except Exception as e:
+                logger.warning(f"Sparse 벡터 모델 로드 실패, Dense만 사용: {e}")
+                self._sparse_model = None
+                return None
 
     def _get_point_id(self, restaurant_id: Union[int, str], review_id: Union[int, str]) -> str:
         """
@@ -1081,41 +1092,20 @@ class VectorSearch:
         
         return unique_strengths
     
-    def query_similar_reviews(
+    def _query_dense_only(
         self,
         query_text: str,
         restaurant_id: Optional[Union[int, str]] = None,
-        limit: int = 3,
-        min_score: float = 0.0,
+        limit: int = 20,
+        min_score: float = 0.2,
         food_category_id: Optional[int] = None,
-        use_hybrid: bool = False,
     ) -> List[Dict]:
         """
-        의미 기반으로 유사한 리뷰를 검색합니다 ( 기반).
-        
-        Args:
-            query_text: 검색 쿼리 텍스트
-            restaurant_id: 필터링할 레스토랑 ID (None이면 전체)
-            limit: 반환할 최대 개수
-            min_score: 최소 유사도 점수
-            food_category_id: 음식 카테고리 ID 필터 (선택사항, strength 기능용)
-            use_hybrid: 하이브리드 검색 사용 여부 (Dense + Sparse)
-            
-        Returns:
-            검색 결과 리스트 (payload와 score 포함,  컬럼명)
+        Dense 단독 검색. 하이브리드 불가 시 폴백으로만 사용 (단일 벡터 컬렉션, Sparse 실패 등).
+        min_score 기본값 0.2.
         """
-        if use_hybrid:
-            return self.query_hybrid_search(
-                query_text=query_text,
-                restaurant_id=restaurant_id,
-                limit=limit,
-                min_score=min_score,
-                food_category_id=food_category_id,
-            )
-        
         try:
             query_vector = self.encoder.encode(query_text).tolist()
-            
             filter_conditions = []
             if restaurant_id:
                 restaurant_id_str = str(restaurant_id) if isinstance(restaurant_id, int) else restaurant_id
@@ -1125,8 +1115,6 @@ class VectorSearch:
                         match=models.MatchValue(value=restaurant_id_str)
                     )
                 )
-            
-            # food_category_id 필터 (strength 기능용)
             if food_category_id:
                 filter_conditions.append(
                     models.FieldCondition(
@@ -1134,10 +1122,7 @@ class VectorSearch:
                         match=models.MatchValue(value=food_category_id)
                     )
                 )
-            
             query_filter = models.Filter(must=filter_conditions) if filter_conditions else None
-            
-            # named 벡터(dense+sparse) 컬렉션이면 using="dense" 필요. 단일 벡터면 생략.
             qp_kw = {
                 "collection_name": self.collection_name,
                 "query": query_vector,
@@ -1147,52 +1132,73 @@ class VectorSearch:
             if not self._is_collection_single_vector():
                 qp_kw["using"] = "dense"
             hits = self.client.query_points(**qp_kw).points
-            
             results = []
             for hit in hits:
                 if hit.score and hit.score >= min_score:
-                    results.append({
-                        "payload": hit.payload,
-                        "score": hit.score
-                    })
-            
+                    results.append({"payload": hit.payload, "score": hit.score})
             return results
         except Exception as e:
-            logger.error(f"리뷰 검색 중 오류: {str(e)}")
+            logger.error(f"Dense 폴백 검색 중 오류: {str(e)}")
             return []
+
+    def query_similar_reviews(
+        self,
+        query_text: str,
+        restaurant_id: Optional[Union[int, str]] = None,
+        limit: int = 20,
+        fallback_min_score: float = 0.2,
+        dense_prefetch_limit: int = 200,
+        sparse_prefetch_limit: int = 300,
+        food_category_id: Optional[int] = None,
+    ) -> List[Dict]:
+        """
+        벡터 검색 (하이브리드 통일). 하이브리드 불가 시에만 Dense 폴백. fallback_min_score는 폴백 경로에서만 적용.
+        """
+        return self.query_hybrid_search(
+            query_text=query_text,
+            restaurant_id=restaurant_id,
+            limit=limit,
+            fallback_min_score=fallback_min_score,
+            dense_prefetch_limit=dense_prefetch_limit,
+            sparse_prefetch_limit=sparse_prefetch_limit,
+            food_category_id=food_category_id,
+        )
     
     def query_hybrid_search(
         self,
         query_text: str,
         restaurant_id: Optional[Union[int, str]] = None,
-        limit: int = 5,
-        min_score: float = 0.0,
+        limit: int = 20,
+        fallback_min_score: float = 0.2,
+        dense_prefetch_limit: int = 200,
+        sparse_prefetch_limit: int = 300,
         food_category_id: Optional[int] = None,
     ) -> List[Dict]:
         """
-        하이브리드 검색 (Dense + Sparse 벡터)
+        하이브리드 검색 (Dense + Sparse 벡터).
+        Dense/Sparse 각각 prefetch 후 RRF → 최종 limit개 반환. 폴백(Dense만) 시에만 fallback_min_score 적용.
         
         Args:
             query_text: 검색 쿼리 텍스트
             restaurant_id: 필터링할 레스토랑 ID
-            limit: 반환할 최대 개수
-            min_score: 최소 유사도 점수
+            limit: 최종 반환 최대 개수 (기본 20)
+            fallback_min_score: 폴백(Dense만) 경로에서의 최소 유사도 (기본 0.2)
+            dense_prefetch_limit: Dense prefetch 최대 개수 (기본 200)
+            sparse_prefetch_limit: Sparse prefetch 최대 개수 (기본 300)
             food_category_id: 음식 카테고리 ID 필터
             
         Returns:
             검색 결과 리스트 (payload와 score 포함)
         """
         try:
-            # 컬렉션이 단일 벡터 형식이면 하이브리드 검색 불가능
+            # 컬렉션이 단일 벡터 형식이면 하이브리드 검색 불가 → Dense 폴백
             if self._is_collection_single_vector():
-                # 단일 벡터 형식이면 일반 검색으로 폴백
-                return self.query_similar_reviews(
+                return self._query_dense_only(
                     query_text=query_text,
                     restaurant_id=restaurant_id,
                     limit=limit,
-                    min_score=min_score,
+                    min_score=fallback_min_score,
                     food_category_id=food_category_id,
-                    use_hybrid=False,
                 )
             
             # Dense 벡터 생성
@@ -1210,15 +1216,13 @@ class VectorSearch:
                     values=list(sparse_emb.values),
                 )
             except Exception as e:
-                logger.warning(f"Sparse 벡터 생성 실패, Dense만 사용: {e}")
-                # Sparse 벡터 생성 실패 시 Dense만 사용
-                return self.query_similar_reviews(
+                logger.warning(f"Sparse 벡터 생성 실패, Dense 폴백: {e}")
+                return self._query_dense_only(
                     query_text=query_text,
                     restaurant_id=restaurant_id,
                     limit=limit,
-                    min_score=min_score,
+                    min_score=fallback_min_score,
                     food_category_id=food_category_id,
-                    use_hybrid=False,
                 )
             
             # 필터 조건 구성
@@ -1242,7 +1246,7 @@ class VectorSearch:
             
             query_filter = models.Filter(must=filter_conditions) if filter_conditions else None
             
-            # 하이브리드 검색 (RRF - Reciprocal Rank Fusion)
+            # 하이브리드 검색 (RRF): Dense/Sparse prefetch 후보 → RRF → 최종 limit개
             try:
                 hits = self.client.query_points(
                     collection_name=self.collection_name,
@@ -1253,10 +1257,12 @@ class VectorSearch:
                         models.Prefetch(
                             query=dense_vector,
                             using="dense",
+                            limit=dense_prefetch_limit,
                         ),
                         models.Prefetch(
                             query=sparse_vector,
                             using="sparse",
+                            limit=sparse_prefetch_limit,
                         ),
                     ],
                     query_filter=query_filter,
@@ -1264,36 +1270,31 @@ class VectorSearch:
                     with_payload=True,
                 ).points
             except Exception as e:
-                # Sparse 벡터가 컬렉션에 없거나 하이브리드 검색이 지원되지 않는 경우
-                logger.warning(f"하이브리드 검색 실패 (Sparse 벡터 없음 또는 미지원): {e}, Dense만 사용")
-                return self.query_similar_reviews(
+                logger.warning(f"하이브리드 검색 실패 (Sparse 벡터 없음 또는 미지원): {e}, Dense 폴백")
+                return self._query_dense_only(
                     query_text=query_text,
                     restaurant_id=restaurant_id,
                     limit=limit,
-                    min_score=min_score,
+                    min_score=fallback_min_score,
                     food_category_id=food_category_id,
-                    use_hybrid=False,
                 )
             
             results = []
             for hit in hits:
-                if hit.score and hit.score >= min_score:
-                    results.append({
-                        "payload": hit.payload,
-                        "score": hit.score
-                    })
+                results.append({
+                    "payload": hit.payload,
+                    "score": hit.score if hit.score is not None else 0.0,
+                })
             
             return results
         except Exception as e:
             logger.error(f"하이브리드 검색 중 오류: {str(e)}")
-            # 폴백: Dense만 사용
-            return self.query_similar_reviews(
+            return self._query_dense_only(
                 query_text=query_text,
                 restaurant_id=restaurant_id,
                 limit=limit,
-                min_score=min_score,
+                min_score=fallback_min_score,
                 food_category_id=food_category_id,
-                use_hybrid=False,
             )
     
     def upsert_review(
@@ -1941,11 +1942,14 @@ def query_similar_reviews(
     restaurant_id: Optional[str] = None,
     collection_name: str = Config.COLLECTION_NAME,
     limit: int = 3,
-    min_score: float = 0.0,
+    fallback_min_score: float = 0.2,
+    dense_prefetch_limit: int = 200,
+    sparse_prefetch_limit: int = 300,
 ) -> List[Dict]:
     """
     의미 기반으로 유사한 리뷰를 검색하는 편의 함수.
     FastEmbed 기반 VectorSearch 사용 (encoder 인자 제거).
+    fallback_min_score는 폴백(Dense만) 경로에서만 적용.
     
     Args:
         qdrant_client: Qdrant 클라이언트
@@ -1953,13 +1957,22 @@ def query_similar_reviews(
         restaurant_id: 필터링할 레스토랑 ID (None이면 전체)
         collection_name: 컬렉션 이름
         limit: 반환할 최대 개수
-        min_score: 최소 유사도 점수
+        fallback_min_score: 폴백 경로에서의 최소 유사도 (기본 0.2)
+        dense_prefetch_limit: 하이브리드 Dense prefetch 개수 (기본 200)
+        sparse_prefetch_limit: 하이브리드 Sparse prefetch 개수 (기본 300)
         
     Returns:
         검색 결과 리스트 (payload와 score 포함)
     """
     vector_search = VectorSearch(qdrant_client=qdrant_client, collection_name=collection_name)
-    return vector_search.query_similar_reviews(query_text, restaurant_id, limit, min_score)
+    return vector_search.query_similar_reviews(
+        query_text,
+        restaurant_id,
+        limit,
+        fallback_min_score=fallback_min_score,
+        dense_prefetch_limit=dense_prefetch_limit,
+        sparse_prefetch_limit=sparse_prefetch_limit,
+    )
 
 
 # ==================== Phase 1: 대표 벡터 기반 비교군 선정 ====================

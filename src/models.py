@@ -6,6 +6,8 @@ from datetime import datetime
 from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, Field
 
+from .config import Config
+
 
 # ==================== 기본 데이터 모델 ( 기반) ====================
 
@@ -101,7 +103,6 @@ class SummaryRequest(BaseModel):
     restaurant_id: int = Field(..., description="레스토랑 ID")
     restaurant_name: Optional[str] = Field(None, description="레스토랑 이름 (응답에 그대로 반환)")
     limit: int = Field(10, ge=1, le=100, description="각 카테고리당 검색할 최대 리뷰 수")
-    min_score: float = Field(0.0, ge=0.0, le=1.0, description="최소 유사도 점수")
 
 
 class CategorySummary(BaseModel):
@@ -121,13 +122,12 @@ class SummaryDisplayResponse(BaseModel):
 
 
 class SummaryBatchRequest(BaseModel):
-    """배치 리뷰 요약 요청 모델. 하이브리드 검색 쿼리는 기본 시드만 사용. limit/min_score는 전체 레스토랑 공통."""
+    """배치 리뷰 요약 요청 모델. 하이브리드 검색 쿼리는 기본 시드만 사용. limit는 전체 레스토랑 공통."""
     restaurants: List[Dict[str, Any]] = Field(
         ...,
         description="레스토랑 데이터 리스트, 각 항목: restaurant_id(필수)."
     )
     limit: int = Field(10, ge=1, le=100, description="각 카테고리당 검색할 최대 리뷰 수 (전체 레스토랑 공통)")
-    min_score: float = Field(0.0, ge=0.0, le=1.0, description="최소 유사도 점수 (전체 레스토랑 공통)")
 
 
 class SummaryBatchResponse(BaseModel):
@@ -186,11 +186,28 @@ class ComparisonBatchResponse(BaseModel):
 # ==================== Vector Search (일반) ====================
 
 class VectorSearchRequest(BaseModel):
-    """벡터 검색 요청 모델"""
+    """벡터 검색 요청 모델. 하이브리드 인자 기본값은 Config(Summary와 동일). fallback_min_score는 폴백(Dense만) 경로에서만 적용."""
     query_text: str = Field(..., description="검색 쿼리 텍스트")
     restaurant_id: Optional[int] = Field(None, description="레스토랑 ID 필터")
     limit: int = Field(3, ge=1, le=100, description="반환할 최대 개수")
-    min_score: float = Field(0.0, ge=0.0, le=1.0, description="최소 유사도 점수")
+    fallback_min_score: float = Field(
+        Config.FALLBACK_MIN_SCORE,
+        ge=0.0,
+        le=1.0,
+        description="폴백(Dense만) 경로에서의 최소 유사도 (하이브리드 경로에는 미적용). Summary와 동일 Config 사용.",
+    )
+    dense_prefetch_limit: int = Field(
+        Config.DENSE_PREFETCH_LIMIT,
+        ge=1,
+        le=2000,
+        description="하이브리드 검색 시 Dense prefetch 최대 개수 (RRF 전 후보 수). Summary와 동일 Config 사용.",
+    )
+    sparse_prefetch_limit: int = Field(
+        Config.SPARSE_PREFETCH_LIMIT,
+        ge=1,
+        le=2000,
+        description="하이브리드 검색 시 Sparse prefetch 최대 개수 (RRF 전 후보 수). Summary와 동일 Config 사용.",
+    )
 
 
 class VectorSearchResult(BaseModel):

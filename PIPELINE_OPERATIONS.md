@@ -151,7 +151,7 @@
 
 ### 3.2 입력·시드
 
-- **입력**: `restaurant_id`(필수), `limit`, `min_score` 사용.
+- **입력**: `restaurant_id`(필수), `limit` 사용.
 - **하이브리드 검색 쿼리**: **기본 시드만** 사용 (DEFAULT_SERVICE_SEEDS, DEFAULT_PRICE_SEEDS, DEFAULT_FOOD_SEEDS).
 - `DEFAULT_SERVICE_SEEDS`, `DEFAULT_PRICE_SEEDS`, `DEFAULT_FOOD_SEEDS` (aspect_seeds 상수)를 service/price/food별 쿼리로 사용.
 - `seed_list = [DEFAULT_SERVICE_SEEDS, DEFAULT_PRICE_SEEDS, DEFAULT_FOOD_SEEDS]`, `name_list = ["service","price","food"]`.
@@ -165,7 +165,7 @@
 2. **카테고리별 하이브리드 검색**  
    - service/price/food 시드마다:  
      - `query_text = " ".join(seeds[:10])`  
-     - `vector_search.query_hybrid_search(query_text, restaurant_id, limit, min_score=0.0)`  
+     - `vector_search.query_hybrid_search(query_text, restaurant_id, limit)`  
    - Dense + Sparse RRF, `restaurant_id` 필터.  
    - `hits_dict`, `hits_data_dict` (review_id, snippet, rank).
 
@@ -242,21 +242,25 @@
   - **named**: `dense`, `sparse` (신규 생성 시 기본).  
   - **단일 벡터**: 기존 마이그레이션.  
 - **query_points**  
-  - **named** 컬렉션: Dense 단독 검색 시 `using="dense"` 필수.  
+  - **named** 컬렉션: 하이브리드 검색 시 `FusionQuery(RRF)` + Prefetch(dense/sparse). 폴백 시 Dense만 사용할 때 `using="dense"`.  
   - **단일** 컬렉션: `using` 생략.
 
 ### 5.3 검색 파이프라인
 
+- **벡터 검색 = 하이브리드 통일**. `query_similar_reviews`는 항상 `query_hybrid_search`를 호출.
+- **폴백**: 단일 벡터 컬렉션, Sparse 실패, RRF 실패 등 시 `_query_dense_only` (Dense만, **min_score 기본 0.2**).
+
 | 메서드 | 용도 | 비고 |
 |--------|------|------|
-| `query_similar_reviews` | Dense (또는 Dense만) 검색 | `using="dense"` (named일 때) |
-| `query_hybrid_search` | Dense + Sparse RRF | `FusionQuery(RRF)`, `Prefetch` dense/sparse. 단일 벡터면 Dense로 폴백 |
+| `query_similar_reviews` | 벡터 검색 진입점 | 내부에서 `query_hybrid_search` 호출 (하이브리드 통일) |
+| `query_hybrid_search` | Dense + Sparse RRF | Prefetch Dense **dense_prefetch_limit**(기본 200), Sparse **sparse_prefetch_limit**(기본 300) → RRF → **최종 limit**개. 인자로 조정 가능. |
+| `_query_dense_only` | 폴백 (Dense만) | 하이브리드 불가 시만 사용. **min_score 기본 0.2**. |
 
 ### 5.4 API 엔드포인트 (현재)
 
 | Method | path | 설명 |
 |--------|------|------|
-| POST | `/api/v1/vector/search/similar` | 유사 리뷰 검색 (query_text, restaurant_id, limit, min_score) |
+| POST | `/api/v1/vector/search/similar` | 유사 리뷰 검색. 하이브리드(Dense/Sparse prefetch → RRF). query_text, restaurant_id, limit, dense_prefetch_limit, sparse_prefetch_limit, fallback_min_score |
 | POST | `/api/v1/vector/upload` | 리뷰·레스토랑 업로드, `restaurant_vectors` 자동 생성 |
 
 ### 5.5 업로드·포인트
@@ -327,6 +331,9 @@
 |------|------|
 | `COLLECTION_NAME` | 리뷰 컬렉션 이름 |
 | `QDRANT_URL` | `:memory:`, `http://...`, on-disk 경로 |
+| `DENSE_PREFETCH_LIMIT` | 하이브리드 Dense prefetch 개수 (기본 200). **Summary·Vector API 공통.** |
+| `SPARSE_PREFETCH_LIMIT` | 하이브리드 Sparse prefetch 개수 (기본 300). **Summary·Vector API 공통.** |
+| `FALLBACK_MIN_SCORE` | 폴백(Dense만) 경로 최소 유사도 (기본 0.2). **Summary·Vector API 공통.** |
 | `ALL_AVERAGE_ASPECT_DATA_PATH` | Comparison 전체 평균용 파일 (TSV/JSON) |
 | `COMPARISON_ASYNC` | Comparison LLM: true면 service/price 병렬(asyncio.gather), false면 순차(기본값) |
 | `SUMMARY_SEARCH_ASYNC` | Summary 배치: aspect(service/price/food) 서치 병렬 |
@@ -356,7 +363,7 @@
 | `POST /api/v1/llm/summarize/batch` | Summary (배치) | SUMMARY_SEARCH_ASYNC(aspect 병렬), SUMMARY_RESTAURANT_ASYNC(음식점 간 병렬). 시드 1회 로드. 상세: [BATCH_SUMMARY_MODE.md](BATCH_SUMMARY_MODE.md) |
 | `POST /api/v1/sentiment/analyze` | Sentiment | `analyze_async` → `_classify_with_hf_only` + LLM 재판정. SENTIMENT_CLASSIFIER_USE_THREAD(to_thread), SENTIMENT_LLM_ASYNC 분기 |
 | `POST /api/v1/sentiment/analyze/batch` | Sentiment (배치) | `analyze_multiple_restaurants_async` → `analyze` |
-| `POST /api/v1/vector/search/similar` | Vector | `query_similar_reviews` (Dense, named일 때 `using="dense"`) |
+| `POST /api/v1/vector/search/similar` | Vector | `query_similar_reviews` → `query_hybrid_search` (하이브리드 통일). 폴백 시 `_query_dense_only` (fallback_min_score, 기본 0.2) |
 | `POST /api/v1/vector/upload` | Vector | `prepare_points`, `upload_collection`, `upsert_restaurant_vector` |
 
 ---
@@ -395,21 +402,20 @@
 
 | | 단일 `POST /summarize` | 배치 `POST /summarize/batch` |
 |--|--|--|
-| **요청** | **평탄 객체** `{ restaurant_id, limit, min_score }` | **래핑 객체** `{ restaurants: [ { restaurant_id, limit? } ] }` |
+| **요청** | **평탄 객체** `{ restaurant_id, limit }` | **래핑 객체** `{ restaurants: [ { restaurant_id, limit? } ] }` |
 | **응답** | **루트가 요약 1개** (results 없음). `X-Debug: true`면 SummaryResponse, 아니면 SummaryDisplayResponse(필드 적음) | **`{ results: [ ... ] }`** 배열. 각 요소는 **SummaryDisplayResponse** 형식(단일 debug=false와 동일, positive_reviews 등 없음) |
 
 ---
 
 **단일 `POST /api/v1/llm/summarize`**
 
-- 요청: 평탄. 사용: `restaurant_id`, `limit`, `min_score`.
+- 요청: 평탄. `restaurant_id`, **limit**: 카테고리(service/price/food)당 검색·요약에 쓸 최대 리뷰 수 (1~100, 기본 10).
 
 ```json
-// 요청 (평탄 객체, 레스토랑 1개)
+// 요청 (평탄 객체, 레스토랑 1개. limit: 1~100, 기본 10)
 {
   "restaurant_id": 1,
-  "limit": 10,
-  "min_score": 0.0
+  "limit": 10
 }
 
 // 응답 (debug=false) — 루트가 요약 1개. SummaryDisplayResponse (positive_reviews, positive_count 등 없음)
@@ -442,19 +448,18 @@
 
 **배치 `POST /api/v1/llm/summarize/batch`**
 
-- 요청: `restaurants` 배열(각 항목: `restaurant_id`), **`limit`**(선택, 전체 공통, 기본 10), **`min_score`**(선택, 전체 공통, 기본 0.0).
+- 요청: `restaurants` 배열(각 항목: `restaurant_id`), **limit**: 카테고리당 검색·요약에 쓸 최대 리뷰 수 (1~100, 기본 10). 선택, 전체 공통.
 - 응답: **`results` 배열**. 각 요소는 **SummaryDisplayResponse** 형식(단일 debug=false와 동일).
 - **배치 (Config)**: `SUMMARY_SEARCH_ASYNC`=aspect(service/price/food) 서치 병렬, `SUMMARY_RESTAURANT_ASYNC`=음식점 간 병렬. 둘 다 false면 완전 순차. `SUMMARY_LLM_ASYNC`=LLM 호출 비동기(to_thread vs AsyncOpenAI). 동시성: `BATCH_SEARCH_CONCURRENCY`, `BATCH_LLM_CONCURRENCY`. 자세한 내용은 [BATCH_SUMMARY_MODE.md](BATCH_SUMMARY_MODE.md) 참고.
 
 ```json
-// 요청 (restaurants + limit/min_score는 전체 레스토랑에 일괄 적용)
+// 요청 (restaurants + limit 전체 공통. limit: 1~100, 기본 10)
 {
   "restaurants": [
     {"restaurant_id": 1},
     {"restaurant_id": 2}
   ],
-  "limit": 10,
-  "min_score": 0.0
+  "limit": 10
 }
 
 // 응답 — { results: [ SummaryDisplayResponse, ... ] }. 단일(debug=false)과 동일한 필드; results로만 감쌈
@@ -539,13 +544,19 @@
 
 **`POST /api/v1/vector/search/similar`**
 
+- 검색: **하이브리드 통일** (Dense prefetch **dense_prefetch_limit**(기본 200), Sparse prefetch **sparse_prefetch_limit**(기본 300) → RRF → 최종 limit개).
+- **폴백**(단일 벡터/Sparse 실패 등): Dense만 사용. **fallback_min_score**: 폴백 경로 최소 유사도 (0.0~1.0, 기본 0.2).
+- 요청: **limit**: 반환할 최대 개수 (1~100, 기본 3). **dense_prefetch_limit**: Dense prefetch 개수 (1~2000, 기본 200). **sparse_prefetch_limit**: Sparse prefetch 개수 (1~2000, 기본 300). **fallback_min_score**: 폴백 경로에서만 적용.
+
 ```json
-// 요청
+// 요청 (limit: 1~100 기본 3, dense/sparse_prefetch_limit: 1~2000 기본 200/300, fallback_min_score: 폴백만)
 {
   "query_text": "분위기 좋고 데이트하기 좋은",
   "restaurant_id": 1,
   "limit": 5,
-  "min_score": 0.0
+  "dense_prefetch_limit": 200,
+  "sparse_prefetch_limit": 300,
+  "fallback_min_score": 0.2
 }
 
 // 응답
@@ -618,11 +629,9 @@ API별 요청/응답에 사용되는 Pydantic 모델(DTO)과 필드를 정리합
 | DTO | 필드 | 타입 | 설명 |
 |-----|------|------|------|
 | **SummaryRequest** | restaurant_id | int | 레스토랑 ID |
-| | limit | int | 카테고리당 검색 최대 개수 (1~100, 기본 10) |
-| | min_score | float | 최소 유사도 (0.0~1.0) |
+| | limit | int | 카테고리(service/price/food)당 검색·요약 최대 리뷰 수 (1~100, 기본 10) |
 | **SummaryBatchRequest** | restaurants | List[Dict] | [{ restaurant_id }, ...] |
-| | limit | int | 카테고리당 검색 최대 개수, 전체 공통 (1~100, 기본 10) |
-| | min_score | float | 최소 유사도, 전체 공통 (0.0~1.0) |
+| | limit | int | 카테고리당 검색·요약 최대 리뷰 수, 전체 공통 (1~100, 기본 10) |
 | **CategorySummary** | summary | str | 카테고리 요약 |
 | | bullets | List[str] | 핵심 포인트 |
 | | evidence | List[Dict] | [{ review_id, snippet, rank }] |
@@ -661,8 +670,10 @@ API별 요청/응답에 사용되는 Pydantic 모델(DTO)과 필드를 정리합
 |-----|------|------|------|
 | **VectorSearchRequest** | query_text | str | 검색 쿼리 |
 | | restaurant_id | int? | 레스토랑 필터 |
-| | limit | int | 최대 개수 (1~100, 기본 3) |
-| | min_score | float | 최소 유사도 (0.0~1.0) |
+| | limit | int | 반환할 최대 개수 (1~100, 기본 3). 하이브리드: RRF 후 이 개수만 반환. |
+| | fallback_min_score | float | 폴백(Dense만) 경로에서만 적용 (0.0~1.0, 기본 0.2). 하이브리드 경로에는 미적용. |
+| | dense_prefetch_limit | int | 하이브리드 Dense prefetch 개수 (1~2000, 기본 200). |
+| | sparse_prefetch_limit | int | 하이브리드 Sparse prefetch 개수 (1~2000, 기본 300). |
 | **VectorSearchResult** | review | ReviewModel | 리뷰 payload |
 | | score | float | 유사도 점수 |
 | **VectorSearchResponse** | results | List[VectorSearchResult] | 검색 결과 |
@@ -754,5 +765,5 @@ API별 요청/응답에 사용되는 Pydantic 모델(DTO)과 필드를 정리합
 
 - **Comparison**: 현재 API는 Kiwi+lift 경로만 사용. 요청은 `restaurant_id`만. `comparisons`: `{category, lift_percentage}` (lift > 0인 모든 항목 반환). Spark 사용(comparison_pipeline), 로그 억제: [trouble_shooting/SPARK_LOG_NOISE.md](trouble_shooting/SPARK_LOG_NOISE.md).  
 - **Summary**: **기본 시드만 사용** (`DEFAULT_*_SEEDS` 직접, `load_aspect_seeds`·파일 미사용) + `query_hybrid_search` (Dense+Sparse RRF) → `summarize_aspects_new`.  
-- **Vector**: named 컬렉션에서 Dense 단독 검색 시 `using="dense"` 필요. 단일 벡터 컬렉션은 `using` 없음.  
+- **Vector**: 벡터 검색은 **하이브리드 통일** (Dense/Sparse prefetch → RRF, prefetch 개수는 dense_prefetch_limit/sparse_prefetch_limit으로 조정, 기본 200/300). 폴백 시에만 Dense만 사용, fallback_min_score(기본 0.2).  
 - **Sentiment**: `SentimentAnalyzer` (HF 1차 + LLM 2차 재판정). `ENABLE_SENTIMENT_SAMPLING`에 따라 전체/샘플링 분기.

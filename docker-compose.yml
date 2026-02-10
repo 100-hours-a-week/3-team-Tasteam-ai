@@ -38,8 +38,12 @@ services:
       COMPARISON_ASYNC: false
       # Comparison 배치: 음식점 간 병렬. true=asyncio.gather(병렬), false=순차
       COMPARISON_BATCH_ASYNC: false
-
-
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 90s
 
   new_async:
     image: tasteam-new-async:latest
@@ -49,6 +53,12 @@ services:
     environment:
       PORT: "8003"
       PIPELINE: "new_async"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8003/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 90s
 
   jobmgr:
     build:
@@ -67,12 +77,14 @@ services:
       - ./configs/prometheus/alerts.yml:/etc/prometheus/alerts.yml
     ports: ["9090:9090"]
     depends_on:
-      - old_sync
-      - new_sync
-      - new_async
-      - jobmgr
-      - node-exporter
-      - alertmanager
+      old_sync: {}
+      new_sync:
+        condition: service_healthy
+      new_async:
+        condition: service_healthy
+      jobmgr: {}
+      node-exporter: {}
+      alertmanager: {}
 
   alertmanager:
     image: prom/alertmanager:v0.26.0
