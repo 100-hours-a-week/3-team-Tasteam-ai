@@ -687,6 +687,7 @@ async def compare_batch(
         각 레스토랑별 비교 결과 리스트
     """
     start_time = time.time()
+    rid = request.restaurants[0].get("restaurant_id") if request.restaurants else None
     try:
         pipeline = ComparisonPipeline(
             llm_utils=llm_utils,
@@ -699,8 +700,22 @@ async def compare_batch(
         # TTFUR = t1 - t0 (요청 수신 시각 t0 → 응답 반환 직전 t1)
         elapsed_ms = (time.time() - start_time) * 1000
         metrics.record_llm_ttft(analysis_type="comparison", ttft_ms=elapsed_ms)
+        metrics.collect_metrics(
+            restaurant_id=rid,
+            analysis_type="comparison",
+            start_time=start_time,
+            status="success",
+            batch_size=len(request.restaurants),
+        )
         return ComparisonBatchResponse(results=[ComparisonResponse(**r) for r in results])
     except Exception as e:
+        metrics.collect_metrics(
+            restaurant_id=rid,
+            analysis_type="comparison",
+            start_time=start_time,
+            status="fail",
+            error_count=1,
+        )
         logger.error(f"배치 비교 중 오류: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=500,
@@ -750,6 +765,14 @@ async def summarize_reviews_batch(
             # TTFUR = t1 - t0 (요청 수신 시각 t0 → 응답 반환 직전 t1)
             elapsed_ms = (time.time() - start_time) * 1000
             metrics.record_llm_ttft(analysis_type="summary", ttft_ms=elapsed_ms)
+            rid = request.restaurants[0].get("restaurant_id") if request.restaurants else None
+            metrics.collect_metrics(
+                restaurant_id=rid,
+                analysis_type="summary",
+                start_time=start_time,
+                status="success",
+                batch_size=len(request.restaurants),
+            )
             return SummaryBatchResponse(results=[SummaryDisplayResponse(**r) for r in results])
 
         # search_async=false, restaurant_async=false: 레스토랑·aspect 완전 순차
@@ -806,10 +829,26 @@ async def summarize_reviews_batch(
         # TTFUR = t1 - t0 (요청 수신 시각 t0 → 응답 반환 직전 t1)
         elapsed_ms = (time.time() - start_time) * 1000
         metrics.record_llm_ttft(analysis_type="summary", ttft_ms=elapsed_ms)
+        rid = request.restaurants[0].get("restaurant_id") if request.restaurants else None
+        metrics.collect_metrics(
+            restaurant_id=rid,
+            analysis_type="summary",
+            start_time=start_time,
+            status="success",
+            batch_size=len(request.restaurants),
+        )
         return SummaryBatchResponse(results=[
             SummaryDisplayResponse(**r) for r in results
         ])
     except Exception as e:
+        rid = request.restaurants[0].get("restaurant_id") if request.restaurants else None
+        metrics.collect_metrics(
+            restaurant_id=rid,
+            analysis_type="summary",
+            start_time=start_time,
+            status="fail",
+            error_count=1,
+        )
         logger.error(f"배치 리뷰 요약 중 오류: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=500,

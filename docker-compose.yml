@@ -1,0 +1,59 @@
+services:
+  new_async:
+    image: tasteam-new-async:latest
+    ports:
+      - "8001:8001"
+    env_file: [.env]
+    environment:
+      PORT: "8001"
+      PIPELINE: "new_async"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/ready"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 180s
+
+  jobmgr:
+    build:
+      context: .
+      dockerfile: Dockerfile.metrics
+    ports: ["1041:1041"]
+
+  node-exporter:
+    image: prom/node-exporter:v1.7.0
+    ports: ["9100:9100"]
+
+  prometheus:
+    image: prom/prometheus:v2.42.0
+    volumes:
+      - ./configs/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./configs/prometheus/alerts.yml:/etc/prometheus/alerts.yml
+    ports: ["9090:9090"]
+    depends_on:
+      new_async:
+        condition: service_healthy
+      jobmgr:
+        condition: service_started
+      node-exporter:
+        condition: service_started
+      alertmanager:
+        condition: service_started
+
+  alertmanager:
+    image: prom/alertmanager:v0.26.0
+    volumes:
+      - ./configs/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml
+    ports: ["9093:9093"]
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+
+  grafana:
+    image: grafana/grafana:9.3.6
+    volumes:
+      - ./configs/grafana/datasources:/etc/grafana/provisioning/datasources/
+      - ./configs/grafana/dashboards:/etc/grafana/provisioning/dashboards/
+      - ./configs/grafana/ini/grafana.ini:/etc/grafana/grafana.ini
+    ports: ["3000:3000"]
+    depends_on: [prometheus]
