@@ -169,12 +169,20 @@ async def analyze_sentiment_batch(
         각 레스토랑별 감성 분석 결과 리스트 (동일 스키마, debug 시에만 debug 필드 포함)
     """
     start_time = time.time()
+    restaurant_id = request.restaurants[0].restaurant_id if request.restaurants else None
     try:
         results = await analyzer.analyze_multiple_restaurants_async(restaurants_data=request.restaurants)
         # 각 결과에 restaurant_name 병합 (요청 항목 순서 대응)
         restaurants_list = request.restaurants
         elapsed_ms = (time.time() - start_time) * 1000
         metrics.record_llm_ttft(analysis_type="sentiment", ttft_ms=elapsed_ms)
+        metrics.collect_metrics(
+            restaurant_id=restaurant_id,
+            analysis_type="sentiment",
+            start_time=start_time,
+            status="success",
+            batch_size=len(request.restaurants),
+        )
 
         if debug:
             debug_info = DebugInfo(processing_time_ms=elapsed_ms)
@@ -188,6 +196,13 @@ async def analyze_sentiment_batch(
             SentimentAnalysisResponse(**result) for result in results
         ])
     except Exception as e:
+        metrics.collect_metrics(
+            restaurant_id=restaurant_id,
+            analysis_type="sentiment",
+            start_time=start_time,
+            status="fail",
+            error_count=1,
+        )
         logging.getLogger(__name__).exception("배치 감성 분석 중 오류")
         raise HTTPException(
             status_code=500,

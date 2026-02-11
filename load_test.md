@@ -148,6 +148,8 @@ python scripts/run_all_restaurants_api.py -i real_service_simul_review_data_640k
 python scripts/run_all_restaurants_api.py -i data.json -o results.json --no-upload --ports 8001 8002 8003
 ```
 
+
+
 구분	전체 레스토랑 수	리뷰(레스토랑당)
 Load test 감성/요약/비교	10개 고정	기본 100개 (옵션으로 변경 가능)
 
@@ -159,6 +161,8 @@ load test(시나리오 사용 o) -> 데이터에서 시나리오 따라 10개씩
 
 experiment 1: 통제된(workload controlled) 조건에서 아키텍처 차이를 정량 비교 (리뷰 분포 균등, 요청 균등)
 Experiment 2: 실서비스 분포(skew + long-tail + burst)에서 tail/실패율 방어력 비교 (리뷰 분포 비균등, 요청 비균등)
+
+### 여기가 실행할 것
 
 ```bash
 # 목적: old/new/async 순수 아키텍처 비교

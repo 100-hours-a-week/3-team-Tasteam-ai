@@ -1,64 +1,18 @@
 services:
-  old_sync:
-    image: tasteam-old-sync:latest
+  new_async:
+    image: tasteam-new-async:latest
     ports:
       - "8001:8001"
     env_file: [.env]
     environment:
       PORT: "8001"
-      PIPELINE: "old_sync"
-
-  new_sync:
-    image: tasteam-new-async:latest
-    # build는 생략해도 됨(같은 이미지 재사용). 처음엔 한 군데만 build 있어도 OK
-    ports:
-      - "8002:8002"
-    env_file: [.env]
-    environment:
-      PORT: "8002"
-      PIPELINE: "new_sync"
-      # sync 분기
-      # Sentiment: HF 분류기. true=asyncio.to_thread(블로킹 격리), false=메인 스레드
-      SENTIMENT_CLASSIFIER_USE_THREAD: "true"
-      # Sentiment: LLM 재판정. true=AsyncOpenAI, false=동기
-      SENTIMENT_LLM_ASYNC: false
-      # Sentiment 배치: 음식점 간 병렬. true=asyncio.gather(병렬), false=순차
-      SENTIMENT_RESTAURANT_ASYNC: false
-      
-      # sync vs async (기본값 true: 파이프라인 내·음식점 간 병렬로 최대 속도)
-      
-      # Summary 배치: LLM 호출. true=AsyncOpenAI/httpx.AsyncClient, false=asyncio.to_thread(동기 래핑)
-      SUMMARY_LLM_ASYNC: false
-      # Summary 배치: aspect(service/price/food) 서치 병렬
-      SUMMARY_SEARCH_ASYNC: false
-      # Summary 배치: 음식점 간 병렬
-      SUMMARY_RESTAURANT_ASYNC: false
-      
-      # Comparison: service/price LLM 호출. true=asyncio.gather(병렬), false=순차
-      COMPARISON_ASYNC: false
-      # Comparison 배치: 음식점 간 병렬. true=asyncio.gather(병렬), false=순차
-      COMPARISON_BATCH_ASYNC: false
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8002/ready"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 90s
-
-  new_async:
-    image: tasteam-new-async:latest
-    ports:
-      - "8003:8003"
-    env_file: [.env]
-    environment:
-      PORT: "8003"
       PIPELINE: "new_async"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8003/ready"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 90s
+      test: ["CMD", "curl", "-f", "http://localhost:8001/ready"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 180s
 
   jobmgr:
     build:
@@ -77,14 +31,14 @@ services:
       - ./configs/prometheus/alerts.yml:/etc/prometheus/alerts.yml
     ports: ["9090:9090"]
     depends_on:
-      old_sync: {}
-      new_sync:
-        condition: service_healthy
       new_async:
         condition: service_healthy
-      jobmgr: {}
-      node-exporter: {}
-      alertmanager: {}
+      jobmgr:
+        condition: service_started
+      node-exporter:
+        condition: service_started
+      alertmanager:
+        condition: service_started
 
   alertmanager:
     image: prom/alertmanager:v0.26.0

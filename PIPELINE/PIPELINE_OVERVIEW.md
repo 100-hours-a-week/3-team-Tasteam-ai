@@ -1,0 +1,477 @@
+# 전체 파이프라인 정리 (상세)
+
+서비스에 포함된 **모든 파이프라인**을 단계·입출력·설정·상수·예외 처리까지 상세히 정리한 문서입니다.
+
+---
+
+## 1. 시스템 개요
+
+### 1.1 애플리케이션
+
+| 항목 | 내용 |
+|------|------|
+| **프레임워크** | FastAPI |
+| **역할** | 레스토랑 리뷰 감성 분석·벡터 검색·LLM 요약·다른 음식점과 비교 API |
+| **문서** | `/docs` (Swagger), `/redoc` |
+
+### 1.2 라우터 prefix
+
+| prefix | 태그 | 담당 모듈 |
+|--------|------|-----------|
+| `/api/v1/sentiment` | sentiment | `src/api/routers/sentiment.py` |
+| `/api/v1/vector` | vector | `src/api/routers/vector.py` |
+| `/api/v1/llm` | llm | `src/api/routers/llm.py` |
+| `/api/v1/test` | test | `src/api/routers/test.py` |
+
+### 1.3 공통 미들웨어·엔드포인트
+
+- **X-Request-Id**: 요청 헤더 `X-Request-Id` 또는 `X-Request-ID`가 없으면 UUID 생성, 응답 헤더에 동일 값 설정.
+- **Queue depth**: Prometheus용 in-flight 요청 수 증가/감소 (`app_queue_depth_inc` / `app_queue_depth_dec`).
+- **CORS**: `CORSMiddleware` (allow_origins=`*`, allow_credentials=True, allow_methods/headers=`*`).
+- **예외 처리**: `RequestValidationError` → 422 JSON, `StarletteHTTPException` → 해당 status + JSON, 그 외 `Exception` → 500. 모든 에러 응답에 `code`, `message`, `details`, `request_id` 포함.
+- **엔드포인트**:
+  - `GET /`: 앱명·버전·docs·health 링크.
+  - `GET /health`: `{"status": "healthy", "version": "1.0.0"}`.
+  - `GET /ready`: warm-up 완료 시 `{"status": "ready"}`, 미완료 시 **503** + `{"status": "not ready"}`.
+  - `GET /metrics`: Prometheus 메트릭 (prometheus_fastapi_instrumentator 설치 시).
+
+### 1.4 Lifespan·Warm-up
+
+- **lifespan**: 앱 시작 시 CPU 모니터 시작(Config에 따라), **warm-up**을 `asyncio.to_thread`로 실행 후 `app.state.ready = True`.
+- **Warm-up 내용**:
+  1. `get_qdrant_client()` → `get_vector_search(client)` → `encoder.encode(["warmup"])` (VectorSearch/임베딩).
+  2. `get_sentiment_analyzer(vector_search)` → `_get_sentiment_pipeline()` → `pl("웜업")` (Sentiment pipeline).
+- Warm-up 실패 시 로그 경고만 하고 `/ready`는 503 유지. 정상 완료 시 "서비스 warm-up 완료, readiness=True" 로그.
+
+---
+
+## 2. 공통 인프라
+
+### 2.1 락 (Redis)
+
+| 항목 | 내용 |
+|------|------|
+| **용도** | 동일 `restaurant_id` + 동일 `analysis_type`에 대한 중복 실행 방지 |
+| **키** | `restaurant_id` + `analysis_type` (summary / sentiment / comparison) 조합 |
+| **TTL** | 3600초(1시간) 고정 (코드 내 하드코딩) |
+| **실패 시** | `RuntimeError`("중복 실행 방지" 메시지) → API에서 **409 Conflict** 반환 |
+| **적용 엔드포인트** | `/sentiment/analyze`, `/sentiment/analyze/batch`(레스토랑별), `/llm/summarize`, `/llm/summarize/batch`(레스토랑별), `/llm/comparison`, `/llm/comparison/batch`(레스토랑별) |
+| **모듈** | `src/cache.py`의 `acquire_lock` (context manager) |
+
+### 2.2 SKIP (재실행 생략)
+
+| 항목 | 내용 |
+|------|------|
+| **조건** | `metrics_collector.metrics_db`가 존재하고, 해당 `restaurant_id` + `analysis_type`에 대해 **마지막 성공 시각**이 `SKIP_MIN_INTERVAL_SECONDS` 초 이내일 때 |
+| **동작** | 실제 파이프라인 실행 없이 "스킵" 응답 반환. 메트릭에는 `skipped: true`, `reason: "recent_success"`, `last_success_at` 기록 |
+| **설정** | `SKIP_MIN_INTERVAL_SECONDS` (기본 **3600**) |
+| **스킵 응답** | Summary: `overall_summary=""` 등 빈 요약. Sentiment: count/ratio=0 등. Comparison: comparisons=[] 등. 디버그 시 `processing_time_ms`, `request_id` 포함 |
+
+### 2.3 메트릭
+
+- **수집**: 요청별 `metrics.collect_metrics(restaurant_id, analysis_type, start_time, batch_size, ...)`. 에러 시 `error_count`, `additional_info` 포함.
+- **TTFUR**: `metrics.record_llm_ttft(analysis_type, ttft_ms)` — 요청 수신 시각(t0)부터 응답 반환 직전(t1)까지 밀리초.
+- **Prometheus**: `prometheus_fastapi_instrumentator`로 요청 수·지연 등 자동 수집. `/metrics` 노출.
+
+### 2.4 배치·비동기 동작 (Sentiment / Summary / Comparison)
+
+**Sentiment, Summary, Comparison 세 파이프라인은 배치 API에서 다음 두 수준의 비동기로 동작합니다.** 기본 Config 값 기준으로 모두 활성화되어 있습니다.
+
+| 구분 | 설명 | 기본값 |
+|------|------|--------|
+| **음식점 간 비동기** | 배치 요청 시 여러 레스토랑을 **동시에** 처리 (예: `asyncio.gather`로 레스토랑별 태스크 병렬 실행). | 세 파이프라인 모두 **true** |
+| **파이프라인 내 비동기** | 한 레스토랑 처리 시 **파이프라인 내부** 단계를 비동기/병렬로 수행 (분류기 스레드 격리, LLM 비동기 호출, 카테고리별 검색 병렬 등). | 세 파이프라인 모두 **true** |
+
+**파이프라인별 요약**
+
+| 파이프라인 | 음식점 간 비동기 (배치) | 파이프라인 내 비동기 |
+|------------|-------------------------|----------------------|
+| **Sentiment** | `SENTIMENT_RESTAURANT_ASYNC=true` → 레스토랑별 `analyze_async`를 `asyncio.gather`로 병렬 | `SENTIMENT_CLASSIFIER_USE_THREAD=true`(HF 분류를 `to_thread`로 격리), `SENTIMENT_LLM_ASYNC=true`(LLM 재판정 AsyncOpenAI) |
+| **Summary** | `SUMMARY_RESTAURANT_ASYNC=true` → 레스토랑별 처리를 `asyncio.gather`로 병렬 | `SUMMARY_SEARCH_ASYNC=true`(한 레스토랑 내 service/price/food 검색 병렬), `SUMMARY_LLM_ASYNC=true`(LLM 비동기 호출) |
+| **Comparison** | `COMPARISON_BATCH_ASYNC=true` → 레스토랑별 `compare`를 `asyncio.gather`로 병렬 | `COMPARISON_ASYNC=true`(서비스/가격 LLM 해석 2개를 `asyncio.gather`로 병렬) |
+
+위 플래그를 false로 두면 해당 수준은 순차 실행됩니다. 단일 요청(레스토랑 1개) API에서는 “음식점 간”은 해당 없고, 파이프라인 내 비동기만 적용될 수 있습니다.
+
+---
+
+## 3. Vector 파이프라인
+
+**라우터**: `src/api/routers/vector.py`  
+**prefix**: `/api/v1/vector`  
+**핵심 클래스**: `src/vector_search.py`의 `VectorSearch`
+
+### 3.1 검색: `POST /vector/search/similar`
+
+#### 3.1.1 역할
+
+의미 기반 유사 리뷰 검색. **하이브리드(Dense + Sparse) RRF**를 기본으로 하며, 하이브리드 불가 시 **Dense 단독 폴백**을 사용합니다.
+
+#### 3.1.2 요청 Body (VectorSearchRequest)
+
+| 필드 | 타입 | 필수 | 설명 |
+|------|------|------|------|
+| query_text | str | O | 검색 쿼리 텍스트 |
+| restaurant_id | int \| null | X | 지정 시 해당 레스토랑 리뷰만 검색 |
+| limit | int | X | 반환 최대 개수 (기본 3, 최대 100) |
+| fallback_min_score | float | X | **폴백(Dense만)** 경로에서만 적용되는 최소 유사도 (기본 0.2) |
+| dense_prefetch_limit | int | X | 하이브리드 시 Dense prefetch 개수 (기본 200) |
+| sparse_prefetch_limit | int | X | 하이브리드 시 Sparse prefetch 개수 (기본 300) |
+
+요청 생략 시 Config 기본값: `Config.FALLBACK_MIN_SCORE`, `Config.DENSE_PREFETCH_LIMIT`, `Config.SPARSE_PREFETCH_LIMIT`.
+
+#### 3.1.3 처리 단계 (query_similar_reviews → query_hybrid_search)
+
+1. **하이브리드 가능 여부**: `_is_collection_single_vector()`로 컬렉션이 단일 벡터(dense만)인지 확인. 단일이면 곧바로 **Dense 폴백**으로 이동(단계 5).
+2. **Dense 벡터 생성**: `encoder.encode(query_text).tolist()`.
+3. **Sparse 벡터 생성**: `_get_sparse_model()` 후 `_sparse_model.embed([query_text])` → `SparseVector(indices, values)`. 실패 시 **Dense 폴백**으로 이동(단계 5).
+4. **하이브리드 검색**: Qdrant `query_points`에 `FusionQuery(fusion=RRF)`, prefetch 2개(Dense용 `using="dense"`, Sparse용 `using="sparse"`), `query_filter`(restaurant_id 등). Dense prefetch `dense_prefetch_limit`, Sparse prefetch `sparse_prefetch_limit`, 최종 `limit`개 반환. 이 단계 예외 시 **Dense 폴백**.
+5. **Dense 폴백**: `_query_dense_only(query_text, restaurant_id, limit, min_score=fallback_min_score)`. 쿼리 벡터로 Dense만 검색, `min_score` 이상만 반환.
+
+#### 3.1.4 응답 (VectorSearchResponse)
+
+- `results`: `VectorSearchResult[]` — 각 항목 `review`(id, restaurant_id, content), `score`.
+- `total`: `len(results)`.
+
+### 3.2 업로드: `POST /vector/upload`
+
+#### 3.2.1 역할
+
+리뷰(및 선택적 레스토랑) 데이터를 벡터 DB에 적재. **Dense + Sparse** 이중 벡터를 배치로 인코딩한 뒤 Qdrant에 upsert합니다.
+
+#### 3.2.2 요청 Body (VectorUploadRequest)
+
+- `reviews`: 리스트. 각 항목에 `id`(또는 review_id), `restaurant_id`, `content`, `created_at`(또는 datetime) 필수. `validate_review_data` 검증.
+- `restaurants`: 선택. 각 항목에 `reviews` 등 포함 가능. 있으면 그 안의 리뷰도 병합하여 사용.
+
+#### 3.2.3 처리 단계 (prepare_points → upload_collection)
+
+1. **리뷰 수집**: `data["reviews"]`가 있으면 그대로 사용. 없으면 `data["restaurants"]`에서 `reviews`를 꺼내 병합. 각 리뷰는 `validate_review_data` 통과 필수.
+2. **메타데이터 구성**: 리뷰별로 `id`, `restaurant_id`, `content`, `created_at`, `review_id`, `restaurant_name`, `image_urls`, `version` 등을 payload용 dict로 구성.
+3. **배치 인코딩**: `batch_size`(Config.get_optimal_batch_size("embedding")) 단위로:
+   - Dense: `encoder.encode(batch_texts)`.
+   - Sparse: `_sparse_model.embed([text])` per text (실패 시 해당 텍스트는 Sparse None, Dense만 사용).
+4. **PointStruct 생성**: 각 리뷰에 대해 Dense 벡터 + (있으면) Sparse 벡터 + payload를 묶어 PointStruct 리스트 생성. point_id는 해시 또는 UUID.
+5. **업로드**: `upload_collection(points)` — Qdrant upsert.
+6. **restaurant_vectors**: 업로드된 리뷰에서 restaurant_id를 수집하고, 별도 컬렉션 `restaurant_vectors`에 레스토랑 메타데이터 등이 필요하면 생성/갱신.
+
+#### 3.2.4 응답 (VectorUploadResponse)
+
+- `message`: 성공/경고 메시지 (포인트 0개면 "경고: 생성된 포인트가 없습니다").
+- `points_count`: 업로드된 포인트 수.
+- `collection_name`: 사용한 컬렉션 이름.
+
+### 3.3 Vector 관련 Config·상수
+
+| 설정 | 기본값 | 설명 |
+|------|--------|------|
+| EMBEDDING_MODEL | sentence-transformers/paraphrase-multilingual-mpnet-base-v2 | Dense 모델명 |
+| EMBEDDING_DIM | 768 | Dense 차원 |
+| SPARSE_EMBEDDING_MODEL | Qdrant/bm25 | Sparse 모델명 |
+| DENSE_PREFETCH_LIMIT | 200 | Hybrid Dense prefetch |
+| SPARSE_PREFETCH_LIMIT | 300 | Hybrid Sparse prefetch |
+| FALLBACK_MIN_SCORE | 0.2 | Dense 폴백 시 min_score |
+| COLLECTION_NAME | reviews_collection | 컬렉션 이름 |
+| QDRANT_URL | ./qdrant_data | Qdrant URL 또는 로컬 경로 |
+| EMBEDDING_CACHE_DIR | (없음) | FastEmbed 캐시 경로 (설정 시 FASTEMBED_CACHE_PATH 사용) |
+
+---
+
+## 4. Sentiment 파이프라인
+
+**라우터**: `src/api/routers/sentiment.py`  
+**prefix**: `/api/v1/sentiment`  
+**핵심 클래스**: `src/sentiment_analysis.py`의 `SentimentAnalyzer`
+
+### 4.1 단일: `POST /sentiment/analyze`
+
+#### 4.1.1 역할
+
+단일 레스토랑의 **전체 리뷰**에 대해 긍정/부정/중립 개수와 비율을 산출합니다. **1차 HuggingFace sentiment 분류** 후, **1차 부정으로 나온 리뷰 중 일부를 LLM으로 재판정**해 최종 집계에 반영합니다.
+
+#### 4.1.2 요청 Body (SentimentAnalysisRequest)
+
+- `reviews`: 리뷰 리스트 (id, restaurant_id, content, created_at 등). Pydantic/딕셔너리 모두 가능.
+- `restaurant_id`: 레스토랑 ID (BIGINT FK).
+
+#### 4.1.3 처리 단계
+
+1. **락 획득**: `acquire_lock(restaurant_id, "sentiment", ttl=3600)`.
+2. **SKIP 여부**: `metrics_db.should_skip_analysis(restaurant_id, "sentiment", SKIP_MIN_INTERVAL_SECONDS)` → true면 스킵 응답 반환.
+3. **content 추출**: `extract_content_list(reviews)` → `content`(또는 `review`) 필드만 리스트로. 비어 있으면 count/ratio 0으로 조기 반환.
+4. **1차 분류 (_classify_with_hf_only)**:
+   - `_get_sentiment_pipeline()`으로 전역 싱글톤 HF pipeline 로드 (sentiment-analysis, Config.SENTIMENT_MODEL, device=CPU 강제 옵션 가능).
+   - 리뷰를 `LLM_BATCH_SIZE`(기본 10) 단위로 나누어 `pipe(batch, top_k=None)` 호출.
+   - 각 레이블에 대해: **positive score > 0.8**이면 긍정, 아니면 부정으로 간주하고 해당 리뷰를 **LLM 재판정 대상(negative_reviews_for_llm)**에 추가.
+   - 반환: (positive_count, negative_count, neutral_count, total_count, sentiment_labels, negative_reviews_for_llm).
+5. **LLM 재판정** (negative_reviews_for_llm이 비어 있지 않을 때):
+   - 입력: `id\tcontent` 형식의 줄 단위 텍스트.
+   - OpenAI(또는 Config에 따른 백엔드)로 "sentiment classification, JSON array [{\"id\":..., \"sentiment\":\"positive|negative|neutral\"}]" 요청.
+   - 응답에서 id별 sentiment를 읽어, 기존 negative로 잡힌 것 중 positive/neutral로 바뀐 만큼 개수 보정하고 labels 갱신.
+   - 재판정 실패 시 1차 분류 결과를 그대로 사용.
+6. **비율 계산**:
+   - `total_with_sentiment = positive_count + negative_count`.
+   - `positive_ratio = round((positive_count / total_with_sentiment) * 100)` (total_with_sentiment가 0이면 0).
+   - `negative_ratio` 동일.
+   - `neutral_ratio = round((neutral_count / total_count) * 100)`.
+7. **메트릭 수집** 후 `SentimentAnalysisResponse` 반환.
+
+#### 4.1.4 응답 (SentimentAnalysisResponse)
+
+- `restaurant_id`, `restaurant_name`, `positive_count`, `negative_count`, `neutral_count`, `total_count`, `positive_ratio`, `negative_ratio`, `neutral_ratio`.
+- 디버그 시 `debug`: `request_id`, `processing_time_ms`, `tokens_used`, `model_version`.
+
+#### 4.1.5 Sentiment 관련 Config
+
+| 설정 | 기본값 | 설명 |
+|------|--------|------|
+| SENTIMENT_MODEL | Dilwolf/Kakao_app-kr_sentiment | HuggingFace sentiment 모델 |
+| SENTIMENT_FORCE_CPU | true | True면 device=-1 (CPU만 사용, meta tensor 오류 회피) |
+| SENTIMENT_CLASSIFIER_USE_THREAD | true | True면 HF 분류를 asyncio.to_thread로 실행 (이벤트 루프 격리) |
+| SENTIMENT_LLM_ASYNC | true | True면 LLM 재판정을 AsyncOpenAI로 호출 |
+| SENTIMENT_RESTAURANT_ASYNC | true | 배치 시 레스토랑 간 병렬 |
+| LLM_BATCH_SIZE | 10 | 1차 분류 배치 크기·LLM 입력 배치 참고 |
+| OPENAI_MODEL | gpt-4o-mini | LLM 재판정에 사용하는 모델 |
+
+### 4.2 배치: `POST /sentiment/analyze/batch`
+
+- 요청: `SentimentAnalysisBatchRequest` — `restaurants` 리스트 (각 항목에 reviews, restaurant_id 등).
+- `SENTIMENT_RESTAURANT_ASYNC=true`면 `asyncio.gather`로 레스토랑별 `analyze_async` 병렬 실행.
+- 반환: `SentimentAnalysisBatchResponse` — 레스토랑별 `SentimentAnalysisResponse` 리스트.
+
+---
+
+## 5. Summary 파이프라인
+
+**라우터**: `src/api/routers/llm.py`  
+**prefix**: `/api/v1/llm`  
+**핵심**: `_retrieve_category_hits_accuracy_first`(llm.py), `summarize_aspects_new` / `summarize_aspects_new_async`(summary_pipeline.py), `aspect_seeds.py`
+
+### 5.1 단일: `POST /llm/summarize`
+
+#### 5.1.1 역할
+
+레스토랑 리뷰를 **service / price / food** 세 카테고리로 검색한 뒤, 카테고리별 요약(summary, bullets, evidence)과 **overall_summary**를 생성합니다. 출력 말투는 **"~해요" 체**로 통일합니다. 긍정/부정 비율은 세지 않습니다.
+
+#### 5.1.2 요청 Body (SummaryRequest)
+
+- `restaurant_id`: 레스토랑 ID.
+- `limit`: 카테고리당 검색·요약에 사용할 최대 리뷰 수 (기본 10).
+
+#### 5.1.3 처리 단계
+
+1. **락** → **SKIP** (동일 2절).
+2. **시드 결정**: 파일/ASPECT_SEEDS_FILE 미사용. `DEFAULT_SERVICE_SEEDS`, `DEFAULT_PRICE_SEEDS`, `DEFAULT_FOOD_SEEDS`(aspect_seeds.py)만 사용. 카테고리별로 시드 **최대 10개**를 공백으로 이어 쿼리 문자열 생성.
+3. **카테고리별 검색** (service → price → food 순, 단일 요청은 순차): 각 카테고리에 대해 `_retrieve_category_hits_accuracy_first` 호출.
+
+##### _retrieve_category_hits_accuracy_first 상세
+
+- **입력**: vector_search, category_name, query_text, restaurant_id, final_limit.
+- **상수**: `k_min = min(3, max(1, final_limit))`, `dense_candidate_limit = max(final_limit * 8, 50)`.
+
+**1차 — Dense-only**
+
+- `vector_search._query_dense_only(query_text, restaurant_id, limit=dense_candidate_limit, min_score=0.0)`.
+- 결과를 `dense_hits`로 둠.
+
+**2차 — Hybrid 필요 조건 및 실행**
+
+- 키워드: `_CATEGORY_KEYWORDS[category_name]` (예: service → 서비스, 친절, 응대, 직원, …).
+- `dense_texts = _hits_to_texts(dense_hits)`, `dense_ratio = _text_keyword_hit_ratio(dense_texts, keywords, top_n=8)` (상위 8개 중 키워드 1개라도 포함된 비율).
+- `dense_top_score`: dense_hits[0].score.
+- `dense_flat`: (dense_hits 5개 이상일 때) (top1 score - top5 score) < 0.02 이면 True.
+- **need_hybrid** = `(len(dense_hits) < k_min) OR (dense_ratio < 0.25) OR (dense_top_score < 0.25) OR dense_flat`.
+- need_hybrid이면 `query_hybrid_search(query_text, restaurant_id, limit=max(final_limit*3, 30), ...)` 호출 → hybrid_hits.
+- **선택**: Dense vs Hybrid 중 `hybrid_ratio > dense_ratio` 이거나 `(len(dense_hits) < k_min and len(hybrid_hits) >= len(dense_hits))` 이면 best_hits = hybrid_hits, 아니면 best_hits = dense_hits.
+- `best_hits = _dedup_hits_by_review_id(best_hits)`.
+
+**3차 — 넓은 쿼리**
+
+- `len(best_hits) < k_min` 이면 `_BROAD_QUERY[category_name]` 문자열을 쿼리에 붙여 `broad_query`로 Hybrid 1회 추가 검색. 기존 best_hits와 merge 후 dedup.
+
+**4차 — 최근 리뷰**
+
+- 여전히 `len(best_hits) < k_min` 이면 `vector_search.get_recent_restaurant_reviews(restaurant_id, limit=...)`로 최근 리뷰를 가져와 hit 형태로 변환 후 merge·dedup.
+
+- **반환**: hit 리스트 (각 항목 payload, score).
+
+4. **hits_dict / hits_data_dict 구성**: 카테고리별로 hit의 payload.content, review_id, rank를 리스트로 정리. restaurant_name은 payload에서 채움.
+5. **LLM 요약**: `summarize_aspects_new(service_reviews, price_reviews, food_reviews, service_evidence_data, price_evidence_data, food_evidence_data, llm_utils, per_category_max=request.limit)`.
+
+##### summarize_aspects_new 상세
+
+- **입력**: 카테고리별 리뷰 텍스트 리스트, 카테고리별 evidence 데이터 [{ review_id, snippet, rank }], llm_utils, per_category_max(기본 8).
+- **클리핑**: 각 카테고리를 `per_category_max`개로 자른 뒤 JSON payload로 LLM에 전달.
+- **프롬프트 규칙**: 말투 "~해요" 체, summary 1문장, bullets 3~5개, evidence는 0-based 인덱스 배열, overall_summary 2~3문장, 근거 없으면 "언급이 적어요" 등.
+- **LLM 출력 스키마**: `{ "service": { summary, bullets, evidence: [int] }, "price": ..., "food": ..., "overall_summary": { summary } }`.
+- **후처리**: evidence 인덱스를 해당 카테고리의 evidence 객체(review_id, snippet, rank) 리스트로 치환. **Price 게이트**: price의 evidence 리뷰에 PRICE_HINTS(가격, 가성비, …)가 전혀 없으면 summary·bullets를 고정 문구로 덮음 ("가격 관련 언급이 많지 않아요. …", "가격을 직접 언급한 리뷰가 많지 않아요." 등).
+- **실패 시**: JSON 파싱 재시도 후에도 실패하면 카테고리별 빈 summary/bullets/evidence, overall_summary "요약 생성에 실패했어요." 반환.
+
+6. **응답 조립**: 파이프라인 결과에서 overall_summary 추출. 비어 있으면 카테고리별 summary를 공백으로 이어 붙이고, 그래도 없으면 "요약할 리뷰가 없어요." 사용. `SummaryDisplayResponse` 생성 후 메트릭 수집·반환.
+
+#### 5.1.4 응답 (SummaryDisplayResponse)
+
+- `restaurant_id`, `restaurant_name`, `overall_summary`, `categories`: { service, price, food } 각각 `CategorySummary`(summary, bullets, evidence).
+- 디버그 시 `debug`: request_id, processing_time_ms 등.
+
+### 5.2 배치: `POST /llm/summarize/batch`
+
+- 요청: `SummaryBatchRequest` — `restaurants` 리스트, `limit`(공통).
+- **SUMMARY_SEARCH_ASYNC=true**: 한 레스토랑 내에서 service/price/food 검색을 `asyncio.gather`로 병렬.
+- **SUMMARY_RESTAURANT_ASYNC=true**: 레스토랑 단위를 `asyncio.gather`로 병렬.
+- **SUMMARY_LLM_ASYNC=true**: `summarize_aspects_new_async` 사용(비동기 LLM), false면 `asyncio.to_thread(summarize_aspects_new)`.
+- **세마포어**: `BATCH_SEARCH_CONCURRENCY`(기본 50), `BATCH_LLM_CONCURRENCY`(기본 8)로 검색·LLM 동시 실행 수 제한.
+- 둘 다 false면 레스토랑·카테고리 모두 순차.
+
+### 5.3 Summary 관련 Config
+
+| 설정 | 기본값 | 설명 |
+|------|--------|------|
+| SUMMARY_SEARCH_ASYNC | true | 배치 시 카테고리별 검색 병렬 |
+| SUMMARY_RESTAURANT_ASYNC | true | 배치 시 레스토랑 간 병렬 |
+| SUMMARY_LLM_ASYNC | true | 배치 시 LLM 비동기 호출 |
+| BATCH_SEARCH_CONCURRENCY | 50 | 배치 검색 세마포어 |
+| BATCH_LLM_CONCURRENCY | 8 | 배치 LLM 세마포어 |
+| DENSE_PREFETCH_LIMIT, SPARSE_PREFETCH_LIMIT, FALLBACK_MIN_SCORE | (Vector와 동일) | Hybrid/폴백 검색 |
+
+---
+
+## 6. Comparison 파이프라인
+
+**라우터**: `src/api/routers/llm.py`  
+**prefix**: `/api/v1/llm`  
+**핵심**: `src/comparison.py`의 `ComparisonPipeline`, `src/comparison_pipeline.py`의 Kiwi+Spark 비율·lift·전체 평균
+
+### 6.1 단일: `POST /llm/comparison`
+
+#### 6.1.1 역할
+
+단일 레스토랑을 **전체 평균**과 비교해 **service / price** 만족도 **lift(%)**를 산출하고, LLM으로 자연어 해석 문장을 생성합니다. lift > 0인 카테고리만 comparisons에 포함됩니다.
+
+#### 6.1.2 요청 Body (ComparisonRequest)
+
+- `restaurant_id`: 타겟 레스토랑 ID.
+
+#### 6.1.3 처리 단계
+
+1. **락** → **SKIP** (동일 2절).
+2. **전체 평균(all_average_ratios) 계산** — 우선순위:
+   - **① 파일**: `all_average_data_path` 또는 `Config.ALL_AVERAGE_ASPECT_DATA_PATH`가 있으면 `calculate_all_average_ratios_from_file(path, stopwords, project_root)` 호출. Spark로 TSV/JSON 리뷰를 읽어 Kiwi bigram → service/price 긍정 비율 계산. 성공 시 해당 비율 사용.
+   - **② Qdrant**: ① 실패 또는 없으면 `vector_search.get_all_reviews_for_all_average(limit=5000)`로 리뷰 샘플 조회 후 `calculate_all_average_ratios_from_reviews(all_reviews, stopwords)` (Kiwi만 또는 Spark)로 비율 계산.
+   - **③ Config fallback**: 그래도 없으면 `ALL_AVERAGE_SERVICE_RATIO`, `ALL_AVERAGE_PRICE_RATIO` (기본 0.60, 0.55) 사용.
+3. **단일 레스토랑 리뷰 조회**: `vector_search.get_restaurant_reviews(str(restaurant_id))`. 없으면 comparisons=[], category_lift=0, comparison_display 템플릿으로 조기 반환.
+4. **단일 레스토랑 비율**: `calculate_single_restaurant_ratios(review_texts, stopwords)`.
+
+##### calculate_single_restaurant_ratios 상세
+
+- **Spark 경로**(SPARK_AVAILABLE이고 DISABLE_SPARK가 아닐 때): RDD로 텍스트 병렬화 → `_spark_calculate_ratios(rdd, stopwords)`.
+  - Kiwi 토크나이저로 NNG/NNP만, len≥2, 불용어 제외, bigram (a b) 생성 → (phrase, 1) emit → reduceByKey → takeOrdered(2000) → is_noise 제거.
+  - phrase를 **SERVICE_KW** / **PRICE_KW**로 분류: SERVICE_KW = {친절, 서비스, 응대, 직원, 사장, 불친절}, PRICE_KW = {가격, 가성비, 대비, 리필, 무한, 할인, 쿠폰}.
+  - service 긍정: phrase에 **SERVICE_POSITIVE_KW**(친절) 포함 개수 / service 총 개수. price 긍정: **PRICE_POSITIVE_KW**(가성비, 가격 합리, 가격 만족, 무한 리필, 리필 가능) 포함 개수 / price 총 개수.
+- **Python 폴백**(Spark 비활성 또는 Py4J/Spark 오류 시): `_python_calculate_ratios(texts, stopwords)` — Kiwi만으로 동일 bigram·분류·비율 계산.
+- 반환: `{"service": 0.xx, "price": 0.xx}` (소수 둘째자리 반올림).
+
+5. **Lift 계산**: `calculate_comparison_lift(single_restaurant_ratios, all_average_ratios)`.
+   - **식**: `lift[category] = ((single_ratio - all_ratio) / all_ratio) * 100` (all_ratio > 0일 때). 반올림 정수.
+   - 반환: `{"service": 20, "price": 18}` 형태.
+6. **LLM 해석**: 서비스·가격 각각에 대해 `generate_comparison_interpretation_async(label, lift, tone, n_reviews)` 호출. lift≤0이면 "평균과 비슷합니다." 고정. `COMPARISON_ASYNC=true`면 `asyncio.gather`로 2개 병렬.
+   - LLM 실패 시 **템플릿 폴백**: lift≥30 → "약 N% 높아, 차이가 큰 편", lift<10 → "N% 높아, 차이는 크지 않은 편", 그 외 "약 N% 높아, 차이가 어느 정도 있습니다."
+7. **comparisons 리스트**: lift_dict에서 **lift > 0**인 카테고리만 항목으로 넣음 (category, lift_percentage, comparison_display 문장 등).
+8. **응답**: `ComparisonResponse`(comparisons, category_lift, comparison_display, total_candidates, validated_count, processing_time_ms 등).
+
+#### 6.1.4 응답 (ComparisonResponse)
+
+- `restaurant_id`, `restaurant_name`, `comparisons`(lift>0인 카테고리별 항목), `total_candidates`, `validated_count`, `category_lift`(service/price 수치), `comparison_display`(서비스/가격 해석 문장 리스트).
+- 디버그 시 `debug` 포함.
+
+### 6.2 배치: `POST /llm/comparison/batch`
+
+- 요청: `ComparisonBatchRequest` — `restaurants` 리스트, `all_average_data_path`(선택).
+- `COMPARISON_BATCH_ASYNC=true`면 레스토랑별 compare를 `asyncio.gather`로 병렬.
+- 반환: `ComparisonBatchResponse` — 레스토랑별 `ComparisonResponse` 리스트.
+
+### 6.3 Comparison 관련 Config·상수
+
+| 설정 | 기본값 | 설명 |
+|------|--------|------|
+| COMPARISON_ASYNC | true | 서비스/가격 LLM 해석 병렬 |
+| COMPARISON_BATCH_ASYNC | true | 배치 시 레스토랑 간 병렬 |
+| ALL_AVERAGE_ASPECT_DATA_PATH | data/test_data_sample.json | 전체 평균용 파일 경로 |
+| ALL_AVERAGE_SERVICE_RATIO | 0.60 | 전체 평균 fallback (service) |
+| ALL_AVERAGE_PRICE_RATIO | 0.55 | 전체 평균 fallback (price) |
+| DISABLE_SPARK | false | true면 Spark 비활성, Kiwi만 사용 |
+
+- **comparison_pipeline.py 상수**: SERVICE_KW, PRICE_KW, SERVICE_POSITIVE_KW, PRICE_POSITIVE_KW (위 6.1.3 참고).
+
+---
+
+## 7. 파이프라인 관계 요약
+
+```
+[클라이언트]
+    │
+    ├─ POST /api/v1/vector/upload           → 리뷰 벡터 적재 (Dense+Sparse)
+    ├─ POST /api/v1/vector/search/similar   → 유사 리뷰 검색 (Hybrid RRF / Dense 폴백)
+    │
+    ├─ POST /api/v1/sentiment/analyze       → 감성 분류 (HF 1차 + LLM 재판정) → 비율
+    ├─ POST /api/v1/sentiment/analyze/batch
+    │
+    ├─ POST /api/v1/llm/summarize           → 카테고리별 검색 + LLM 요약 (해요체)
+    ├─ POST /api/v1/llm/summarize/batch
+    │
+    ├─ POST /api/v1/llm/comparison          → Kiwi+Spark 비율 → lift → LLM 해석
+    └─ POST /api/v1/llm/comparison/batch
+```
+
+- **Vector** 업로드 결과는 Summary의 카테고리별 검색·Comparison의 레스토랑 리뷰 조회에서 사용됩니다.
+- **Summary**는 긍정/부정 비율을 세지 않고 **요약만** 생성하며, **Sentiment**가 비율을 담당합니다.
+- **Comparison**은 Vector에 적재된 리뷰를 조회한 뒤 Kiwi(+Spark)로 service/price 긍정 비율을 구하고, 전체 평균과 비교해 lift와 LLM 설명을 만듭니다.
+
+---
+
+## 8. 설정(Config) 전체 요약
+
+| 구분 | 설정 | 기본값 | 설명 |
+|------|------|--------|------|
+| **공통** | SKIP_MIN_INTERVAL_SECONDS | 3600 | SKIP 판단 간격(초) |
+| **Vector** | EMBEDDING_MODEL | paraphrase-multilingual-mpnet-base-v2 | Dense 모델 |
+| | EMBEDDING_DIM | 768 | Dense 차원 |
+| | SPARSE_EMBEDDING_MODEL | Qdrant/bm25 | Sparse 모델 |
+| | DENSE_PREFETCH_LIMIT | 200 | Hybrid Dense prefetch |
+| | SPARSE_PREFETCH_LIMIT | 300 | Hybrid Sparse prefetch |
+| | FALLBACK_MIN_SCORE | 0.2 | Dense 폴백 min_score |
+| | COLLECTION_NAME | reviews_collection | Qdrant 컬렉션 |
+| | QDRANT_URL | ./qdrant_data | Qdrant 주소 |
+| **Sentiment** | SENTIMENT_MODEL | Dilwolf/Kakao_app-kr_sentiment | HF 모델 |
+| | SENTIMENT_FORCE_CPU | true | CPU만 사용 |
+| | SENTIMENT_CLASSIFIER_USE_THREAD | true | HF를 to_thread로 실행 |
+| | SENTIMENT_LLM_ASYNC | true | LLM 재판정 비동기 |
+| | SENTIMENT_RESTAURANT_ASYNC | true | 배치 레스토랑 병렬 |
+| **Summary** | SUMMARY_SEARCH_ASYNC | true | 배치 카테고리 검색 병렬 |
+| | SUMMARY_RESTAURANT_ASYNC | true | 배치 레스토랑 병렬 |
+| | SUMMARY_LLM_ASYNC | true | 배치 LLM 비동기 |
+| | BATCH_SEARCH_CONCURRENCY | 50 | 배치 검색 동시 수 |
+| | BATCH_LLM_CONCURRENCY | 8 | 배치 LLM 동시 수 |
+| **Comparison** | COMPARISON_ASYNC | true | 서비스/가격 LLM 병렬 |
+| | COMPARISON_BATCH_ASYNC | true | 배치 레스토랑 병렬 |
+| | ALL_AVERAGE_ASPECT_DATA_PATH | data/test_data_sample.json | 전체 평균 파일 |
+| | ALL_AVERAGE_SERVICE_RATIO | 0.60 | 전체 평균 fallback service |
+| | ALL_AVERAGE_PRICE_RATIO | 0.55 | 전체 평균 fallback price |
+| | DISABLE_SPARK | false | Spark 비활성 시 Kiwi만 |
+
+---
+
+## 9. 관련 파일 맵 (상세)
+
+| 파이프라인 | 라우터 | 핵심 함수·클래스 | 의존 모듈 |
+|------------|--------|------------------|-----------|
+| **Vector** | api/routers/vector.py | VectorSearch.query_similar_reviews, query_hybrid_search, _query_dense_only, prepare_points, upload_collection | vector_search.py, config, models, review_utils |
+| **Sentiment** | api/routers/sentiment.py | SentimentAnalyzer._get_sentiment_pipeline, _classify_with_hf_only, _classify_contents, _apply_llm_reclassify_*, analyze, analyze_async | sentiment_analysis.py, review_utils(extract_content_list), config, models |
+| **Summary** | api/routers/llm.py | _retrieve_category_hits_accuracy_first, _build_category_result, _process_one_restaurant_async, _batch_summarize_async | summary_pipeline.py(summarize_aspects_new, _async), aspect_seeds.py, vector_search, config, models |
+| **Comparison** | api/routers/llm.py | ComparisonPipeline.compare, compare_batch | comparison.py, comparison_pipeline.py(calculate_single_restaurant_ratios, calculate_comparison_lift, calculate_all_average_ratios_from_file/from_reviews, format_comparison_display, _spark_calculate_ratios, _python_calculate_ratios), vector_search, llm_utils, config, models |
+
+**공통**: api/main.py, api/dependencies.py, config.py, models.py, cache.py(acquire_lock), metrics_collector.py, metrics_db.py.
+
+---
+
+이 문서는 현재 코드 기준으로 작성되었습니다. 파이프라인 변경 시 함께 갱신하는 것을 권장합니다.  
+카테고리별 요약 검색 조건의 트레이드오프는 `pipe_anal_ex.md/second_stage_search_tradeoffs.md`, Summary 단계별 상세는 `etc_md/SUMMARY_PIPELINE.md` 등을 참고하면 됩니다.

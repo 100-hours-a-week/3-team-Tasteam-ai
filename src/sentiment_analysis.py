@@ -132,7 +132,8 @@ class SentimentAnalyzer:
             batch_indices = list(range(i, min(i + batch_size, len(content_list))))
             
             # top_k=None으로 모든 레이블 점수 반환 (return_all_scores 대체)
-            outputs = pipe(batch, top_k=None)
+            # BERT 계열 max 512 토큰 초과 시 RuntimeError 방지
+            outputs = pipe(batch, top_k=None, truncation=True, max_length=512)
             
             for idx, out in zip(batch_indices, outputs):
                 # outputs는 리스트의 리스트: [[{"label": "...", "score": ...}, ...], ...]

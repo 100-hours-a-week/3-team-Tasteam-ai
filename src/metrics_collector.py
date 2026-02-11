@@ -27,6 +27,7 @@ _llm_tps: Optional[Any] = None
 _llm_tokens_total: Optional[Any] = None
 _app_queue_depth: Optional[Any] = None
 _app_worker_busy: Optional[Any] = None
+_event_loop_lag_seconds: Optional[Any] = None
 _in_flight_count: int = 0  # inc/dec와 동기화해 worker_busy 계산용
 
 try:
@@ -73,6 +74,10 @@ try:
         "app_worker_busy",
         "이 워커가 요청 처리 중이면 1, 유휴면 0 (worker utilization용)",
     )
+    _event_loop_lag_seconds = Gauge(
+        "event_loop_lag_seconds",
+        "이벤트 루프 지연(초). call_soon 콜백이 실제 실행되기까지 걸린 시간.",
+    )
 except ImportError:
     pass
 
@@ -99,6 +104,15 @@ def app_queue_depth_dec() -> None:
             _in_flight_count = max(0, _in_flight_count - 1)
             if _app_worker_busy is not None:
                 _app_worker_busy.set(1 if _in_flight_count > 0 else 0)
+        except Exception:
+            pass
+
+
+def set_event_loop_lag_seconds(lag_seconds: float) -> None:
+    """Event loop lag(초)를 Prometheus 게이지에 기록. event_loop_lag_reporter에서 호출."""
+    if _PROMETHEUS_AVAILABLE and _event_loop_lag_seconds is not None:
+        try:
+            _event_loop_lag_seconds.set(lag_seconds)
         except Exception:
             pass
 

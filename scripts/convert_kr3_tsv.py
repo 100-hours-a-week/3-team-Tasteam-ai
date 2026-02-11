@@ -16,11 +16,25 @@ python scripts/convert_kr3_tsv.py --input kr3.tsv --output test_large.json --sam
 # 전체 데이터 변환 (시간이 오래 걸릴 수 있음)
 python scripts/convert_kr3_tsv.py --input kr3.tsv --output test_production.json
 
-실제 서비스와 유사한 불균등 분포 (파워로우 + 핫키 + Zipf 시나리오):
 # 파워로우 분포: 상위 3개 5000/2000/1000, 나머지 min=10~max=5000
 python scripts/convert_kr3_tsv.py --input data/kr3.tsv --output tasteam_app_all_review_data.json --power-law --restaurants 100
+
 # Zipf(80-20) 요청 시나리오도 함께 출력 (부하테스트 시 인기 레스토랑이 더 자주 요청되도록)
 python scripts/convert_kr3_tsv.py --input data/kr3.tsv --output data.json --power-law --output-scenario scenario.txt --scenario-requests 20000
+
+실제 서비스와 유사한 불균등 분포 (파워로우 + 핫키 + Zipf 시나리오):
+# 파워로우 + 핫키 3개(5000/2000/1000) + min=10, max=5000, 100개 레스토랑
+python scripts/convert_kr3_tsv.py --input data/kr3.tsv --output tasteam_app_all_review_data.json \
+  --power-law --restaurants 100
+
+# 위와 동일 + Zipf 시나리오 2만 요청을 scenario.txt로 저장
+python scripts/convert_kr3_tsv.py --input data/kr3.tsv --output tasteam_app_all_review_data.json \
+  --power-law --restaurants 100 \
+  --output-scenario scenario.txt --scenario-requests 20000
+
+# 핫키만 2개, 3000/1500으로 지정
+python scripts/convert_kr3_tsv.py --input data/kr3.tsv --output data.json \
+  --power-law --hot-top-n 2 --hot-counts 3000 1500 --min-reviews 5 --max-reviews 3000
 """
 
 import csv

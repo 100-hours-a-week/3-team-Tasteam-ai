@@ -522,12 +522,82 @@ def upload_data_to_qdrant(data: Dict[str, Any]):
         return False
 
 
-def _build_upload_payload_from_load_test_data(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def _trim_load_test_data_to_max_reviews(data: Dict[str, Any], max_reviews: int) -> Dict[str, Any]:
+    """
+    load_test_data를 최대 max_reviews건 리뷰만 남기도록 잘라서 반환.
+    업로드·감성 배치·요약/비교 모두 이 제한된 데이터를 사용하게 함.
+    - Nested: 여러 레스토랑에 고르게 나누기 위해 레스토랑당 상한을 두고 채움 (총 max_reviews개).
+    - Flat: reviews를 max_reviews개로 자르고, 해당하는 restaurant만 유지.
+    """
+    if not data or max_reviews <= 0:
+        return data or {}
+    # Nested: {"restaurants": [{restaurant_id, reviews: [...]}, ...]}
+    restaurants = data.get("restaurants")
+    if restaurants is not None and (not data.get("reviews")):
+        # 레스토랑 1개에 몰리지 않도록: 레스토랑당 최대 (max_reviews / min(50, 레스토랑수))건씩만 채움
+        n_rest = len(restaurants)
+        cap = max(1, max_reviews // min(50, n_rest))
+        new_restaurants: List[Dict[str, Any]] = []
+        total = 0
+        for r in restaurants:
+            if total >= max_reviews:
+                break
+            reviews = r.get("reviews") or []
+            take = min(len(reviews), cap, max_reviews - total)
+            new_reviews = reviews[:take]
+            total += len(new_reviews)
+            if new_reviews:
+                new_restaurants.append({
+                    **r,
+                    "reviews": new_reviews,
+                })
+        return {"restaurants": new_restaurants}
+    # Flat: {"reviews": [...], "restaurants": [...]}
+    flat_reviews = data.get("reviews") or []
+    flat_restaurants = data.get("restaurants") or []
+    if flat_reviews and flat_restaurants:
+        trimmed_reviews = flat_reviews[:max_reviews]
+        rids_in_use = {r.get("restaurant_id") for r in trimmed_reviews}
+        filtered_restaurants = []
+        for r in flat_restaurants:
+            rid = r.get("id") or r.get("restaurant_id")
+            if rid is not None:
+                rid = int(rid) if isinstance(rid, str) and str(rid).isdigit() else rid
+                if rid in rids_in_use:
+                    filtered_restaurants.append(r)
+        # 감성 배치용으로 nested 형태로 변환: restaurant_id별로 리뷰 그룹
+        by_rid: Dict[Any, List[Dict[str, Any]]] = {}
+        for rev in trimmed_reviews:
+            rid = rev.get("restaurant_id")
+            if rid not in by_rid:
+                by_rid[rid] = []
+            by_rid[rid].append(rev)
+        new_restaurants = []
+        for r in filtered_restaurants:
+            rid = r.get("id") or r.get("restaurant_id")
+            if rid is not None:
+                rid = int(rid) if isinstance(rid, str) and str(rid).isdigit() else rid
+                revs = by_rid.get(rid, [])
+                if revs:
+                    new_restaurants.append({
+                        "restaurant_id": rid,
+                        "restaurant_name": r.get("name") or r.get("restaurant_name") or f"Restaurant {rid}",
+                        "reviews": revs,
+                    })
+        return {"restaurants": new_restaurants}
+    return data
+
+
+def _build_upload_payload_from_load_test_data(
+    data: Dict[str, Any],
+    max_reviews: Optional[int] = None,
+) -> Optional[Dict[str, Any]]:
     """
     load_test_data 형식을 벡터 업로드 API payload로 변환.
     지원 형식:
       - {"restaurants": [{restaurant_id, reviews: [...]}]}  (nested)
       - {"reviews": [...], "restaurants": [{id, name}]}    (flat, run_all_restaurants_api 형식)
+    max_reviews: 지정 시 업로드할 최대 리뷰 수 (64만 건 중 5000건만 등). None이면 전체.
     Returns: {"reviews": [...], "restaurants": [...]} 또는 None
     """
     if not data:
@@ -546,28 +616,38 @@ def _build_upload_payload_from_load_test_data(data: Dict[str, Any]) -> Optional[
                 "content": r.get("content", ""),
                 "created_at": r.get("created_at") or "",
             })
+            if max_reviews is not None and len(reviews_ok) >= max_reviews:
+                reviews_ok = reviews_ok[:max_reviews]
+                break
         if reviews_ok:
+            rids_in_use = {r.get("restaurant_id") for r in reviews_ok}
             rests = []
             for r in flat_restaurants:
                 rid = r.get("id") or r.get("restaurant_id")
                 if rid is not None:
                     rid = int(rid) if isinstance(rid, str) and str(rid).isdigit() else rid
-                    rests.append({"id": rid, "name": r.get("name", "")})
+                    if rid in rids_in_use:
+                        rests.append({"id": rid, "name": r.get("name", "")})
             if rests:
                 return {"reviews": reviews_ok, "restaurants": rests}
     # Nested 형식: restaurants 내 reviews 포함
     all_reviews: List[Dict[str, Any]] = []
     all_restaurants: List[Dict[str, Any]] = []
     for r in data.get("restaurants") or []:
+        if max_reviews is not None and len(all_reviews) >= max_reviews:
+            break
         rid = r.get("restaurant_id")
         if rid is None:
             continue
         rid = int(rid) if isinstance(rid, str) and str(rid).isdigit() else rid
-        all_restaurants.append({
+        rest_info = {
             "id": rid,
             "name": r.get("restaurant_name") or r.get("name") or f"Restaurant {rid}",
-        })
+        }
+        added = 0
         for rev in r.get("reviews") or []:
+            if max_reviews is not None and len(all_reviews) >= max_reviews:
+                break
             if isinstance(rev, dict) and rev.get("content") is not None:
                 rev_copy = {
                     "id": rev.get("id"),
@@ -576,6 +656,11 @@ def _build_upload_payload_from_load_test_data(data: Dict[str, Any]) -> Optional[
                     "created_at": rev.get("created_at") or "",
                 }
                 all_reviews.append(rev_copy)
+                added += 1
+        if added:
+            all_restaurants.append(rest_info)
+    if max_reviews is not None and len(all_reviews) > max_reviews:
+        all_reviews = all_reviews[:max_reviews]
     if not all_reviews:
         return None
     return {"reviews": all_reviews, "restaurants": all_restaurants}
@@ -585,13 +670,15 @@ def upload_load_test_data_to_ports(
     load_test_data: Dict[str, Any],
     ports: Optional[List[int]],
     timeout: int = 3600,
+    max_reviews: Optional[int] = None,
 ) -> bool:
     """
     부하테스트용 데이터를 벡터 DB에 업로드.
     ports가 있으면 각 포트에, 없으면 get_base_url()에 1회 업로드.
+    max_reviews: 지정 시 업로드할 최대 리뷰 수 (64만 건 중 5000건만 등). None이면 전체.
     Returns: 모두 성공 시 True, 하나라도 실패 시 False
     """
-    payload = _build_upload_payload_from_load_test_data(load_test_data)
+    payload = _build_upload_payload_from_load_test_data(load_test_data, max_reviews=max_reviews)
     if not payload:
         print_warning("업로드할 리뷰가 없습니다.")
         return False
@@ -3114,6 +3201,20 @@ def main():
         help="부하테스트 벡터 업로드 요청 타임아웃(초). 대용량 JSON 시 조정 (기본값: 3600)"
     )
     parser.add_argument(
+        "--load-test-max-reviews",
+        type=int,
+        default=None,
+        metavar="N",
+        help="부하테스트 입력 데이터를 최대 N건 리뷰로 제한 (예: 5000). 업로드·감성 배치·요약/비교 모두 이 데이터만 사용. 64만 건 JSON을 5000건만 쓸 때 사용"
+    )
+    parser.add_argument(
+        "--load-test-max-upload-reviews",
+        type=int,
+        default=None,
+        metavar="N",
+        help="(--load-test-max-reviews 미사용 시만) 벡터 업로드만 최대 N건으로 제한. 입력 데이터는 그대로 두고 업로드량만 줄일 때 사용"
+    )
+    parser.add_argument(
         "--prometheus-url",
         type=str,
         default="",
@@ -3251,15 +3352,17 @@ def main():
     if not check_server_health():
         sys.exit(1)
 
-    # 테스트 데이터 생성
-    data_result = generate_test_data(
-        generate_from_kr3=args.generate_from_kr3,
-        kr3_sample=args.kr3_sample,
-        kr3_restaurants=args.kr3_restaurants,
-    )
+    # 테스트 데이터 생성 (--load-test + --load-test-data 사용 시 부하테스트용 JSON만 쓰므로 생략)
+    data_result = None
+    if not (getattr(args, "load_test", False) and getattr(args, "load_test_data", None)):
+        data_result = generate_test_data(
+            generate_from_kr3=args.generate_from_kr3,
+            kr3_sample=args.kr3_sample,
+            kr3_restaurants=args.kr3_restaurants,
+        )
     temp_json_path = None
     test_data = None
-    
+
     if data_result:
         data, temp_json_path = data_result
         test_data = data  # compare_models에 전달할 데이터 저장
@@ -3342,12 +3445,13 @@ def main():
         sys.exit(0)
     
     # 일반 모드: 데이터 업로드 (compare_models 모드가 아닐 때)
-    if test_data:
+    # --load-test 모드에서는 upload_load_test_data_to_ports로만 업로드하므로 test_data_sample 업로드 생략
+    if not getattr(args, "load_test", False) and test_data:
         if upload_data_to_qdrant(test_data):
             print_success("테스트 데이터 준비 완료")
         else:
             print_warning("Qdrant upload 실패. 일부 테스트가 실패할 수 있습니다.")
-    elif not test_data:
+    elif not getattr(args, "load_test", False) and not test_data:
         print_warning("테스트 데이터 생성 실패. 일부 테스트가 실패할 수 있습니다.")
     
     # 임시 파일 정리
@@ -3428,6 +3532,13 @@ def main():
                     with open(load_test_data_path, "r", encoding="utf-8") as f:
                         load_test_data = json.load(f)
                     restaurants_list = load_test_data.get("restaurants") or []
+                    # 입력 데이터 자체를 N건으로 제한 (업로드·감성 배치·요약/비교 공통)
+                    max_input_reviews = getattr(args, "load_test_max_reviews", None)
+                    if max_input_reviews is not None:
+                        load_test_data = _trim_load_test_data_to_max_reviews(load_test_data, max_input_reviews)
+                        restaurants_list = load_test_data.get("restaurants") or []
+                        total_rev = sum(len(r.get("reviews") or []) for r in restaurants_list)
+                        print_info(f"입력 데이터 제한: 최대 {max_input_reviews}건 리뷰 사용 (실제 {total_rev}건, 레스토랑 {len(restaurants_list)}개)")
                     max_reviews = getattr(args, "load_test_max_reviews_per_restaurant", 100) or 100
                     if restaurants_list:
                         # 감성 배치: 상위 10개 레스토랑, 레스토랑당 최대 max_reviews개 리뷰
@@ -3535,7 +3646,11 @@ def main():
         ):
             ports_for_upload = getattr(args, "load_test_ports", None)
             upload_timeout = getattr(args, "load_test_upload_timeout", 3600) or 3600
-            if not upload_load_test_data_to_ports(load_test_data, ports_for_upload, timeout=upload_timeout):
+            # 입력 데이터를 이미 --load-test-max-reviews로 잘랐으면 업로드도 그대로; 아니면 --load-test-max-upload-reviews만 적용
+            max_upload_reviews = None if getattr(args, "load_test_max_reviews", None) is not None else getattr(args, "load_test_max_upload_reviews", None)
+            if max_upload_reviews is not None:
+                print_info(f"벡터 업로드만 제한: 최대 {max_upload_reviews}건 (--load-test-max-upload-reviews)")
+            if not upload_load_test_data_to_ports(load_test_data, ports_for_upload, timeout=upload_timeout, max_reviews=max_upload_reviews):
                 print_warning("벡터 업로드 실패. 요약/비교 API가 빈 결과를 반환할 수 있습니다.")
         elif load_test_data is not None and getattr(args, "no_load_test_upload", False):
             print_info("--no-load-test-upload: 벡터 업로드 생략")

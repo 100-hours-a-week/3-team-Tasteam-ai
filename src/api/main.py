@@ -8,15 +8,19 @@ from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 import asyncio
+import atexit
+import signal
+import sys
+import time
+import traceback
 from contextlib import asynccontextmanager
 import logging
-import sys
 import uuid
 
 from .routers import sentiment, vector, llm, test
 from .dependencies import get_qdrant_client, get_vector_search, get_sentiment_analyzer
 from ..cpu_monitor import get_cpu_monitor
-from ..metrics_collector import app_queue_depth_inc, app_queue_depth_dec
+from ..metrics_collector import app_queue_depth_inc, app_queue_depth_dec, set_event_loop_lag_seconds
 
 try:
     from prometheus_fastapi_instrumentator import Instrumentator
@@ -45,6 +49,64 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger(__name__)
+
+# --- 종료 시 로그 / 마지막 예외 출력 (down 원인 파악용) ---
+_last_exc_info = None
+
+
+def _excepthook(typ, val, tb):
+    """미처리 예외 시 저장 후 기존 excepthook 호출."""
+    global _last_exc_info
+    _last_exc_info = (typ, val, tb)
+    sys.__excepthook__(typ, val, tb)
+
+
+def _atexit_shutdown():
+    """정상/비정상 종료 시 한 번 실행: shutdown 로그 + 마지막 예외가 있으면 출력."""
+    logger.info("shutdown (atexit)")
+    if _last_exc_info is not None:
+        typ, val, tb = _last_exc_info
+        try:
+            traceback.print_exception(typ, val, tb, file=sys.stderr)
+        except Exception:
+            pass
+
+
+def _signal_shutdown(signum, frame):
+    """SIGTERM/SIGINT 수신 시 로그 후 종료."""
+    logger.info("shutdown requested (signal %s)", signum)
+    sys.exit(0)
+
+
+sys.excepthook = _excepthook
+atexit.register(_atexit_shutdown)
+if getattr(signal, "SIGTERM", None) is not None:
+    signal.signal(signal.SIGTERM, _signal_shutdown)
+if getattr(signal, "SIGINT", None) is not None:
+    signal.signal(signal.SIGINT, _signal_shutdown)
+
+# ---
+
+
+async def _event_loop_lag_reporter(interval_seconds: float = 5.0) -> None:
+    """
+    주기적으로 이벤트 루프 지연을 측정해 Prometheus event_loop_lag_seconds에 기록.
+    call_soon으로 넣은 콜백이 실제 실행되기까지 걸린 시간 = 루프가 바쁜 정도.
+    """
+    loop = asyncio.get_running_loop()
+    while True:
+        t0 = time.monotonic()
+        fut = loop.create_future()
+
+        def _cb() -> None:
+            lag = time.monotonic() - t0
+            set_event_loop_lag_seconds(lag)
+            if not fut.done():
+                fut.set_result(None)
+
+        loop.call_soon(_cb)
+        await fut
+        await asyncio.sleep(interval_seconds)
 
 
 def _warm_up_services():
@@ -82,7 +144,16 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning("warm-up 실패, /ready는 503 반환: %s", e)
 
-    yield
+    # Event loop lag 주기 측정 (Prometheus event_loop_lag_seconds 노출)
+    lag_task = asyncio.create_task(_event_loop_lag_reporter(5.0))
+    try:
+        yield
+    finally:
+        lag_task.cancel()
+        try:
+            await lag_task
+        except asyncio.CancelledError:
+            pass
 
     if cpu_monitor:
         await cpu_monitor.stop()
