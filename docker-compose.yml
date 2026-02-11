@@ -1,4 +1,15 @@
 services:
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+    volumes: ["redis_data:/data"]
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
   new_async:
     image: tasteam-new-async:latest
     ports:
@@ -7,6 +18,12 @@ services:
     environment:
       PORT: "8001"
       PIPELINE: "new_async"
+      REDIS_HOST: "redis"
+      REDIS_PORT: "6379"
+      REDIS_DB: "0"
+    depends_on:
+      redis:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8001/ready"]
       interval: 15s
@@ -57,3 +74,6 @@ services:
       - ./configs/grafana/ini/grafana.ini:/etc/grafana/grafana.ini
     ports: ["3000:3000"]
     depends_on: [prometheus]
+
+volumes:
+  redis_data:
