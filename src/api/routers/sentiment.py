@@ -30,19 +30,10 @@ async def analyze_sentiment(
     debug: bool = Depends(get_debug_mode),
 ):
     """
-    단일 레스토랑의 **전체 리뷰**를 sentiment 모델로 분류하여
-    **긍/부정 개수 반환 + 코드에서 직접 비율(%) 산출**합니다.
+    단일 레스토랑 감성 분석. **리뷰는 벡터 DB에서 조회**한 뒤 sentiment 모델로 분류하여
+    긍/부정 개수·비율(%)을 반환합니다.
     
-    - **reviews**: 리뷰 리스트 (id, restaurant_id, content, created_at 필수)
-    - **restaurant_id**: 레스토랑 ID (BIGINT FK)
-    
-    Returns:
-        - restaurant_id: 레스토랑 ID
-        - positive_count: 긍정 리뷰 개수
-        - negative_count: 부정 리뷰 개수
-        - total_count: 전체 리뷰 개수
-        - positive_ratio: 긍정 비율 (%)
-        - negative_ratio: 부정 비율 (%)
+    - **restaurant_id**: 레스토랑 ID (벡터 DB에서 해당 레스토랑 리뷰 조회)
     """
     start_time = time.time()
     
@@ -73,7 +64,7 @@ async def analyze_sentiment(
                         restaurant_id=request.restaurant_id,
                         analysis_type="sentiment",
                         start_time=start_time,
-                        batch_size=len(request.reviews),
+                        batch_size=0,
                         additional_info={
                             "skipped": True,
                             "reason": "recent_success",
@@ -89,7 +80,7 @@ async def analyze_sentiment(
                         positive_count=0,
                         negative_count=0,
                         neutral_count=0,
-                        total_count=len(request.reviews),
+                        total_count=0,
                         positive_ratio=0,
                         negative_ratio=0,
                         neutral_ratio=0,
@@ -99,9 +90,9 @@ async def analyze_sentiment(
                         ) if debug else None,
                     )
             
-            # 대표 벡터 기반 TOP-K 방식 사용 (analyze_async: SENTIMENT_CLASSIFIER_USE_THREAD/SENTIMENT_LLM_ASYNC 토글 적용)
+            # 리뷰는 벡터 DB에서 조회 (analyze_async(reviews=None) → vector_search 경로)
             result = await analyzer.analyze_async(
-                reviews=request.reviews,
+                reviews=None,
                 restaurant_id=request.restaurant_id,
             )
 
@@ -112,7 +103,7 @@ async def analyze_sentiment(
                 analysis_type="sentiment",
                 start_time=start_time,
                 tokens_used=result.get("tokens_used"),
-                batch_size=len(request.reviews),
+                batch_size=result.get("total_count", 0),
             )
             # TTFUR = t1 - t0 (요청 수신 시각 t0 → 응답 반환 직전 t1)
             metrics.record_llm_ttft(analysis_type="sentiment", ttft_ms=processing_time_ms)
@@ -156,17 +147,8 @@ async def analyze_sentiment_batch(
     debug: bool = Depends(get_debug_mode),
 ):
     """
-    여러 레스토랑의 **전체 리뷰**를 sentiment 모델로 분류하여 결과를 반환합니다.
-    응답은 항상 restaurant_id, positive_count, negative_count 등 동일 구조. X-Debug: true 시에만 각 항목에 debug 필드 추가.
-    
-    Args:
-        request: 배치 감성 분석 요청
-            - restaurants: 레스토랑 데이터 리스트
-                - restaurant_id: 레스토랑 ID
-                - reviews: 리뷰 리스트 (id, restaurant_id, content, created_at 필수)
-    
-    Returns:
-        각 레스토랑별 감성 분석 결과 리스트 (동일 스키마, debug 시에만 debug 필드 포함)
+    여러 레스토랑 감성 분석. 각 레스토랑 리뷰는 **벡터 DB에서 조회**한 뒤 sentiment로 분류.
+    응답은 restaurant_id, positive_count, negative_count 등 동일 구조. X-Debug: true 시에만 각 항목에 debug 필드 추가.
     """
     start_time = time.time()
     restaurant_id = request.restaurants[0].restaurant_id if request.restaurants else None

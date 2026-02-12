@@ -105,6 +105,45 @@
 }
 ```
 
+**배치 `POST /api/v1/llm/comparison/batch`**
+
+- 요청: **restaurants** 배열(각 항목: `restaurant_id` 필수). **all_average_data_path**: 선택, 전체 평균 데이터 파일 경로(미지정 시 Config 사용).
+- 응답: **`results` 배열**. 각 요소는 단일 Comparison 응답과 동일(**ComparisonResponse**).
+- **배치 (Config)**: `COMPARISON_BATCH_ASYNC=true`면 레스토랑별 compare를 `asyncio.gather`로 병렬, false면 순차.
+
+```json
+// 요청 (restaurants + all_average_data_path 선택)
+{
+  "restaurants": [
+    {"restaurant_id": 1},
+    {"restaurant_id": 2}
+  ],
+  "all_average_data_path": null
+}
+
+// 응답 — { results: [ ComparisonResponse, ... ] }
+{
+  "results": [
+    {
+      "restaurant_id": 1,
+      "comparisons": [{"category": "service", "lift_percentage": 18.5}, {"category": "price", "lift_percentage": 12.2}],
+      "total_candidates": 120,
+      "validated_count": 2,
+      "category_lift": {"service": 18.5, "price": 12.2},
+      "comparison_display": ["서비스 만족도는 평균보다 약 19% 높아요.", "가격 만족도는 평균보다 약 12% 높아요."]
+    },
+    {
+      "restaurant_id": 2,
+      "comparisons": [{"category": "service", "lift_percentage": 5.1}],
+      "total_candidates": 80,
+      "validated_count": 2,
+      "category_lift": {"service": 5.1, "price": 0},
+      "comparison_display": ["서비스 만족도는 평균보다 약 5% 높아요."]
+    }
+  ]
+}
+```
+
 ---
 
 ### 4.2 Summary
@@ -196,14 +235,12 @@
 
 **`POST /api/v1/sentiment/analyze`**
 
+- 리뷰는 **벡터 DB에서 조회**하여 사용. 요청에는 `restaurant_id`만 전달.
+
 ```json
-// 요청 (리뷰: id, restaurant_id, content, created_at 필수)
+// 요청 (restaurant_id만 사용)
 {
-  "restaurant_id": 1,
-  "reviews": [
-    {"id": 1, "restaurant_id": 1, "content": "맛있어요! 서비스도 친절해요.", "created_at": "2025-02-17T17:02:45.366789"},
-    {"id": 2, "restaurant_id": 1, "content": "맛있어요", "created_at": "2025-11-14T17:02:45.367453"}
-  ]
+  "restaurant_id": 1
 }
 
 // 응답 (debug=false, SentimentAnalysisDisplayResponse)
@@ -229,13 +266,15 @@
 
 **`POST /api/v1/sentiment/analyze/batch`**
 
+- 각 레스토랑 리뷰는 **벡터 DB에서 조회**. 요청에는 `restaurant_id`(및 선택 `restaurant_name`)만 전달.
+
 ```json
-// 요청 (리뷰: id, restaurant_id, content, created_at 필수)
+// 요청 (restaurant_id만 사용)
 {
   "restaurants": [
-    {"restaurant_id": 1, "reviews": [{"id": 1, "restaurant_id": 1, "content": "맛있어요! 서비스도 친절해요.", "created_at": "2025-02-17T17:02:45.366789"}, {"id": 2, "restaurant_id": 1, "content": "맛있어요", "created_at": "2025-11-14T17:02:45.367453"}]},
-    {"restaurant_id": 2, "reviews": [{"id": 10, "restaurant_id": 2, "content": "맛있어요", "created_at": "2025-11-14T17:02:45.367453"}]},
-    {"restaurant_id": 3, "reviews": [{"id": 20, "restaurant_id": 3, "content": "맛있어요", "created_at": "2025-11-14T17:02:45.367454"}]}
+    {"restaurant_id": 1},
+    {"restaurant_id": 2},
+    {"restaurant_id": 3}
   ]
 }
 
@@ -313,6 +352,7 @@ API별 요청/응답에 사용되는 Pydantic 모델(DTO)과 필드를 정리합
 | API | Request DTO | Response DTO |
 |-----|-------------|--------------|
 | `POST /api/v1/llm/comparison` | `ComparisonRequest` | `ComparisonResponse` (또는 Dict, 에러/스킵 시) |
+| `POST /api/v1/llm/comparison/batch` | `ComparisonBatchRequest` | `ComparisonBatchResponse` |
 | `POST /api/v1/llm/summarize` | `SummaryRequest` | `SummaryDisplayResponse` (debug 필드 선택) |
 | `POST /api/v1/llm/summarize/batch` | `SummaryBatchRequest` | `SummaryBatchResponse` |
 | `POST /api/v1/sentiment/analyze` | `SentimentAnalysisRequest` | `SentimentAnalysisDisplayResponse` (debug=false) / `SentimentAnalysisResponse` (debug=true) |
@@ -336,6 +376,9 @@ API별 요청/응답에 사용되는 Pydantic 모델(DTO)과 필드를 정리합
 | | category_lift | Dict[str, float]? | service/price lift |
 | | comparison_display | List[str]? | 표시 문장 리스트 |
 | | debug | DebugInfo? | 디버그 정보 |
+| **ComparisonBatchRequest** | restaurants | List[Dict] | [{ restaurant_id }, ...]. 각 항목에 restaurant_id 필수 |
+| | all_average_data_path | str? | 전체 평균·표본용 데이터 파일 경로. 미지정 시 Config 사용 |
+| **ComparisonBatchResponse** | results | List[ComparisonResponse] | 레스토랑별 비교 결과 |
 
 ### 5.3 Summary DTO
 
@@ -360,13 +403,8 @@ API별 요청/응답에 사용되는 Pydantic 모델(DTO)과 필드를 정리합
 
 | DTO | 필드 | 타입 | 설명 |
 |-----|------|------|------|
-| **SentimentReviewInput** | id | int | 리뷰 ID (필수, LLM 재판정 매핑용) |
-| | restaurant_id | int | 레스토랑 ID |
-| | content | str | 리뷰 내용 |
-| | created_at | datetime | 리뷰 작성 시각 (ISO 8601, 필수) |
-| **SentimentAnalysisRequest** | restaurant_id | int | 레스토랑 ID |
-| | restaurant_name | str? | 레스토랑 이름 (응답에 그대로 반환, 선택) |
-| | reviews | List[SentimentReviewInput] | 리뷰 리스트 |
+| **SentimentAnalysisRequest** | restaurant_id | int | 레스토랑 ID (벡터 DB에서 리뷰 조회) |
+| | restaurant_name | str? | 레스토랑 이름 (응답에 그대로 반환) |
 | **SentimentAnalysisDisplayResponse** | restaurant_id | int | 레스토랑 ID |
 | | restaurant_name | str? | 레스토랑 이름 |
 | | positive_ratio | int | 긍정 비율 (%) |
@@ -377,9 +415,9 @@ API별 요청/응답에 사용되는 Pydantic 모델(DTO)과 필드를 정리합
 | | total_count | int | 전체 리뷰 수 |
 | | neutral_ratio | int | 중립 비율 (%) |
 | | debug | DebugInfo? | 디버그 정보 |
-| **SentimentRestaurantBatchInput** | restaurant_id | int | 레스토랑 ID |
-| | reviews | List[SentimentReviewInput] | 리뷰 리스트 |
-| **SentimentAnalysisBatchRequest** | restaurants | List[SentimentRestaurantBatchInput] | 레스토랑별 리뷰 |
+| **SentimentRestaurantBatchInput** | restaurant_id | int | 레스토랑 ID (벡터 DB에서 리뷰 조회) |
+| | restaurant_name | str? | 레스토랑 이름 (응답에 그대로 반환) |
+| **SentimentAnalysisBatchRequest** | restaurants | List[SentimentRestaurantBatchInput] | 레스토랑 ID 리스트 (각 항목 리뷰는 벡터 DB에서 조회) |
 | **SentimentAnalysisBatchResponse** | results | List[SentimentAnalysisResponse] | 레스토랑별 결과 |
 
 ### 5.5 Vector DTO
@@ -457,8 +495,6 @@ API별 요청/응답에 사용되는 Pydantic 모델(DTO)과 필드를 정리합
 
 | DTO | 필드 | 역할 |
 |-----|------|------|
-| **SentimentReviewInput** | id | **필수.** LLM 재판정 시 매핑용. 1차 분류 후 negative만 LLM 재판정할 때, LLM 출력 `[{"id": ..., "sentiment": ...}]`와 매칭. |
-| **SentimentReviewInput** | created_at | **필수.** 리뷰 작성 시각 (ISO 8601). ENABLE_SENTIMENT_SAMPLING 시 get_recent_restaurant_reviews 정렬에 사용. |
 | **VectorSearchRequest** | restaurant_id | **검색 범위 제한.** 값을 넣으면 해당 레스토랑 리뷰만 검색, None이면 전체 검색. |
 | **VectorUploadReviewInput** | id | **필수.** 업로드 시 리뷰 식별·upsert 시 "어느 포인트를 갱신할지" 구분. |
 | **VectorUploadRestaurantInput** | id | 레스토랑 식별·대표 벡터 매핑용. 없으면 이름만으로 처리. |

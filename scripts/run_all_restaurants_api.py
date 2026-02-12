@@ -10,7 +10,7 @@
   1. POST /api/v1/vector/upload  (선택, 기본 수행: 입력 JSON으로 벡터 DB 업로드)
   2. 한 청크 내에서 3개 병렬:
      - POST /api/v1/llm/summarize/batch  (요약)
-     - POST /api/v1/sentiment/analyze/batch  (감성 분석, 리뷰 전달)
+     - POST /api/v1/sentiment/analyze/batch  (감성 분석, 리뷰는 벡터 DB에서 조회)
      - POST /api/v1/llm/comparison/batch  (비교)
 
 출력 JSON:
@@ -153,20 +153,14 @@ async def call_sentiment_batch_async(
     client: httpx.AsyncClient,
     base_url: str,
     restaurants_chunk: List[Dict],
-    reviews_by_rid: Dict[int, List[Dict]],
     timeout: float = 600.0,
 ) -> tuple[List[Dict], List[Optional[str]]]:
-    """감성 분석 배치 API 비동기 호출. (results, errors) 반환."""
+    """감성 분석 배치 API 비동기 호출. 리뷰는 벡터 DB에서 조회. (results, errors) 반환."""
     url = f"{base_url.rstrip('/')}{API_PREFIX}/sentiment/analyze/batch"
-    restaurants_payload = []
-    for r in restaurants_chunk:
-        rid = r["id"]
-        reviews = reviews_by_rid.get(rid) or []
-        restaurants_payload.append({
-            "restaurant_id": rid,
-            "restaurant_name": r.get("name"),
-            "reviews": reviews,
-        })
+    restaurants_payload = [
+        {"restaurant_id": r["id"], "restaurant_name": r.get("name")}
+        for r in restaurants_chunk
+    ]
     payload = {"restaurants": restaurants_payload}
     try:
         resp = await client.post(url, json=payload, timeout=timeout)
@@ -257,7 +251,6 @@ async def run_async(
     if limit_restaurants is not None:
         restaurants = restaurants[:limit_restaurants]
     total = len(restaurants)
-    reviews_by_rid = build_reviews_by_restaurant(reviews, max_per_restaurant=sentiment_reviews_limit)
     timeout_float = float(timeout)
 
     results: List[Dict[str, Any]] = []
@@ -275,7 +268,7 @@ async def run_async(
             tasks: List[Any] = [
                 call_summary_batch_async(client, base_url, chunk, limit=summary_limit, timeout=timeout_float)
                 if "summary" in apis else empty_result(chunk_size),
-                call_sentiment_batch_async(client, base_url, chunk, reviews_by_rid, timeout=timeout_float)
+                call_sentiment_batch_async(client, base_url, chunk, timeout=timeout_float)
                 if "sentiment" in apis else empty_result(chunk_size),
                 call_comparison_batch_async(client, base_url, chunk, all_average_data_path=input_path, timeout=timeout_float)
                 if "comparison" in apis else empty_result(chunk_size),

@@ -1580,31 +1580,8 @@ def test_sentiment_analysis(enable_benchmark: bool = False, num_iterations: int 
     print_header("1. 감성 분석 테스트")
     
     url = f"{get_base_url()}{API_PREFIX}/sentiment/analyze"
-    # reviews는 ReviewModel 형식이어야 함 (필수)
-    if not SAMPLE_REVIEWS:
-        print_warning("테스트 리뷰가 없습니다. Qdrant에서 자동 조회를 시도합니다.")
-        # 최소한의 리뷰 객체 생성 (서버에서 처리할 수 있도록)
-        payload = {
-            "restaurant_id": SAMPLE_RESTAURANT_ID,
-            "reviews": []  # 빈 리스트 (서버에서 자동 조회)
-        }
-    else:
-        # SentimentReviewInput 형식 (id, restaurant_id, content, created_at)
-        reviews_list = []
-        for i, review in enumerate(SAMPLE_REVIEWS):
-            created_at = (review.get('created_at') if isinstance(review, dict) else None) or datetime.now().isoformat()
-            rid = (review.get('id') if isinstance(review, dict) else None) or (i + 1)
-            if isinstance(review, dict) and review.get('content'):
-                reviews_list.append({'id': rid, 'restaurant_id': review.get('restaurant_id', SAMPLE_RESTAURANT_ID), 'content': review['content'], 'created_at': created_at})
-            elif isinstance(review, dict):
-                reviews_list.append({'id': rid, 'restaurant_id': SAMPLE_RESTAURANT_ID, 'content': str(review.get('content', '')), 'created_at': created_at})
-            elif isinstance(review, str):
-                reviews_list.append({'id': rid, 'restaurant_id': SAMPLE_RESTAURANT_ID, 'content': review, 'created_at': created_at})
-        
-        payload = {
-            "restaurant_id": SAMPLE_RESTAURANT_ID,
-            "reviews": reviews_list
-        }
+    # 리뷰는 벡터 DB에서 조회 (restaurant_id만 전달)
+    payload = {"restaurant_id": SAMPLE_RESTAURANT_ID}
     
     try:
         if enable_benchmark:
@@ -1748,13 +1725,9 @@ def test_sentiment_analysis_batch(enable_benchmark: bool = False, num_iterations
     배치 감성 분석 테스트 (새 파이프라인: HuggingFace 1차 분류 + LLM 재판정)
     
     입력 예시:
-        {
-            "restaurants": [
-                {"restaurant_id": 1, "reviews": [...]},
-                {"restaurant_id": 2, "reviews": [...]}
-            ]
-        }
-    
+        { "restaurants": [ {"restaurant_id": 1}, {"restaurant_id": 2} ] }
+    (리뷰는 벡터 DB에서 조회)
+
     출력 예시:
         ✓ 배치 감성 분석 성공 (소요 시간: 5.67초)
           - 처리된 레스토랑 수: 2
@@ -1764,37 +1737,9 @@ def test_sentiment_analysis_batch(enable_benchmark: bool = False, num_iterations
     print_header("2. 배치 감성 분석 테스트")
     
     url = f"{get_base_url()}{API_PREFIX}/sentiment/analyze/batch"
-    # 10개 레스토랑 배치 생성 (QUANTITATIVE_METRICS.md 요구사항)
-    restaurants_payload = []
-    # SentimentReviewInput 형식 (id, restaurant_id, content, created_at)
-    reviews_list = []
-    for i, review in enumerate(SAMPLE_REVIEWS):
-        created_at = (review.get('created_at') if isinstance(review, dict) else None) or datetime.now().isoformat()
-        rid = (review.get('id') if isinstance(review, dict) else None) or (i + 1)
-        if isinstance(review, dict) and review.get('content'):
-            reviews_list.append({'id': rid, 'restaurant_id': review.get('restaurant_id', SAMPLE_RESTAURANT_ID), 'content': review['content'], 'created_at': created_at})
-        elif isinstance(review, str):
-            reviews_list.append({'id': rid, 'restaurant_id': SAMPLE_RESTAURANT_ID, 'content': review, 'created_at': created_at})
-    
-    for i in range(10):
-        # 각 레스토랑에 맞게 restaurant_id 업데이트
-        restaurant_reviews = []
-        for j, review in enumerate(reviews_list):
-            if isinstance(review, dict):
-                # 배치에서 restaurant_id별로 id 구분: base_id * 1000 + j
-                base_id = review.get('id', j + 1)
-                rid = base_id * 1000 + i if isinstance(base_id, int) else (i * 100 + j + 1)
-                review_copy = {'id': rid, 'restaurant_id': SAMPLE_RESTAURANT_ID + i, 'content': review.get('content', ''), 'created_at': review.get('created_at', datetime.now().isoformat())}
-                restaurant_reviews.append(review_copy)
-        
-        restaurants_payload.append({
-            "restaurant_id": SAMPLE_RESTAURANT_ID + i,
-            "reviews": restaurant_reviews if restaurant_reviews else []  # 빈 리스트면 서버에서 자동 조회
-        })
-    
-    payload = {
-        "restaurants": restaurants_payload
-    }
+    # 10개 레스토랑 배치 (리뷰는 벡터 DB에서 조회)
+    restaurants_payload = [{"restaurant_id": SAMPLE_RESTAURANT_ID + i} for i in range(10)]
+    payload = {"restaurants": restaurants_payload}
     
     try:
         if enable_benchmark:
@@ -3539,30 +3484,16 @@ def main():
                         restaurants_list = load_test_data.get("restaurants") or []
                         total_rev = sum(len(r.get("reviews") or []) for r in restaurants_list)
                         print_info(f"입력 데이터 제한: 최대 {max_input_reviews}건 리뷰 사용 (실제 {total_rev}건, 레스토랑 {len(restaurants_list)}개)")
-                    max_reviews = getattr(args, "load_test_max_reviews_per_restaurant", 100) or 100
                     if restaurants_list:
-                        # 감성 배치: 상위 10개 레스토랑, 레스토랑당 최대 max_reviews개 리뷰
-                        restaurants_payload = []
-                        for r in restaurants_list[:10]:
-                            rid = r.get("restaurant_id", 0)
-                            reviews = (r.get("reviews") or [])[:max_reviews]
-                            reviews_serial = []
-                            for rev in reviews:
-                                if isinstance(rev, dict) and rev.get("content") is not None:
-                                    reviews_serial.append({
-                                        "id": rev.get("id"),
-                                        "restaurant_id": rev.get("restaurant_id", rid),
-                                        "content": rev.get("content", ""),
-                                        "created_at": rev.get("created_at"),
-                                    })
-                            restaurants_payload.append({"restaurant_id": rid, "reviews": reviews_serial})
+                        # 감성 배치: 상위 10개 레스토랑 (리뷰는 벡터 DB에서 조회)
+                        restaurants_payload = [{"restaurant_id": r.get("restaurant_id", 0)} for r in restaurants_list[:10]]
                         if restaurants_payload:
                             load_test_sentiment_payload = {"restaurants": restaurants_payload}
                         if len(restaurants_list) >= 2:
                             load_test_rid1 = restaurants_list[0].get("restaurant_id", SAMPLE_RESTAURANT_ID)
                             load_test_rid2 = restaurants_list[1].get("restaurant_id", SAMPLE_RESTAURANT_ID + 1)
                         load_test_rids_10 = [r.get("restaurant_id", SAMPLE_RESTAURANT_ID + i) for i, r in enumerate(restaurants_list[:10])]
-                        print_info(f"부하테스트 데이터: {load_test_data_path.name} (레스토랑 {len(restaurants_list)}개, 감성 배치 레스토랑당 최대 {max_reviews}리뷰)")
+                        print_info(f"부하테스트 데이터: {load_test_data_path.name} (레스토랑 {len(restaurants_list)}개)")
                 except Exception as e:
                     print_warning(f"부하테스트 데이터 로드 실패 ({args.load_test_data}): {e}. 기본 데이터 사용.")
             else:
@@ -3572,12 +3503,7 @@ def main():
         if load_test_sentiment_payload is not None:
             sentiment_payload = load_test_sentiment_payload
         else:
-            restaurants_payload = []
-            for i in range(10):
-                restaurants_payload.append({
-                    "restaurant_id": SAMPLE_RESTAURANT_ID + i,
-                    "reviews": SAMPLE_REVIEWS  # 모든 레스토랑에 동일한 리뷰 사용
-                })
+            restaurants_payload = [{"restaurant_id": SAMPLE_RESTAURANT_ID + i} for i in range(10)]
             sentiment_payload = {"restaurants": restaurants_payload}
         
         # 시나리오 없을 때: 배치 요약·비교는 상위 10개 레스토랑 전체 사용. 시나리오 있을 때는 요청별 2개만 사용
@@ -3600,20 +3526,9 @@ def main():
 
                         def _sentiment_fn(i: int) -> Dict[str, Any]:
                             rid = scenario_rids[i % len(scenario_rids)]
-                            r = rest_by_id.get(rid)
-                            if not r:
+                            if not rest_by_id.get(rid):
                                 return default_sentiment
-                            reviews = (r.get("reviews") or [])[:max_reviews_scenario]
-                            reviews_serial = []
-                            for rev in reviews:
-                                if isinstance(rev, dict) and rev.get("content") is not None:
-                                    reviews_serial.append({
-                                        "id": rev.get("id"),
-                                        "restaurant_id": rev.get("restaurant_id", rid),
-                                        "content": rev.get("content", ""),
-                                        "created_at": rev.get("created_at"),
-                                    })
-                            return {"restaurants": [{"restaurant_id": rid, "reviews": reviews_serial}]}
+                            return {"restaurants": [{"restaurant_id": rid}]}
 
                         batch_size = 10
 

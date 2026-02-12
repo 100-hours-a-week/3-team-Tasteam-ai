@@ -4,6 +4,15 @@
 
 본 문서는 **RunPod Pod 환경에서 vLLM을 직접 사용하고, 외부 Watchdog 스크립트로 자동 종료**하는 방식의 구현 가이드입니다.
 
+### RunPod Serverless vs Pod + Watchdog
+
+| 방식 | 설정 | GPU 기동/종료 | 문서 |
+|------|------|----------------|------|
+| **RunPod Serverless** | `VLLM_USE_RUNPOD_GPU=true` + `RUNPOD_API_KEY` + 엔드포인트 ID | 요청 시 GPU 기동, 유휴 시 RunPod가 자동 스케일다운. **별도 Watchdog 불필요.** | `etc_md/OPENAI_RATE_LIMIT_VLLM_FALLBACK.md` §2.2, §8 |
+| **Pod + Watchdog** | `USE_POD_VLLM=true`, `VLLM_USE_RUNPOD_GPU=false` | Pod 상시 가동, 외부 Watchdog가 GPU 유휴 시 RunPod API로 Pod 종료 | 본 문서 |
+
+429 폴백·기동 시 vLLM 1차 사용 시 **요청 시에만 GPU 기동·유휴 시 종료**가 목표라면 RunPod Serverless(`VLLM_USE_RUNPOD_GPU=true`) 구성을 권장합니다.
+
 ### 아키텍처
 
 ```

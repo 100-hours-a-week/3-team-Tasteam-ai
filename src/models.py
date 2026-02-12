@@ -48,10 +48,9 @@ class SentimentReviewInput(BaseModel):
 
 
 class SentimentAnalysisRequest(BaseModel):
-    """감성 분석 요청 모델 ( 기반)"""
+    """감성 분석 요청 모델. 리뷰는 벡터 DB에서 조회하여 사용."""
     restaurant_id: int = Field(..., description="레스토랑 ID (BIGINT FK)")
     restaurant_name: Optional[str] = Field(None, description="레스토랑 이름 (응답에 그대로 반환)")
-    reviews: List[SentimentReviewInput] = Field(..., description="리뷰 리스트 (id, restaurant_id, content, created_at 필수)")
 
 
 class SentimentAnalysisDisplayResponse(BaseModel):
@@ -77,17 +76,16 @@ class SentimentAnalysisResponse(BaseModel):
 
 
 class SentimentRestaurantBatchInput(BaseModel):
-    """배치 감성 분석용 레스토랑 입력 (reviews는 SentimentReviewInput: id, restaurant_id, content, created_at 필수)"""
+    """배치 감성 분석용 레스토랑 입력. 리뷰는 벡터 DB에서 조회하여 사용."""
     restaurant_id: int = Field(..., description="레스토랑 ID")
     restaurant_name: Optional[str] = Field(None, description="레스토랑 이름 (응답에 그대로 반환)")
-    reviews: List[SentimentReviewInput] = Field(default_factory=list, description="리뷰 리스트 (id, restaurant_id, content, created_at 필수)")
 
 
 class SentimentAnalysisBatchRequest(BaseModel):
-    """배치 감성 분석 요청 모델"""
+    """배치 감성 분석 요청 모델. 각 레스토랑 리뷰는 벡터 DB에서 조회."""
     restaurants: List[SentimentRestaurantBatchInput] = Field(
         ...,
-        description="레스토랑 데이터 리스트, 각 항목: restaurant_id, reviews(SentimentReviewInput 리스트)"
+        description="레스토랑 ID 리스트, 각 항목: restaurant_id (선택 restaurant_name)"
     )
 
 
