@@ -13,9 +13,8 @@ from ...models import (
     SentimentAnalysisResponse,
     SentimentAnalysisBatchRequest,
     SentimentAnalysisBatchResponse,
-    DebugInfo
 )
-from ..dependencies import get_sentiment_analyzer, get_metrics_collector, get_debug_mode
+from ..dependencies import get_sentiment_analyzer, get_metrics_collector
 from ...metrics_collector import MetricsCollector
 from ...cache import acquire_lock
 
@@ -27,7 +26,6 @@ async def analyze_sentiment(
     request: SentimentAnalysisRequest,
     analyzer: SentimentAnalyzer = Depends(get_sentiment_analyzer),
     metrics: MetricsCollector = Depends(get_metrics_collector),
-    debug: bool = Depends(get_debug_mode),
 ):
     """
     단일 레스토랑 감성 분석. **리뷰는 벡터 DB에서 조회**한 뒤 sentiment 모델로 분류하여
@@ -73,7 +71,6 @@ async def analyze_sentiment(
                         status="skipped",
                     )
                     
-                    # SKIP 응답 (항상 SentimentAnalysisResponse, debug 시에만 debug 필드 추가)
                     return SentimentAnalysisResponse(
                         restaurant_id=request.restaurant_id,
                         restaurant_name=getattr(request, "restaurant_name", None),
@@ -84,10 +81,6 @@ async def analyze_sentiment(
                         positive_ratio=0,
                         negative_ratio=0,
                         neutral_ratio=0,
-                        debug=DebugInfo(
-                            request_id=request_id,
-                            processing_time_ms=(time.time() - start_time) * 1000,
-                        ) if debug else None,
                     )
             
             # 리뷰는 벡터 DB에서 조회 (analyze_async(reviews=None) → vector_search 경로)
@@ -108,17 +101,8 @@ async def analyze_sentiment(
             # TTFUR = t1 - t0 (요청 수신 시각 t0 → 응답 반환 직전 t1)
             metrics.record_llm_ttft(analysis_type="sentiment", ttft_ms=processing_time_ms)
 
-            # 항상 SentimentAnalysisResponse 반환, debug 시에만 debug 필드 추가
             result["restaurant_name"] = getattr(request, "restaurant_name", None)
-            return SentimentAnalysisResponse(
-                **result,
-                debug=DebugInfo(
-                    request_id=request_id,
-                    processing_time_ms=(time.time() - start_time) * 1000,
-                    tokens_used=result.get("tokens_used"),
-                    model_version=result.get("model_version"),
-                ) if debug else None,
-            )
+            return SentimentAnalysisResponse(**result)
     except RuntimeError as e:
         # 락 획득 실패 (중복 실행 방지)
         if "중복 실행 방지" in str(e):
@@ -144,18 +128,15 @@ async def analyze_sentiment_batch(
     request: SentimentAnalysisBatchRequest,
     analyzer: SentimentAnalyzer = Depends(get_sentiment_analyzer),
     metrics: MetricsCollector = Depends(get_metrics_collector),
-    debug: bool = Depends(get_debug_mode),
 ):
     """
     여러 레스토랑 감성 분석. 각 레스토랑 리뷰는 **벡터 DB에서 조회**한 뒤 sentiment로 분류.
-    응답은 restaurant_id, positive_count, negative_count 등 동일 구조. X-Debug: true 시에만 각 항목에 debug 필드 추가.
+    응답은 restaurant_id, positive_count, negative_count 등 동일 구조.
     """
     start_time = time.time()
     restaurant_id = request.restaurants[0].restaurant_id if request.restaurants else None
     try:
         results = await analyzer.analyze_multiple_restaurants_async(restaurants_data=request.restaurants)
-        # 각 결과에 restaurant_name 병합 (요청 항목 순서 대응)
-        restaurants_list = request.restaurants
         elapsed_ms = (time.time() - start_time) * 1000
         metrics.record_llm_ttft(analysis_type="sentiment", ttft_ms=elapsed_ms)
         metrics.collect_metrics(
@@ -165,15 +146,6 @@ async def analyze_sentiment_batch(
             status="success",
             batch_size=len(request.restaurants),
         )
-
-        if debug:
-            debug_info = DebugInfo(processing_time_ms=elapsed_ms)
-            for r in results:
-                r["debug"] = debug_info
-        else:
-            for r in results:
-                r["debug"] = None
-
         return SentimentAnalysisBatchResponse(results=[
             SentimentAnalysisResponse(**result) for result in results
         ])
