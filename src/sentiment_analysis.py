@@ -548,23 +548,18 @@ class SentimentAnalyzer:
     
     async def analyze_multiple_restaurants_async(
         self,
-        restaurants_data: List[Any],  # List[SentimentRestaurantBatchInput] 또는 [{"restaurant_id", "reviews"}]
+        restaurants_data: List[Any],  # List[SentimentRestaurantBatchInput] 또는 [{"restaurant_id"}]
     ) -> List[Dict[str, Any]]:
         """
-        여러 레스토랑의 리뷰를 sentiment 모델로 분류하여 결과를 반환합니다.
+        여러 레스토랑 감성 분석. 리뷰는 벡터 DB에서 조회(reviews=None)하여 사용.
         SENTIMENT_RESTAURANT_ASYNC=true면 음식점 간 asyncio.gather(병렬), false면 순차.
-        샘플링이 활성화되어 있으면 대표 벡터 기반 TOP-K를 사용하고,
-        비활성화되어 있으면 제공된 reviews를 사용합니다.
         """
         if not restaurants_data:
             return []
 
         async def _analyze_one(data: Any) -> Dict[str, Any]:
             restaurant_id = data.restaurant_id if hasattr(data, "restaurant_id") else data.get("restaurant_id")
-            reviews = data.reviews if hasattr(data, "reviews") else data.get("reviews", [])
-            if Config.ENABLE_SENTIMENT_SAMPLING:
-                return await self.analyze_async(reviews=None, restaurant_id=restaurant_id)
-            return await self.analyze_async(reviews=reviews, restaurant_id=restaurant_id)
+            return await self.analyze_async(reviews=None, restaurant_id=restaurant_id)
 
         if Config.SENTIMENT_RESTAURANT_ASYNC:
             tasks = [_analyze_one(d) for d in restaurants_data]
@@ -573,9 +568,5 @@ class SentimentAnalyzer:
         results: List[Dict[str, Any]] = []
         for data in restaurants_data:
             restaurant_id = data.restaurant_id if hasattr(data, "restaurant_id") else data.get("restaurant_id")
-            reviews = data.reviews if hasattr(data, "reviews") else data.get("reviews", [])
-            if Config.ENABLE_SENTIMENT_SAMPLING:
-                results.append(self.analyze(reviews=None, restaurant_id=restaurant_id))
-            else:
-                results.append(self.analyze(reviews=reviews, restaurant_id=restaurant_id))
+            results.append(self.analyze(reviews=None, restaurant_id=restaurant_id))
         return results

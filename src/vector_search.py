@@ -37,8 +37,9 @@ class _FastEmbedEncoderAdapter:
             return np.array([]).reshape(0, self._dim)
         arrs = list(self._model.embed(sentences))
         out = np.array(arrs)
-        if len(sentences) == 1:
-            return out[0]
+        # 항상 2D 반환 (1개여도 shape (1, dim)). prepare_points zip에서 단일 리뷰 시 스칼라로 풀리는 것 방지
+        if out.ndim == 1:
+            out = np.atleast_2d(out)
         return out
 
     def get_sentence_embedding_dimension(self) -> int:
@@ -334,6 +335,8 @@ class VectorSearch:
                 for text, metadata in zip(batch_texts, batch_metadata):
                     try:
                         dense_vector = self.encoder.encode(text)
+                        if getattr(dense_vector, "ndim", 0) == 2 and dense_vector.shape[0] == 1:
+                            dense_vector = dense_vector[0]
                         
                         # Sparse 벡터 생성
                         sparse_emb = None
@@ -429,35 +432,29 @@ class VectorSearch:
                 return
             
             # PointStruct 리스트를 upload_collection 형식으로 변환
-            # upload_collection은 벡터, 페이로드, ID를 리스트 형태로 받습니다
             vectors = []
             payloads = []
             ids = []
             
             for point in points:
                 ids.append(point.id)
-                # 컬렉션 형식에 맞게 벡터 정규화
                 vector = self._normalize_vector_for_collection(point.vector)
                 if vector is None:
                     logger.error(f"포인트 {point.id}: 벡터가 없습니다.")
                     continue
-                
                 vectors.append(vector)
                 payloads.append(point.payload)
             
             is_single = self._is_collection_single_vector()
             logger.info(f"{len(points)}개의 포인트를 upload_collection으로 업로드 시작... (컬렉션 형식: {'단일 벡터' if is_single else 'named 벡터'})")
-            
-            # upload_collection 사용 (대용량 데이터에 효율적)
-            # wait=True로 설정하여 업로드 완료를 기다림
             self.client.upload_collection(
                 collection_name=self.collection_name,
                 vectors=vectors,
                 payload=payloads,
                 ids=ids,
-                batch_size=100,  # 배치 크기 설정
-                parallel=1,  # 병렬 처리 수
-                wait=True,  # 업로드 완료 대기
+                batch_size=100,
+                parallel=1,
+                wait=True,
             )
             logger.info(f"{len(points)}개의 포인트를 upload_collection으로 업로드 완료했습니다.")
         except Exception as e:
@@ -671,6 +668,8 @@ class VectorSearch:
                     if not review_text:
                         continue
                     vector = self.encoder.encode(review_text, convert_to_numpy=True)
+                    if getattr(vector, "ndim", 0) == 2 and vector.shape[0] == 1:
+                        vector = vector[0]
                 else:
                     # named vector(dense+sparse)면 dense만 사용 (restaurant_vectors는 단일 벡터)
                     v = record.vector
@@ -1105,7 +1104,8 @@ class VectorSearch:
         min_score 기본값 0.2.
         """
         try:
-            query_vector = self.encoder.encode(query_text).tolist()
+            enc = self.encoder.encode(query_text)
+            query_vector = (enc[0] if getattr(enc, "ndim", 0) == 2 and enc.shape[0] == 1 else enc).tolist()
             filter_conditions = []
             if restaurant_id:
                 restaurant_id_str = str(restaurant_id) if isinstance(restaurant_id, int) else restaurant_id
@@ -1202,7 +1202,8 @@ class VectorSearch:
                 )
             
             # Dense 벡터 생성
-            dense_vector = self.encoder.encode(query_text).tolist()
+            enc = self.encoder.encode(query_text)
+            dense_vector = (enc[0] if getattr(enc, "ndim", 0) == 2 and enc.shape[0] == 1 else enc).tolist()
             
             # Sparse 벡터 생성 (FastEmbed 사용, 모델 캐싱)
             try:
@@ -1340,7 +1341,8 @@ class VectorSearch:
             review_text = review.get("content") or review.get("review", "")
             if not review_text:
                 raise ValueError("content가 필요합니다.")
-            vector = self.encoder.encode(review_text).tolist()
+            enc = self.encoder.encode(review_text)
+            vector = (enc[0] if getattr(enc, "ndim", 0) == 2 and enc.shape[0] == 1 else enc).tolist()
             
             # 4. 현재 버전 확인
             current_version = review.get("version", 1)
@@ -1730,6 +1732,8 @@ class VectorSearch:
                 for t in batch:
                     try:
                         dv = self.encoder.encode(t)
+                        if getattr(dv, "ndim", 0) == 2 and dv.shape[0] == 1:
+                            dv = dv[0]
                         all_dense.append(dv)
                         all_sparse.append(next(self._sparse_model.embed([t])) if self._sparse_model else None)
                     except Exception:
