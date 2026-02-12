@@ -62,7 +62,7 @@ class SentimentAnalysisDisplayResponse(BaseModel):
 
 
 class SentimentAnalysisResponse(BaseModel):
-    """감성 분석 응답 모델 ( 기반)"""
+    """감성 분석 응답 모델"""
     restaurant_id: int = Field(..., description="레스토랑 ID")
     restaurant_name: Optional[str] = Field(None, description="레스토랑 이름 (요청 시 전달 시 반환)")
     positive_count: int = Field(..., description="긍정 리뷰 개수")
@@ -72,7 +72,6 @@ class SentimentAnalysisResponse(BaseModel):
     positive_ratio: int = Field(..., description="긍정 비율 (%) - 정수값")
     negative_ratio: int = Field(..., description="부정 비율 (%) - 정수값")
     neutral_ratio: int = Field(0, description="중립 비율 (%) - 정수값")
-    debug: Optional[DebugInfo] = Field(None, description="디버그 정보")
 
 
 class SentimentRestaurantBatchInput(BaseModel):

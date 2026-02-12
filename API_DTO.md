@@ -30,7 +30,7 @@
 | POST | `/api/v1/llm/comparison/batch` | ComparisonBatchRequest | ComparisonBatchResponse |
 | POST | `/api/v1/llm/summarize` | SummaryRequest | SummaryDisplayResponse |
 | POST | `/api/v1/llm/summarize/batch` | SummaryBatchRequest | SummaryBatchResponse |
-| POST | `/api/v1/sentiment/analyze` | SentimentAnalysisRequest | SentimentAnalysisResponse (debug 시 상세) |
+| POST | `/api/v1/sentiment/analyze` | SentimentAnalysisRequest | SentimentAnalysisResponse |
 | POST | `/api/v1/sentiment/analyze/batch` | SentimentAnalysisBatchRequest | SentimentAnalysisBatchResponse |
 | POST | `/api/v1/vector/search/similar` | VectorSearchRequest | VectorSearchResponse |
 | POST | `/api/v1/vector/upload` | VectorUploadRequest | VectorUploadResponse |
@@ -243,14 +243,7 @@
   "restaurant_id": 1
 }
 
-// 응답 (debug=false, SentimentAnalysisDisplayResponse)
-{
-  "restaurant_id": 1,
-  "positive_ratio": 75,
-  "negative_ratio": 25
-}
-
-// 응답 (debug=true, SentimentAnalysisResponse)
+// 응답 (SentimentAnalysisResponse)
 {
   "restaurant_id": 1,
   "positive_count": 75,
@@ -259,8 +252,7 @@
   "total_count": 100,
   "positive_ratio": 75,
   "negative_ratio": 25,
-  "neutral_ratio": 0,
-  "debug": {"request_id": "...", "processing_time_ms": 120.5, "tokens_used": null, "model_version": null, "warnings": null}
+  "neutral_ratio": 0
 }
 ```
 
@@ -355,7 +347,7 @@ API별 요청/응답에 사용되는 Pydantic 모델(DTO)과 필드를 정리합
 | `POST /api/v1/llm/comparison/batch` | `ComparisonBatchRequest` | `ComparisonBatchResponse` |
 | `POST /api/v1/llm/summarize` | `SummaryRequest` | `SummaryDisplayResponse` (debug 필드 선택) |
 | `POST /api/v1/llm/summarize/batch` | `SummaryBatchRequest` | `SummaryBatchResponse` |
-| `POST /api/v1/sentiment/analyze` | `SentimentAnalysisRequest` | `SentimentAnalysisDisplayResponse` (debug=false) / `SentimentAnalysisResponse` (debug=true) |
+| `POST /api/v1/sentiment/analyze` | `SentimentAnalysisRequest` | `SentimentAnalysisResponse` |
 | `POST /api/v1/sentiment/analyze/batch` | `SentimentAnalysisBatchRequest` | `SentimentAnalysisBatchResponse` |
 | `POST /api/v1/vector/search/similar` | `VectorSearchRequest` | `VectorSearchResponse` |
 | `POST /api/v1/vector/upload` | `VectorUploadRequest` | `VectorUploadResponse` |
@@ -405,16 +397,11 @@ API별 요청/응답에 사용되는 Pydantic 모델(DTO)과 필드를 정리합
 |-----|------|------|------|
 | **SentimentAnalysisRequest** | restaurant_id | int | 레스토랑 ID (벡터 DB에서 리뷰 조회) |
 | | restaurant_name | str? | 레스토랑 이름 (응답에 그대로 반환) |
-| **SentimentAnalysisDisplayResponse** | restaurant_id | int | 레스토랑 ID |
-| | restaurant_name | str? | 레스토랑 이름 |
-| | positive_ratio | int | 긍정 비율 (%) |
-| | negative_ratio | int | 부정 비율 (%) |
-| **SentimentAnalysisResponse** | (Display 필드) + | | |
-| | restaurant_name | str? | 레스토랑 이름 |
-| | positive_count, negative_count, neutral_count | int | 개수 |
+| **SentimentAnalysisResponse** | restaurant_id | int | 레스토랑 ID |
+| | restaurant_name | str? | 레스토랑 이름 (요청 시 전달 시 반환) |
+| | positive_count, negative_count, neutral_count | int | 긍정/부정/중립 리뷰 개수 |
 | | total_count | int | 전체 리뷰 수 |
-| | neutral_ratio | int | 중립 비율 (%) |
-| | debug | DebugInfo? | 디버그 정보 |
+| | positive_ratio, negative_ratio, neutral_ratio | int | 긍정/부정/중립 비율 (%) |
 | **SentimentRestaurantBatchInput** | restaurant_id | int | 레스토랑 ID (벡터 DB에서 리뷰 조회) |
 | | restaurant_name | str? | 레스토랑 이름 (응답에 그대로 반환) |
 | **SentimentAnalysisBatchRequest** | restaurants | List[SentimentRestaurantBatchInput] | 레스토랑 ID 리스트 (각 항목 리뷰는 벡터 DB에서 조회) |
@@ -506,7 +493,6 @@ API별 요청/응답에 사용되는 Pydantic 모델(DTO)과 필드를 정리합
 | DTO | 필드 | 역할 |
 |-----|------|------|
 | **DebugInfo** (전부 선택) | request_id, processing_time_ms, tokens_used, model_version, warnings | **디버그/운영용.** `X-Debug: true` 또는 `debug=true`일 때만 응답에 포함. 요청 추적·지연·토큰·경고 확인용. |
-| **SentimentAnalysisResponse** | debug | 감성 분석 응답에 디버그 블록 추가. |
 | **SummaryDisplayResponse** | categories | 카테고리별 요약(service/price/food). 파이프라인 결과가 없으면 None. |
 | **SummaryDisplayResponse** | debug | 요약 응답에 디버그 블록 추가. |
 | **ComparisonResponse** | category_lift | service/price별 lift 퍼센트. 통계·LLM 설명용. 없으면 None. |
