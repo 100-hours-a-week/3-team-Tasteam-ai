@@ -1,0 +1,316 @@
+mers/paraphrase-multilingual-mpnet-base-v2 now uses mean pooling instead of CLS embedding. In order to preserve the previous behaviour, consider either pinning fastembed version to 0.5.1 or using `add_custom_model` functionality.
+  self._dense_model = TextEmbedding(Config.EMBEDDING_MODEL)
+2026-02-13 14:28:34,639 - src.vector_search - INFO - Dense 벡터 모델 로드 완료: sentence-transformers/paraphrase-multilingual-mpnet-base-v2
+2026-02-13 14:28:34,740 - src.vector_search - INFO - Sparse 벡터 모델 로드 완료: Qdrant/bm25
+2026-02-13 14:28:34,749 - src.api.main - INFO - VectorSearch(임베딩) warm-up 완료
+2026-02-13 14:28:34,749 - src.llm_utils - INFO - vLLM RunPod Serverless: 엔드포인트 g09uegksn7h7ed (OpenAI 호환 API, 요청 시 GPU 기동, 유휴 시 스케일다운)
+2026-02-13 14:28:35,316 - httpx - INFO - HTTP Request: HEAD https://huggingface.co/Dilwolf/Kakao_app-kr_sentiment/resolve/main/config.json "HTTP/1.1 307 Temporary Redirect"
+2026-02-13 14:28:35,328 - httpx - INFO - HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/Dilwolf/Kakao_app-kr_sentiment/aaae4554e0c4b5cf45c6f27722b21717d027f5ff/config.json "HTTP/1.1 200 OK"
+2026-02-13 14:28:35,577 - httpx - INFO - HTTP Request: HEAD https://huggingface.co/Dilwolf/Kakao_app-kr_sentiment/resolve/main/config.json "HTTP/1.1 307 Temporary Redirect"
+2026-02-13 14:28:35,590 - httpx - INFO - HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/Dilwolf/Kakao_app-kr_sentiment/aaae4554e0c4b5cf45c6f27722b21717d027f5ff/config.json "HTTP/1.1 200 OK"
+Loading weights: 100%|████| 201/201 [00:00<00:00, 844.45it/s, Materializing param=classifier.weight]
+2026-02-13 14:28:36,329 - httpx - INFO - HTTP Request: GET https://huggingface.co/api/models/Dilwolf/Kakao_app-kr_sentiment/tree/main/additional_chat_templates?recursive=false&expand=false "HTTP/1.1 404 Not Found"
+2026-02-13 14:28:36,625 - httpx - INFO - HTTP Request: GET https://huggingface.co/api/models/Dilwolf/Kakao_app-kr_sentiment/tree/main?recursive=true&expand=false "HTTP/1.1 200 OK"
+2026-02-13 14:28:37,059 - httpx - INFO - HTTP Request: GET https://huggingface.co/api/models/Dilwolf/Kakao_app-kr_sentiment "HTTP/1.1 200 OK"
+2026-02-13 14:28:37,063 - src.sentiment_analysis - INFO - Sentiment 모델 로딩 완료: Dilwolf/Kakao_app-kr_sentiment (device=-1)
+2026-02-13 14:28:37,667 - src.api.main - INFO - Sentiment pipeline warm-up 완료
+2026-02-13 14:28:37,669 - src.api.main - INFO - 서비스 warm-up 완료, readiness=True
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8001 (Press CTRL+C to quit)
+INFO:     127.0.0.1:59778 - "GET /health HTTP/1.1" 200 OK
+2026-02-13 14:28:59,944 - src.api.routers.vector - INFO - 포인트 준비 시작: 리뷰 142개, 레스토랑 5개
+2026-02-13 14:28:59,946 - src.vector_search - INFO - 총 142개의 리뷰를 배치로 인코딩합니다 (배치 크기: 32, 하이브리드: Dense + Sparse)
+2026-02-13 14:29:20,638 - src.vector_search - INFO - 총 142개의 포인트를 생성했습니다.
+2026-02-13 14:29:20,638 - src.api.routers.vector - INFO - 포인트 준비 완료: 142개 포인트 생성됨
+2026-02-13 14:29:20,640 - src.vector_search - INFO - 142개의 포인트를 upload_collection으로 업로드 시작... (컬렉션 형식: named 벡터)
+/Users/js/tasteam-new-async/src/vector_search.py:450: UserWarning: Local mode is not recommended for collections with more than 20,000 points. Current collection contains 20622 points. Consider using Qdrant in Docker or Qdrant Cloud for better performance with large datasets.
+  self.client.upload_collection(
+2026-02-13 14:29:20,763 - src.vector_search - INFO - 142개의 포인트를 upload_collection으로 업로드 완료했습니다.
+2026-02-13 14:29:20,763 - src.api.routers.vector - INFO - 업로드 완료: 142개 포인트
+2026-02-13 14:29:20,996 - src.vector_search - INFO - 레스토랑 4의 대표 벡터를 업데이트했습니다.
+2026-02-13 14:29:21,112 - src.vector_search - INFO - 레스토랑 3의 대표 벡터를 업데이트했습니다.
+2026-02-13 14:29:21,224 - src.vector_search - INFO - 레스토랑 2의 대표 벡터를 업데이트했습니다.
+2026-02-13 14:29:21,335 - src.vector_search - INFO - 레스토랑 1의 대표 벡터를 업데이트했습니다.
+2026-02-13 14:29:21,447 - src.vector_search - INFO - 레스토랑 5의 대표 벡터를 업데이트했습니다.
+2026-02-13 14:29:21,447 - src.api.routers.vector - INFO - restaurant_vectors 컬렉션에 5개 레스토랑 대표 벡터 생성 완료
+INFO:     127.0.0.1:59780 - "POST /api/v1/vector/upload HTTP/1.1" 200 OK
+2026-02-13 14:29:21,453 - src.cache - WARNING - Redis가 설치되지 않아 캐싱이 비활성화됩니다.
+2026-02-13 14:29:21,453 - src.cache - WARNING - Redis가 없어 락을 건너뜁니다.
+2026-02-13 14:29:21,564 - src.sentiment_analysis - INFO - 총 20개의 리뷰를 sentiment 모델로 분류합니다 (restaurant_id: 1).
+2026-02-13 14:29:24,576 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions "HTTP/1.1 500 Internal Server Error"
+2026-02-13 14:29:24,577 - openai._base_client - INFO - Retrying request to /chat/completions in 0.488526 seconds
+2026-02-13 14:29:25,756 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions "HTTP/1.1 500 Internal Server Error"
+2026-02-13 14:29:25,758 - openai._base_client - INFO - Retrying request to /chat/completions in 0.921437 seconds
+2026-02-13 14:29:27,342 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions "HTTP/1.1 500 Internal Server Error"
+2026-02-13 14:29:27,344 - src.llm_utils - WARNING - RunPod OpenAI API 실패 (시도 1/3): Error code: 500 - {'error': 'Error processing the request'}
+2026-02-13 14:29:29,071 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions "HTTP/1.1 500 Internal Server Error"
+2026-02-13 14:29:29,073 - openai._base_client - INFO - Retrying request to /chat/completions in 0.499863 seconds
+2026-02-13 14:29:30,308 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions "HTTP/1.1 500 Internal Server Error"
+2026-02-13 14:29:30,310 - openai._base_client - INFO - Retrying request to /chat/completions in 0.767195 seconds
+2026-02-13 14:29:31,855 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions "HTTP/1.1 500 Internal Server Error"
+2026-02-13 14:29:31,857 - src.llm_utils - WARNING - RunPod OpenAI API 실패 (시도 2/3): Error code: 500 - {'error': 'Error processing the request'}
+2026-02-13 14:29:34,508 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions "HTTP/1.1 500 Internal Server Error"
+2026-02-13 14:29:34,510 - openai._base_client - INFO - Retrying request to /chat/completions in 0.395106 seconds
+2026-02-13 14:29:35,582 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions "HTTP/1.1 500 Internal Server Error"
+2026-02-13 14:29:35,583 - openai._base_client - INFO - Retrying request to /chat/completions in 0.933379 seconds
+2026-02-13 14:29:37,234 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions "HTTP/1.1 500 Internal Server Error"
+2026-02-13 14:29:37,234 - src.llm_utils - WARNING - RunPod OpenAI API 실패 (시도 3/3): Error code: 500 - {'error': 'Error processing the request'}
+2026-02-13 14:29:37,234 - src.sentiment_analysis - WARNING - LLM 재판정 실패: Error code: 500 - {'error': 'Error processing the request'}. 1차 분류 결과를 사용합니다.
+INFO:     127.0.0.1:59813 - "POST /api/v1/sentiment/analyze HTTP/1.1" 200 OK
+2026-02-13 14:29:37,435 - src.sentiment_analysis - INFO - 총 20개의 리뷰를 sentiment 모델로 분류합니다 (restaurant_id: 1).
+2026-02-13 14:29:37,554 - src.sentiment_analysis - INFO - 총 20개의 리뷰를 sentiment 모델로 분류합니다 (restaurant_id: 2).
+2026-02-13 14:29:37,674 - src.sentiment_analysis - INFO - 총 20개의 리뷰를 sentiment 모델로 분류합니다 (restaurant_id: 3).
+2026-02-13 14:29:37,791 - src.sentiment_analysis - INFO - 총 62개의 리뷰를 sentiment 모델로 분류합니다 (restaurant_id: 4).
+2026-02-13 14:29:37,914 - src.sentiment_analysis - INFO - 총 20개의 리뷰를 sentiment 모델로 분류합니다 (restaurant_id: 5).
+2026-02-13 14:29:41,124 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions "HTTP/1.1 500 Internal Server Error"
+2026-02-13 14:29:41,124 - openai._base_client - INFO - Retrying request to /chat/completions in 0.413480 seconds
+2026-02-13 14:29:41,339 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions "HTTP/1.1 500 Internal Server Error"
+2026-02-13 14:29:41,339 - openai._base_client - INFO - Retrying request to /chat/completions in 0.399862 seconds
+2026-02-13 14:31:03,627 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions "HTTP/1.1 500 Internal Server Error"
+2026-02-13 14:31:03,634 - openai._base_client - INFO - Retrying request to /chat/completions in 0.769570 seconds
+2026-02-13 14:31:03,636 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions "HTTP/1.1 500 Internal Server Error"
+2026-02-13 14:31:03,640 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions "HTTP/1.1 500 Internal Server Error"
+2026-02-13 14:31:03,641 - openai._base_client - INFO - Retrying request to /chat/completions in 0.930365 seconds
+2026-02-13 14:31:03,641 - openai._base_client - INFO - Retrying request to /chat/completions in 0.412530 seconds
+2026-02-13 14:31:03,653 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions "HTTP/1.1 500 Internal Server Error"
+2026-02-13 14:31:03,654 - openai._base_client - INFO - Retrying request to /chat/completions in 0.428414 seconds
+2026-02-13 14:31:03,671 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions "HTTP/1.1 500 Internal Server Error"
+2026-02-13 14:31:03,672 - openai._base_client - INFO - Retrying request to /chat/completions in 0.394971 seconds
+2026-02-13 14:31:04,885 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions "HTTP/1.1 500 Internal Server Error"
+2026-02-13 14:31:04,887 - openai._base_client - INFO - Retrying request to /chat/completions in 0.838402 seconds
+2026-02-13 14:31:04,891 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions "HTTP/1.1 500 Internal Server Error"
+2026-02-13 14:31:04,892 - openai._base_client - INFO - Retrying request to /chat/completions in 0.966883 seconds
+2026-02-13 14:31:05,200 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions "HTTP/1.1 500 Internal Server Error"
+2026-02-13 14:31:05,201 - openai._base_client - INFO - Retrying request to /chat/completions in 0.991914 seconds
+2026-02-13 14:31:05,604 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions "HTTP/1.1 500 Internal Server Error"
+2026-02-13 14:31:05,607 - src.llm_utils - WARNING - RunPod OpenAI API 실패 (시도 1/3): Error code: 500 - {'error': 'Error processing the request'}
+2026-02-13 14:31:05,608 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions "HTTP/1.1 500 Internal Server Error"
+2026-02-13 14:31:05,608 - src.llm_utils - WARNING - RunPod OpenAI API 실패 (시도 1/3): Error code: 500 - {'error': 'Error processing the request'}
+2026-02-13 14:31:06,438 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions "HTTP/1.1 500 Internal Server Error"
+2026-02-13 14:31:06,439 - src.llm_utils - WARNING - RunPod OpenAI API 실패 (시도 1/3): Error code: 500 - {'error': 'Error processing the request'}
+2026-02-13 14:31:06,934 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions "HTTP/1.1 500 Internal Server Error"
+2026-02-13 14:31:06,936 - src.llm_utils - WARNING - RunPod OpenAI API 실패 (시도 1/3): Error code: 500 - {'error': 'Error processing the request'}
+2026-02-13 14:31:37,263 - src.cache - WARNING - Redis가 없어 락을 건너뜁니다.
+2026-02-13 14:31:37,263 - src.api.routers.llm - INFO - 요약: 기본 시드만 사용
+2026-02-13 14:33:23,995 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions "HTTP/1.1 500 Internal Server Error"
+2026-02-13 14:33:23,998 - openai._base_client - INFO - Retrying request to /chat/completions in 0.437658 seconds
+2026-02-13 14:33:25,164 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions "HTTP/1.1 500 Internal Server Error"
+2026-02-13 14:33:25,164 - openai._base_client - INFO - Retrying request to /chat/completions in 0.773532 seconds
+2026-02-13 14:33:26,645 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions "HTTP/1.1 500 Internal Server Error"
+2026-02-13 14:33:26,647 - src.llm_utils - WARNING - RunPod OpenAI API 실패 (시도 1/3): Error code: 500 - {'error': 'Error processing the request'}
+2026-02-13 14:33:28,360 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions "HTTP/1.1 500 Internal Server Error"
+2026-02-13 14:33:28,361 - openai._base_client - INFO - Retrying request to /chat/completions in 0.377303 seconds
+2026-02-13 14:34:50,100 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions "HTTP/1.1 500 Internal Server Error"
+2026-02-13 14:34:50,103 - openai._base_client - INFO - Retrying request to /chat/completions in 0.820480 seconds
+2026-02-13 14:34:51,762 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions "HTTP/1.1 500 Internal Server Error"
+2026-02-13 14:34:51,763 - src.llm_utils - WARNING - RunPod OpenAI API 실패 (시도 2/3): Error code: 500 - {'error': 'Error processing the request'}
+2026-02-13 14:34:54,449 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions "HTTP/1.1 500 Internal Server Error"
+2026-02-13 14:34:54,449 - openai._base_client - INFO - Retrying request to /chat/completions in 0.421036 seconds
+2026-02-13 14:34:55,623 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions "HTTP/1.1 500 Internal Server Error"
+2026-02-13 14:34:55,623 - openai._base_client - INFO - Retrying request to /chat/completions in 0.809080 seconds
+2026-02-13 14:34:57,188 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions "HTTP/1.1 500 Internal Server Error"
+2026-02-13 14:34:57,188 - src.llm_utils - WARNING - RunPod OpenAI API 실패 (시도 3/3): Error code: 500 - {'error': 'Error processing the request'}
+2026-02-13 14:34:57,188 - src.summary_pipeline - ERROR - LLM 호출 실패: Error code: 500 - {'error': 'Error processing the request'}
+2026-02-13 14:34:57,198 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions "HTTP/1.1 500 Internal Server Error"
+2026-02-13 14:34:57,199 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions "HTTP/1.1 500 Internal Server Error"
+2026-02-13 14:34:57,199 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions "HTTP/1.1 500 Internal Server Error"
+2026-02-13 14:34:57,199 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions "HTTP/1.1 500 Internal Server Error"
+2026-02-13 14:34:57,199 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions "HTTP/1.1 500 Internal Server Error"
+2026-02-13 14:34:57,200 - src.llm_utils - WARNING - RunPod OpenAI API 실패 (시도 1/3): Error code: 500 - {'error': 'Error processing the request'}
+2026-02-13 14:34:57,200 - openai._base_client - INFO - Retrying request to /chat/completions in 0.478215 seconds
+2026-02-13 14:34:57,200 - openai._base_client - INFO - Retrying request to /chat/completions in 0.410340 seconds
+2026-02-13 14:34:57,201 - openai._base_client - INFO - Retrying request to /chat/completions in 0.492292 seconds
+2026-02-13 14:34:57,201 - openai._base_client - INFO - Retrying request to /chat/completions in 0.499150 seconds
+INFO:     127.0.0.1:59997 - "POST /api/v1/llm/summarize HTTP/1.1" 200 OK
+2026-02-13 14:34:57,214 - src.api.routers.llm - INFO - 요약: 기본 시드만 사용
+2026-02-13 14:34:58,955 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions "HTTP/1.1 500 Internal Server Error"
+2026-02-13 14:34:58,955 - openai._base_client - INFO - Retrying request to /chat/completions in 0.935482 seconds
+2026-02-13 14:34:58,957 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions "HTTP/1.1 500 Internal Server Error"
+2026-02-13 14:34:58,957 - openai._base_client - INFO - Retrying request to /chat/completions in 0.755208 seconds
+2026-02-13 14:34:58,991 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions "HTTP/1.1 500 Internal Server Error"
+2026-02-13 14:34:58,991 - openai._base_client - INFO - Retrying request to /chat/completions in 0.396150 seconds
+2026-02-13 14:34:59,011 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions "HTTP/1.1 500 Internal Server Error"
+2026-02-13 14:34:59,011 - openai._base_client - INFO - Retrying request to /chat/completions in 0.829654 seconds
+2026-02-13 14:34:59,011 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions "HTTP/1.1 500 Internal Server Error"
+2026-02-13 14:34:59,012 - openai._base_client - INFO - Retrying request to /chat/completions in 0.971465 seconds
+2026-02-13 14:34:59,290 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions "HTTP/1.1 500 Internal Server Error"
+2026-02-13 14:34:59,291 - openai._base_client - INFO - Retrying request to /chat/completions in 0.381242 seconds
+2026-02-13 14:34:59,713 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions "HTTP/1.1 500 Internal Server Error"
+2026-02-13 14:34:59,714 - openai._base_client - INFO - Retrying request to /chat/completions in 0.405731 seconds
+2026-02-13 14:36:19,822 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions "HTTP/1.1 500 Internal Server Error"
+2026-02-13 14:36:19,827 - openai._base_client - INFO - Retrying request to /chat/completions in 0.849504 seconds
+2026-02-13 14:36:19,828 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions "HTTP/1.1 500 Internal Server Error"
+2026-02-13 14:36:19,829 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions "HTTP/1.1 500 Internal Server Error"
+2026-02-13 14:36:19,830 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions "HTTP/1.1 500 Internal Server Error"
+2026-02-13 14:36:19,831 - openai._base_client - INFO - Retrying request to /chat/completions in 0.925778 seconds
+2026-02-13 14:36:19,833 - src.llm_utils - WARNING - RunPod OpenAI API 실패 (시도 2/3): Error code: 500 - {'error': 'Error processing the request'}
+2026-02-13 14:36:19,833 - src.llm_utils - WARNING - RunPod OpenAI API 실패 (시도 2/3): Error code: 500 - {'error': 'Error processing the request'}
+2026-02-13 14:36:19,834 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions "HTTP/1.1 500 Internal Server Error"
+2026-02-13 14:36:19,834 - src.llm_utils - WARNING - RunPod OpenAI API 실패 (시도 2/3): Error code: 500 - {'error': 'Error processing the request'}
+2026-02-13 14:36:19,848 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions "HTTP/1.1 500 Internal Server Error"
+2026-02-13 14:36:19,848 - src.llm_utils - WARNING - RunPod OpenAI API 실패 (시도 2/3): Error code: 500 - {'error': 'Error processing the request'}
+2026-02-13 14:36:19,849 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions "HTTP/1.1 500 Internal Server Error"
+2026-02-13 14:36:19,849 - openai._base_client - INFO - Retrying request to /chat/completions in 0.894693 seconds
+2026-02-13 14:36:21,459 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions "HTTP/1.1 500 Internal Server Error"
+2026-02-13 14:36:21,460 - src.llm_utils - WARNING - RunPod OpenAI API 실패 (시도 1/3): Error code: 500 - {'error': 'Error processing the request'}
+2026-02-13 14:36:21,797 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions "HTTP/1.1 500 Internal Server Error"
+2026-02-13 14:36:21,799 - src.llm_utils - WARNING - RunPod OpenAI API 실패 (시도 2/3): Error code: 500 - {'error': 'Error processing the request'}
+2026-02-13 14:36:21,811 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions "HTTP/1.1 500 Internal Server Error"
+2026-02-13 14:36:21,812 - src.llm_utils - WARNING - RunPod OpenAI API 실패 (시도 1/3): Error code: 500 - {'error': 'Error processing the request'}
+2026-02-13 14:36:22,678 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions "HTTP/1.1 500 Internal Server Error"
+2026-02-13 14:36:22,679 - openai._base_client - INFO - Retrying request to /chat/completions in 0.453143 seconds
+2026-02-13 14:36:22,707 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions "HTTP/1.1 500 Internal Server Error"
+2026-02-13 14:36:22,708 - openai._base_client - INFO - Retrying request to /chat/completions in 0.396375 seconds
+2026-02-13 14:36:22,710 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions "HTTP/1.1 500 Internal Server Error"
+2026-02-13 14:36:22,711 - openai._base_client - INFO - Retrying request to /chat/completions in 0.442382 seconds
+2026-02-13 14:36:22,718 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions "HTTP/1.1 500 Internal Server Error"
+2026-02-13 14:36:22,719 - openai._base_client - INFO - Retrying request to /chat/completions in 0.383921 seconds
+2026-02-13 14:37:44,688 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions "HTTP/1.1 500 Internal Server Error"
+2026-02-13 14:37:44,690 - openai._base_client - INFO - Retrying request to /chat/completions in 0.443737 seconds
+2026-02-13 14:37:44,691 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions "HTTP/1.1 500 Internal Server Error"
+2026-02-13 14:37:44,691 - openai._base_client - INFO - Retrying request to /chat/completions in 0.389058 seconds
+2026-02-13 14:37:44,714 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions "HTTP/1.1 500 Internal Server Error"
+2026-02-13 14:37:44,714 - openai._base_client - INFO - Retrying request to /chat/completions in 0.901915 seconds
+2026-02-13 14:37:44,720 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions "HTTP/1.1 500 Internal Server Error"
+2026-02-13 14:37:44,720 - openai._base_client - INFO - Retrying request to /chat/completions in 0.823573 seconds
+2026-02-13 14:37:44,737 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions "HTTP/1.1 500 Internal Server Error"
+2026-02-13 14:37:44,739 - openai._base_client - INFO - Retrying request to /chat/completions in 0.890477 seconds
+2026-02-13 14:37:44,755 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions "HTTP/1.1 500 Internal Server Error"
+2026-02-13 14:37:44,756 - openai._base_client - INFO - Retrying request to /chat/completions in 0.917369 seconds
+2026-02-13 14:37:44,791 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions "HTTP/1.1 500 Internal Server Error"
+2026-02-13 14:37:44,795 - openai._base_client - INFO - Retrying request to /chat/completions in 0.479002 seconds
+2026-02-13 14:37:45,895 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions "HTTP/1.1 500 Internal Server Error"
+2026-02-13 14:37:45,895 - openai._base_client - INFO - Retrying request to /chat/completions in 0.976845 seconds
+2026-02-13 14:37:46,363 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions "HTTP/1.1 500 Internal Server Error"
+2026-02-13 14:37:46,364 - openai._base_client - INFO - Retrying request to /chat/completions in 0.856486 seconds
+2026-02-13 14:37:46,368 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions "HTTP/1.1 500 Internal Server Error"
+2026-02-13 14:37:46,369 - openai._base_client - INFO - Retrying request to /chat/completions in 0.847072 seconds
+2026-02-13 14:39:09,215 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions "HTTP/1.1 500 Internal Server Error"
+2026-02-13 14:39:09,230 - src.llm_utils - WARNING - RunPod OpenAI API 실패 (시도 3/3): Error code: 500 - {'error': 'Error processing the request'}
+2026-02-13 14:39:09,231 - src.sentiment_analysis - WARNING - LLM 재판정 실패: Error code: 500 - {'error': 'Error processing the request'}. 1차 분류 결과를 사용합니다.
+2026-02-13 14:39:09,232 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions "HTTP/1.1 500 Internal Server Error"
+2026-02-13 14:39:09,233 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions "HTTP/1.1 500 Internal Server Error"
+2026-02-13 14:39:09,236 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions "HTTP/1.1 500 Internal Server Error"
+2026-02-13 14:39:09,238 - src.llm_utils - WARNING - RunPod OpenAI API 실패 (시도 3/3): Error code: 500 - {'error': 'Error processing the request'}
+2026-02-13 14:39:09,238 - src.sentiment_analysis - WARNING - LLM 재판정 실패: Error code: 500 - {'error': 'Error processing the request'}. 1차 분류 결과를 사용합니다.
+2026-02-13 14:39:09,239 - src.llm_utils - WARNING - RunPod OpenAI API 실패 (시도 3/3): Error code: 500 - {'error': 'Error processing the request'}
+2026-02-13 14:39:09,239 - src.sentiment_analysis - WARNING - LLM 재판정 실패: Error code: 500 - {'error': 'Error processing the request'}. 1차 분류 결과를 사용합니다.
+2026-02-13 14:39:09,239 - src.llm_utils - WARNING - RunPod OpenAI API 실패 (시도 2/3): Error code: 500 - {'error': 'Error processing the request'}
+2026-02-13 14:39:09,246 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions "HTTP/1.1 500 Internal Server Error"
+2026-02-13 14:39:09,246 - src.llm_utils - WARNING - RunPod OpenAI API 실패 (시도 3/3): Error code: 500 - {'error': 'Error processing the request'}
+2026-02-13 14:39:09,247 - src.sentiment_analysis - WARNING - LLM 재판정 실패: Error code: 500 - {'error': 'Error processing the request'}. 1차 분류 결과를 사용합니다.
+2026-02-13 14:39:09,247 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions "HTTP/1.1 500 Internal Server Error"
+2026-02-13 14:39:09,247 - src.llm_utils - WARNING - RunPod OpenAI API 실패 (시도 2/3): Error code: 500 - {'error': 'Error processing the request'}
+2026-02-13 14:39:09,248 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions "HTTP/1.1 500 Internal Server Error"
+2026-02-13 14:39:09,248 - src.llm_utils - WARNING - RunPod OpenAI API 실패 (시도 3/3): Error code: 500 - {'error': 'Error processing the request'}
+2026-02-13 14:39:09,248 - src.sentiment_analysis - WARNING - LLM 재판정 실패: Error code: 500 - {'error': 'Error processing the request'}. 1차 분류 결과를 사용합니다.
+2026-02-13 14:39:12,073 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions "HTTP/1.1 500 Internal Server Error"
+2026-02-13 14:39:12,074 - openai._base_client - INFO - Retrying request to /chat/completions in 0.498295 seconds
+2026-02-13 14:39:12,077 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions "HTTP/1.1 500 Internal Server Error"
+2026-02-13 14:39:12,078 - openai._base_client - INFO - Retrying request to /chat/completions in 0.405429 seconds
+
+---
+
+핸들러/로컬 FastAPI 쪽 문제라기보다는, **RunPod vLLM Serverless 엔드포인트(g09ueg… ) 내부가 요청을 처리하다가 죽어서 500을 뱉는 상황**으로 보입니다.
+
+지금 로그에서 중요한 건 이 부분이에요:
+
+* 로컬 FastAPI는 정상 기동/웜업 완료 ✅
+* 문제는 **`POST https://api.runpod.ai/v2/.../openai/v1/chat/completions`가 매번 500** ❌
+* 바디도 `{'error': 'Error processing the request'}`로 **RunPod 쪽에서 “내부 처리 실패”**를 의미
+
+즉 **클라이언트(너의 app.py) → RunPod 엔드포인트** 호출은 정상으로 나가는데, **엔드포인트 내부(vLLM worker)가 예외**가 나서 500을 주는 케이스입니다.
+
+---
+
+## 1) 가장 먼저: 엔드포인트가 “어떤 model 이름”을 받는지 확인
+
+RunPod OpenAI 호환 API는 **엔드포인트에 설정된 `MODEL_NAME`**(혹은 override)로 요청을 라우팅합니다. 문서에도 “모든 요청에서 MODEL_NAME이 필수”라고 되어 있어요. ([docs.runpod.io][1])
+
+엔드포인트가 실제로 받는 모델 이름을 **/models**로 바로 확인할 수 있어요(문서에 지원 endpoint로 명시). ([docs.runpod.io][1])
+
+```bash
+curl -sS \
+  -H "Authorization: Bearer $RUNPOD_API_KEY" \
+  https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/models
+```
+
+* 여기서 나온 `id`가 예를 들어 `Qwen/Qwen2.5-7B-Instruct`라면
+* 너의 요청 `model="qwen/qwen2.5-7b-instruct"`는 **모델 미스매치**가 될 수 있어요.
+
+> 보통 미스매치는 400/404가 더 흔한데, RunPod 래퍼/워커 버전에 따라 **500으로 뭉뚱그려 나오는 경우**가 있습니다.
+
+---
+
+## 2) “거의 확률 높음”: 워커 내부(vLLM/transformers) 호환 문제로 크래시
+
+너가 앞에서 올린 서버리스 로그가 이미 그걸 보여줬죠:
+
+`Qwen2Tokenizer has no attribute all_special_tokens_extended`
+
+이건 **워커 이미지(vLLM/transformers 조합) 자체가 호환이 안 맞는** 전형적인 케이스고, RunPod vLLM serverless에서도 비슷한 에러가 반복 보고돼요. ([Answer Overflow][2])
+
+이 경우 증상이 딱 이래요:
+
+* 엔드포인트는 뜨는 것처럼 보이는데
+* 요청이 들어오는 순간 토크나이저 초기화/처리에서 죽고
+* 외부에선 계속 **500 “Error processing the request”**만 봄
+
+### 해결 방향
+
+* RunPod에서 **더 안정적인/최신 worker-vllm 이미지 태그로 변경**
+* 또는 **커스텀 이미지로 vLLM/transformers를 호환 버전으로 pin**
+
+(위 “all_special_tokens_extended” 건은 특히 워커 vLLM 이미지 버전 이슈로 자주 엮입니다. ([Answer Overflow][2]))
+
+---
+
+## 3) 지금 당장 “원인 확정” 하는 방법 (가장 빠름)
+
+### A. RunPod 콘솔에서 endpoint 로그 확인
+
+요청을 1번만 날리고(아래 최소 요청), 그 직후 RunPod 로그에서 **파이썬 traceback**를 확인하면 끝입니다.
+
+### B. 최소 요청으로 테스트 (프롬프트/토큰 작게)
+
+```bash
+curl -sS https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions \
+  -H "Authorization: Bearer $RUNPOD_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "YOUR_MODEL_NAME_FROM_/models",
+    "messages": [{"role":"user","content":"ping"}],
+    "max_tokens": 32,
+    "temperature": 0
+  }'
+```
+
+* 이것도 500이면 → **거의 확정으로 워커 내부 크래시/호환 문제**
+* 이게 성공하고 너 코드만 500이면 → **너 코드가 보내는 payload가 문제**(예: 너무 긴 입력, 멀티메시지 포맷, response_format 등)
+
+---
+
+## 4) (부가) 지금 로그에서 보이는 다른 포인트
+
+* `openai._base_client`가 재시도하면서 요청이 **쌓이는 패턴**이 보여요. 500이 계속이면 재시도는 오히려 서버리스 “콜드 스타트/크래시”를 더 악화시킬 수 있어서,
+
+  * **짧게 1~2회만 재시도**
+  * 실패하면 **서킷브레이커처럼 LLM 호출을 잠시 스킵**
+  * 또는 **동시 요청 수 제한(semaphore)**
+    이런 식으로 방어하는 게 좋아요. (지금도 “1차 분류 결과 사용”으로 graceful degradation은 잘 해놨어요.)
+
+---
+
+### 결론
+
+지금 상황은 **“핸들러 부재”보다는 RunPod vLLM 엔드포인트 내부 에러(특히 vLLM/transformers 호환/토크나이저 문제)일 가능성이 훨씬 큼**.
+
+가장 빠른 다음 액션은 딱 2개예요:
+
+1. `/models` 결과 확인해서 **요청 model 이름을 정확히 맞추기** ([docs.runpod.io][1])
+2. RunPod endpoint 로그에서 **traceback 확인** → `all_special_tokens_extended`류면 **워커 이미지/버전 pin으로 해결** ([Answer Overflow][2])
+
+`/models` 응답(JSON)하고, RunPod 로그의 traceback 첫 20줄만 붙여주면 “모델명 미스매치인지 / 워커 호환 문제인지” 바로 갈라서 해결책을 정확히 줄게.
+
+[1]: https://docs.runpod.io/serverless/vllm/openai-compatibility "OpenAI API compatibility guide - Runpod Documentation"
+[2]: https://www.answeroverflow.com/m/1470069877913030798?utm_source=chatgpt.com "Can't get vLLM V2.11.3 serverless to work - Runpod"

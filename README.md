@@ -126,6 +126,7 @@ API 이미지를 빌드한 뒤 Docker Hub에 푸시하려면:
 
 ## 참고 문서
 
+- **[docs/README.md](docs/README.md)** — 문서 인덱스 (아키텍처, API, RunPod, 배치, Spark, 트러블슈팅 등 카테고리별 정리)
 - [PIPELINE_OPERATIONS.md](PIPELINE_OPERATIONS.md) - 파이프라인 동작 (Strength, Summary, Sentiment, Vector)
 - [etc_md/OBSERVABILITY_PROM_GRAFANA.md](etc_md/OBSERVABILITY_PROM_GRAFANA.md) - Prometheus/Grafana 사용법 및 현재 수집 범위
 - [.env.example](.env.example) - 환경 변수 예시 (Docker Hub 푸시용 `DOCKERHUB_USERNAME`, `DOCKER_IMAGE_NAME` 포함)

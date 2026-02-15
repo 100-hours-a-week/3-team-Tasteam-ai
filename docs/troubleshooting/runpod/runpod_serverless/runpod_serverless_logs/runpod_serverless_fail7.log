@@ -1,0 +1,268 @@
+(env_ai) js@jinsoos-MacBook-Pro tasteam-new-async % python app.py
+/Users/js/miniconda3/envs/env_ai/lib/python3.11/site-packages/torch/cuda/__init__.py:63: FutureWarning: The pynvml package is deprecated. Please install nvidia-ml-py instead. If you did not install pynvml directly, please report this to the maintainers of the package that installed pynvml for you.
+  import pynvml  # type: ignore[import]
+Redis가 설치되지 않았습니다. 캐싱이 비활성화됩니다.
+2026-02-13 14:43:08,484 - src.api.main - WARNING - prometheus_fastapi_instrumentator 미설치: /metrics 비활성화. 설치: pip install prometheus-client prometheus-fastapi-instrumentator
+INFO:     Started server process [5162]
+INFO:     Waiting for application startup.
+2026-02-13 14:43:08,525 - src.api.main - INFO - FastAPI 애플리케이션 시작
+/Users/js/tasteam-new-async/src/api/dependencies.py:56: UserWarning: Local mode is not recommended for collections with more than 20,000 points. Collection <reviews_collection> contains 20622 points. Consider using Qdrant in Docker or Qdrant Cloud for better performance with large datasets.
+  client = QdrantClient(path=qdrant_path)
+/Users/js/tasteam-new-async/src/vector_search.py:69: UserWarning: The model sentence-transformers/paraphrase-multilingual-mpnet-base-v2 now uses mean pooling instead of CLS embedding. In order to preserve the previous behaviour, consider either pinning fastembed version to 0.5.1 or using `add_custom_model` functionality.
+  self._dense_model = TextEmbedding(Config.EMBEDDING_MODEL)
+2026-02-13 14:43:11,426 - src.vector_search - INFO - Dense 벡터 모델 로드 완료: sentence-transformers/paraphrase-multilingual-mpnet-base-v2
+2026-02-13 14:43:11,522 - src.vector_search - INFO - Sparse 벡터 모델 로드 완료: Qdrant/bm25
+2026-02-13 14:43:11,531 - src.api.main - INFO - VectorSearch(임베딩) warm-up 완료
+2026-02-13 14:43:11,531 - src.llm_utils - INFO - vLLM RunPod Serverless: 엔드포인트 2mpd5y6lvccfk1 (OpenAI 호환 API, 요청 시 GPU 기동, 유휴 시 스케일다운)
+2026-02-13 14:43:12,139 - httpx - INFO - HTTP Request: HEAD https://huggingface.co/Dilwolf/Kakao_app-kr_sentiment/resolve/main/config.json "HTTP/1.1 307 Temporary Redirect"
+2026-02-13 14:43:12,151 - httpx - INFO - HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/Dilwolf/Kakao_app-kr_sentiment/aaae4554e0c4b5cf45c6f27722b21717d027f5ff/config.json "HTTP/1.1 200 OK"
+2026-02-13 14:43:12,403 - httpx - INFO - HTTP Request: HEAD https://huggingface.co/Dilwolf/Kakao_app-kr_sentiment/resolve/main/config.json "HTTP/1.1 307 Temporary Redirect"
+2026-02-13 14:43:12,413 - httpx - INFO - HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/Dilwolf/Kakao_app-kr_sentiment/aaae4554e0c4b5cf45c6f27722b21717d027f5ff/config.json "HTTP/1.1 200 OK"
+Loading weights: 100%|█| 201/201 [00:00<00:00, 5582.55it/s, Materializing param=
+2026-02-13 14:43:12,756 - httpx - INFO - HTTP Request: GET https://huggingface.co/api/models/Dilwolf/Kakao_app-kr_sentiment/tree/main/additional_chat_templates?recursive=false&expand=false "HTTP/1.1 404 Not Found"
+2026-02-13 14:43:12,986 - httpx - INFO - HTTP Request: GET https://huggingface.co/api/models/Dilwolf/Kakao_app-kr_sentiment/tree/main?recursive=true&expand=false "HTTP/1.1 200 OK"
+2026-02-13 14:43:13,369 - httpx - INFO - HTTP Request: GET https://huggingface.co/api/models/Dilwolf/Kakao_app-kr_sentiment "HTTP/1.1 200 OK"
+2026-02-13 14:43:13,374 - src.sentiment_analysis - INFO - Sentiment 모델 로딩 완료: Dilwolf/Kakao_app-kr_sentiment (device=-1)
+2026-02-13 14:43:14,051 - src.api.main - INFO - Sentiment pipeline warm-up 완료
+2026-02-13 14:43:14,051 - src.api.main - INFO - 서비스 warm-up 완료, readiness=True
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8001 (Press CTRL+C to quit)
+INFO:     127.0.0.1:61041 - "GET /health HTTP/1.1" 200 OK
+2026-02-13 14:43:39,041 - src.api.routers.vector - INFO - 포인트 준비 시작: 리뷰 142개, 레스토랑 5개
+2026-02-13 14:43:39,042 - src.vector_search - INFO - 총 142개의 리뷰를 배치로 인코딩합니다 (배치 크기: 32, 하이브리드: Dense + Sparse)
+2026-02-13 14:43:59,094 - src.vector_search - INFO - 총 142개의 포인트를 생성했습니다.
+2026-02-13 14:43:59,095 - src.api.routers.vector - INFO - 포인트 준비 완료: 142개 포인트 생성됨
+2026-02-13 14:43:59,097 - src.vector_search - INFO - 142개의 포인트를 upload_collection으로 업로드 시작... (컬렉션 형식: named 벡터)
+/Users/js/tasteam-new-async/src/vector_search.py:450: UserWarning: Local mode is not recommended for collections with more than 20,000 points. Current collection contains 20622 points. Consider using Qdrant in Docker or Qdrant Cloud for better performance with large datasets.
+  self.client.upload_collection(
+2026-02-13 14:43:59,231 - src.vector_search - INFO - 142개의 포인트를 upload_collection으로 업로드 완료했습니다.
+2026-02-13 14:43:59,231 - src.api.routers.vector - INFO - 업로드 완료: 142개 포인트
+2026-02-13 14:43:59,501 - src.vector_search - INFO - 레스토랑 5의 대표 벡터를 업데이트했습니다.
+2026-02-13 14:43:59,614 - src.vector_search - INFO - 레스토랑 1의 대표 벡터를 업데이트했습니다.
+2026-02-13 14:43:59,734 - src.vector_search - INFO - 레스토랑 4의 대표 벡터를 업데이트했습니다.
+2026-02-13 14:43:59,845 - src.vector_search - INFO - 레스토랑 3의 대표 벡터를 업데이트했습니다.
+2026-02-13 14:43:59,959 - src.vector_search - INFO - 레스토랑 2의 대표 벡터를 업데이트했습니다.
+2026-02-13 14:43:59,959 - src.api.routers.vector - INFO - restaurant_vectors 컬렉션에 5개 레스토랑 대표 벡터 생성 완료
+INFO:     127.0.0.1:61043 - "POST /api/v1/vector/upload HTTP/1.1" 200 OK
+2026-02-13 14:43:59,980 - src.cache - WARNING - Redis가 설치되지 않아 캐싱이 비활성화됩니다.
+2026-02-13 14:43:59,980 - src.cache - WARNING - Redis가 없어 락을 건너뜁니다.
+2026-02-13 14:44:00,094 - src.sentiment_analysis - INFO - 총 20개의 리뷰를 sentiment 모델로 분류합니다 (restaurant_id: 1).
+2026-02-13 14:46:00,284 - src.sentiment_analysis - INFO - 총 20개의 리뷰를 sentiment 모델로 분류합니다 (restaurant_id: 1).
+2026-02-13 14:46:00,440 - src.sentiment_analysis - INFO - 총 20개의 리뷰를 sentiment 모델로 분류합니다 (restaurant_id: 2).
+2026-02-13 14:46:00,553 - src.sentiment_analysis - INFO - 총 20개의 리뷰를 sentiment 모델로 분류합니다 (restaurant_id: 3).
+2026-02-13 14:46:00,669 - src.sentiment_analysis - INFO - 총 62개의 리뷰를 sentiment 모델로 분류합니다 (restaurant_id: 4).
+2026-02-13 14:46:00,783 - src.sentiment_analysis - INFO - 총 20개의 리뷰를 sentiment 모델로 분류합니다 (restaurant_id: 5).
+2026-02-13 14:48:00,021 - src.cache - WARNING - Redis가 없어 락을 건너뜁니다.
+2026-02-13 14:48:00,022 - src.api.routers.llm - INFO - 요약: 기본 시드만 사용
+
+---
+
+but timeout why compose
+
+---
+
+오케이, **원인 확정**됐어요.
+
+지금 500의 진짜 이유는 vLLM/토크나이저가 아니라 **요청에서 `model` 값이 엔드포인트가 “서빙 중인 모델 이름”과 불일치**해서, 서버가 **404(NotFoundError)** 를 내고 있는 겁니다.
+
+로그가 이렇게 말하죠:
+
+> `The model 'Qwen/Qwen2.5-7B-Instruct' does not exist.` (404)
+
+즉, **그 엔드포인트(g09ueg…)에는 `Qwen/Qwen2.5-7B-Instruct`라는 모델 id로 등록된 모델이 없다**는 뜻이에요.
+
+---
+
+## 왜 이런 일이 생기냐 (RunPod OpenAI 호환의 함정)
+
+RunPod OpenAI 호환 API에서 `model` 필드는 “허깅페이스 리포명”이 아니라 **엔드포인트가 공개하는 model id** 여야 하는 경우가 많아요.
+
+* 엔드포인트 설정에서 `served_model_name`(혹은 MODEL_NAME) 같은 값이 따로 있고
+* vLLM은 그걸 `/openai/v1/models`에 노출합니다.
+
+그래서 **HF repo를 넣어도 안 맞으면 404**가 납니다.
+
+---
+
+## 해결: /models로 나온 id를 그대로 써라 (가장 빠르고 정확)
+
+아래를 먼저 실행해서 **실제 모델 id를 확인**하세요:
+
+```bash
+curl -sS \
+  -H "Authorization: Bearer $RUNPOD_API_KEY" \
+  https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/models
+```
+
+응답 예시는 보통 이런 느낌:
+
+```json
+{
+  "data": [
+    {"id": "qwen2.5-7b-instruct", ...}
+  ]
+}
+```
+
+그럼 너의 요청에서:
+
+* ❌ `"model": "Qwen/Qwen2.5-7B-Instruct"`
+* ✅ `"model": "qwen2.5-7b-instruct"`  (혹은 /models의 id 그대로)
+
+로 바꾸면 됩니다.
+
+---
+
+## 너 코드에서 어디를 고치면 되냐 (가능성이 높은 지점)
+
+지금 `src.llm_utils`에서 OpenAI 호환으로 `chat.completions` 때리는 걸로 보이는데,
+거기서 `model=` 파라미터를:
+
+* HF repo명으로 넣지 말고
+* **RunPod endpoint가 노출하는 served model name**으로 넣으세요.
+
+예를 들면 `.env`에:
+
+```env
+RUNPOD_OPENAI_MODEL=qwen2.5-7b-instruct
+```
+
+그리고 코드에서:
+
+```python
+model = os.getenv("RUNPOD_OPENAI_MODEL")
+client.chat.completions.create(model=model, ...)
+```
+
+---
+
+## 그럼 왜 클라이언트에서는 500으로 보였나?
+
+너 로컬 로그에는 500이었는데, 엔드포인트 로그는 404죠.
+
+이건 흔히:
+
+* RunPod 게이트웨이/프록시가 내부 에러를 단일하게 “Error processing request(500)”로 감싸거나,
+* 네가 받는 에러 바디가 단순화되는 경우
+
+때문에 겉에서 500처럼 보일 수 있어요. 하지만 **실제 원인은 model not found(404)** 로 확정입니다.
+
+---
+
+## 체크리스트 (1분 컷)
+
+1. `/models` 호출해서 id 확인
+2. 그 id를 `model=`에 그대로 넣기
+3. 다시 `curl chat/completions`로 “ping” 확인
+
+```bash
+curl -sS https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions \
+  -H "Authorization: Bearer $RUNPOD_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "ID_FROM_MODELS",
+    "messages": [{"role":"user","content":"ping"}],
+    "max_tokens": 32
+  }'
+```
+
+---
+
+원하면 `/openai/v1/models` 응답 그대로 붙여줘. 그럼 “정확히 어떤 문자열을 model로 써야 하는지” 내가 딱 찍어서 알려줄게.
+
+---
+
+(env_ai) js@jinsoos-MacBook-Pro tasteam-new-async % curl -sS \ -H "Authorization: Bearer $RUNPOD_API_KEY" \ https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/models {"data":[{"created":1770962099,"id":"qwen/qwen2.5-7b-instruct","max_model_len":32768,"object":"model","owned_by":"vllm","parent":null,"permission":[{"allow_create_engine":false,"allow_fine_tuning":false,"allow_logprobs":true,"allow_sampling":true,"allow_search_indices":false,"allow_view":true,"created":1770962099,"group":null,"id":"modelperm-c3feb4e25b8d4665b15281f5ba9d0aaa","is_blocking":false,"object":"model_permission","organization":"*"}],"root":"qwen/qwen2.5-7b-instruct"}],"object":"list"}% (env_ai) js@jinsoos-MacBook-Pro tasteam-new-async %
+
+---
+
+좋아, 이제 **정답이 딱 나왔네.**
+
+네 엔드포인트가 실제로 서빙하는 모델 id는:
+
+* ✅ `qwen/qwen2.5-7b-instruct`
+
+이고, 그래서 엔드포인트 로그에서
+
+* ❌ `Qwen/Qwen2.5-7B-Instruct` → “없다(404)”
+
+가 뜬 거야. **대소문자/조직명 포함한 HF repo 문자열이 아니라, /models에 나온 id를 그대로 써야 함.**
+
+---
+
+## 너가 해야 할 수정 (한 줄)
+
+요청에서 model을 **반드시** 이렇게:
+
+```json
+"model": "qwen/qwen2.5-7b-instruct"
+```
+
+로 보내.
+
+---
+
+## 바로 검증 curl (이거 성공해야 정상)
+
+```bash
+curl -sS https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions \
+  -H "Authorization: Bearer $RUNPOD_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "qwen/qwen2.5-7b-instruct",
+    "messages": [{"role":"user","content":"ping"}],
+    "max_tokens": 32,
+    "temperature": 0
+  }'
+```
+
+---
+
+## 왜 /models에는 저렇게 나오는데, HF는 Qwen/... 인가?
+
+RunPod vLLM serverless가 내부적으로 **served_model_name을 “qwen/qwen2.5-7b-instruct”로 노출**해버린 거야.
+그래서 외부에서는 “그 id”만 유효해.
+
+즉, 네 코드에서 **HF repo명을 model로 쓰는 관습을 버리고**, 엔드포인트의 `/models` 결과를 **source of truth**로 삼으면 돼.
+
+---
+
+## 실전 코드 팁 (재발 방지)
+
+로컬/프로덕션에서 엔드포인트 바뀌면 또 터질 수 있으니:
+
+* `.env`에 모델명을 고정해두고
+* 가능하면 서버 시작 시 `/models`를 한 번 조회해서 “내가 쓰는 model이 목록에 있는지” 체크
+
+예: `.env`
+
+```env
+RUNPOD_OPENAI_MODEL=qwen/qwen2.5-7b-instruct
+```
+
+그리고 LLM 호출 시 그걸 사용.
+
+---
+
+원하면, 지금 `src.llm_utils`에서 `model=` 넣는 부분 코드 조각(10~20줄)만 붙여줘. 딱 그 자리에서 어디를 어떻게 바꾸면 되는지 바로 패치 형태로 정리해줄게.
+
+---
+
+(env_ai) js@jinsoos-MacBook-Pro tasteam-new-async % curl -sS \
+  -H "Authorization: Bearer $RUNPOD_API_KEY" \
+  https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/models
+{"data":[{"created":1770962099,"id":"qwen/qwen2.5-7b-instruct","max_model_len":32768,"object":"model","owned_by":"vllm","parent":null,"permission":[{"allow_create_engine":false,"allow_fine_tuning":false,"allow_logprobs":true,"allow_sampling":true,"allow_search_indices":false,"allow_view":true,"created":1770962099,"group":null,"id":"modelperm-c3feb4e25b8d4665b15281f5ba9d0aaa","is_blocking":false,"object":"model_permission","organization":"*"}],"root":"qwen/qwen2.5-7b-instruct"}],"object":"list"}%                  
+(env_ai) js@jinsoos-MacBook-Pro tasteam-new-async % curl -sS https://api.runpod.ai/v2/g09uegksn7h7ed/openai/v1/chat/completions \
+  -H "Authorization: Bearer $RUNPOD_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "qwen/qwen2.5-7b-instruct",
+    "messages": [{"role":"user","content":"ping"}],
+    "max_tokens": 32,
+    "temperature": 0
+  }'
+{"choices":[{"finish_reason":"stop","index":0,"logprobs":null,"message":{"annotations":null,"audio":null,"content":"Pong!","function_call":null,"reasoning_content":null,"refusal":null,"role":"assistant","tool_calls":[]},"stop_reason":null,"token_ids":null}],"created":1770962356,"id":"chatcmpl-fab70b748dc044b3a03f654fa3bd9330","kv_transfer_params":null,"model":"qwen/qwen2.5-7b-instruct","object":"chat.completion","prompt_logprobs":null,"prompt_token_ids":null,"service_tier":null,"system_fingerprint":null,"usage":{"completion_tokens":4,"prompt_tokens":30,"prompt_tokens_details":null,"total_tokens":34}}%          
+
+---
+
+

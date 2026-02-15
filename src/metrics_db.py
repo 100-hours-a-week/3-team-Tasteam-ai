@@ -34,13 +34,14 @@ class MetricsDB:
             
             cursor = self.conn.cursor()
             
-            # 분석 메트릭 테이블
+            # 분석 메트릭 테이블 (prompt_version: A/B 비교·버전별 SKIP용)
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS analysis_metrics (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     restaurant_id INTEGER,
                     analysis_type TEXT NOT NULL,
                     model_version TEXT,
+                    prompt_version TEXT,
                     processing_time_ms REAL,
                     tokens_used INTEGER,
                     batch_size INTEGER,
@@ -63,6 +64,39 @@ class MetricsDB:
             cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_created_at 
                 ON analysis_metrics(created_at)
+            """)
+            
+            # prompt_version 컬럼 마이그레이션 (기존 DB 호환)
+            try:
+                cursor.execute("ALTER TABLE analysis_metrics ADD COLUMN prompt_version TEXT")
+                self.conn.commit()
+            except sqlite3.OperationalError:
+                pass  # 이미 존재
+            try:
+                cursor.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_metrics_version 
+                    ON analysis_metrics(restaurant_id, analysis_type, model_version, prompt_version)
+                """)
+            except sqlite3.OperationalError:
+                pass  # prompt_version 미존재 시 스킵
+            
+            # 버전별 결과 저장 테이블 (재실행 안전, 부분 실패 재개, A/B 비교)
+            # 키: restaurant_id + analysis_type + model_version + prompt_version + created_at
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS analysis_results (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    restaurant_id INTEGER NOT NULL,
+                    analysis_type TEXT NOT NULL,
+                    model_version TEXT,
+                    prompt_version TEXT,
+                    result_payload TEXT,
+                    error_count INTEGER DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_results_lookup 
+                ON analysis_results(restaurant_id, analysis_type, model_version, prompt_version)
             """)
             
             # vLLM 메트릭 테이블
@@ -123,33 +157,30 @@ class MetricsDB:
         batch_size: Optional[int] = None,
         cache_hit: Optional[bool] = None,
         model_version: Optional[str] = None,
+        prompt_version: Optional[str] = None,
         error_count: int = 0,
         warning_count: int = 0,
     ):
         """
-        분석 메트릭 저장
+        분석 메트릭 저장 (restaurant_id + analysis_type + model_version + prompt_version + created_at)
         
         Args:
             restaurant_id: 레스토랑 ID
             analysis_type: 분석 타입 ('sentiment', 'summary', 'comparison')
-            processing_time_ms: 처리 시간 (밀리초)
-            tokens_used: 사용된 토큰 수
-            batch_size: 배치 크기
-            cache_hit: 캐시 히트 여부
             model_version: 모델 버전
-            error_count: 에러 개수
-            warning_count: 경고 개수
+            prompt_version: 프롬프트 버전 (A/B 비교용)
+            ...
         """
         try:
             cursor = self.conn.cursor()
             cursor.execute("""
                 INSERT INTO analysis_metrics (
-                    restaurant_id, analysis_type, model_version,
+                    restaurant_id, analysis_type, model_version, prompt_version,
                     processing_time_ms, tokens_used, batch_size,
                     cache_hit, error_count, warning_count
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
-                restaurant_id, analysis_type, model_version,
+                restaurant_id, analysis_type, model_version, prompt_version,
                 processing_time_ms, tokens_used, batch_size,
                 cache_hit, error_count, warning_count
             ))
@@ -270,34 +301,65 @@ class MetricsDB:
             logger.error(f"vLLM 메트릭 저장 실패: {e}")
             self.conn.rollback()
     
+    def insert_analysis_result(
+        self,
+        restaurant_id: int,
+        analysis_type: str,
+        model_version: Optional[str],
+        prompt_version: Optional[str],
+        result_payload: str,
+        error_count: int = 0,
+    ) -> None:
+        """
+        버전별 분석 결과 저장 (재실행 안전, A/B 비교용)
+        """
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute("""
+                INSERT INTO analysis_results (
+                    restaurant_id, analysis_type, model_version, prompt_version,
+                    result_payload, error_count
+                ) VALUES (?, ?, ?, ?, ?, ?)
+            """, (restaurant_id, analysis_type, model_version, prompt_version, result_payload, error_count))
+            self.conn.commit()
+        except Exception as e:
+            logger.error(f"결과 저장 실패: {e}")
+            self.conn.rollback()
+
     def get_last_success_at(
         self,
         restaurant_id: Optional[int],
         analysis_type: str,
+        model_version: Optional[str] = None,
+        prompt_version: Optional[str] = None,
     ) -> Optional[datetime]:
         """
-        마지막 성공 실행 시각 조회 (초기 전략: analysis_metrics에서 MAX(created_at))
-        
-        Args:
-            restaurant_id: 레스토랑 ID
-            analysis_type: 분석 타입 ('sentiment', 'summary', 'comparison')
-            
-        Returns:
-            마지막 성공 실행 시각 (datetime), 없으면 None
+        마지막 성공 실행 시각 조회.
+        model_version, prompt_version 지정 시 버전별 조회 (A/B 비교·재실행 안전).
         """
         if restaurant_id is None:
             return None
         
         try:
             cursor = self.conn.cursor()
-            # error_count=0 중 최신 created_at 조회
-            cursor.execute("""
+            # error_count=0 중 최신 created_at 조회 (버전 필터 옵션)
+            params: List[Any] = [restaurant_id, analysis_type]
+            where_extras = []
+            if model_version is not None:
+                where_extras.append(" AND model_version = ?")
+                params.append(model_version)
+            if prompt_version is not None:
+                where_extras.append(" AND prompt_version = ?")
+                params.append(prompt_version)
+            where_sql = "".join(where_extras)
+            cursor.execute(f"""
                 SELECT MAX(created_at) as last_success_at
                 FROM analysis_metrics
                 WHERE restaurant_id = ? 
                   AND analysis_type = ?
                   AND error_count = 0
-            """, (restaurant_id, analysis_type))
+                  {where_sql}
+            """, params)
             
             row = cursor.fetchone()
             if row and row["last_success_at"]:
@@ -323,25 +385,21 @@ class MetricsDB:
         restaurant_id: Optional[int],
         analysis_type: str,
         min_interval_seconds: int = 3600,  # 기본값: 1시간
+        model_version: Optional[str] = None,
+        prompt_version: Optional[str] = None,
     ) -> bool:
         """
-        분석을 건너뛸지 여부 판단 (초기 전략: analysis_metrics 기반)
-        
-        최근 성공 실행시간(= error_count=0 중 최신 created_at)을 조회해서
-        interval 이내면 SKIP
-        
-        Args:
-            restaurant_id: 레스토랑 ID
-            analysis_type: 분석 타입 ('sentiment', 'summary', 'comparison')
-            min_interval_seconds: 최소 간격 (초)
-            
-        Returns:
-            True면 SKIP, False면 실행
+        분석을 건너뛸지 여부 판단.
+        model_version, prompt_version 지정 시 해당 버전 기준으로 SKIP (A/B 비교 시 유용).
         """
         if restaurant_id is None:
             return False
         
-        last_success_at = self.get_last_success_at(restaurant_id, analysis_type)
+        last_success_at = self.get_last_success_at(
+            restaurant_id, analysis_type,
+            model_version=model_version,
+            prompt_version=prompt_version,
+        )
         if last_success_at is None:
             return False  # 이전 기록이 없으면 실행
         

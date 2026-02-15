@@ -167,12 +167,16 @@ def get_vector_search(
 def get_sentiment_analyzer(
     vector_search: VectorSearch = Depends(get_vector_search),
 ) -> SentimentAnalyzer:
-    """감성 분석기 의존성 (싱글톤 + DCL — HF pipeline 로딩 비용 재사용)"""
+    """감성 분석기 의존성 (싱글톤 + DCL — HF pipeline 로딩 비용 재사용). LLM 재판정은 get_llm_utils() 사용(Config/LLM_PROVIDER·RunPod 반영)."""
     global _sentiment_analyzer_singleton
     if _sentiment_analyzer_singleton is not None:
         return _sentiment_analyzer_singleton
     with _sentiment_analyzer_lock:
         if _sentiment_analyzer_singleton is not None:
             return _sentiment_analyzer_singleton
-        _sentiment_analyzer_singleton = SentimentAnalyzer(vector_search=vector_search)
+        llm_utils = get_llm_utils()
+        _sentiment_analyzer_singleton = SentimentAnalyzer(
+            vector_search=vector_search,
+            llm_utils=llm_utils,
+        )
         return _sentiment_analyzer_singleton

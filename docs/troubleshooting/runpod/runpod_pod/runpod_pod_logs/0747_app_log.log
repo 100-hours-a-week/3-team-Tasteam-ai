@@ -1,0 +1,109 @@
+(env_ai) js@jinsoos-MacBook-Pro tasteam-new-async % python app.py
+/Users/js/miniconda3/envs/env_ai/lib/python3.11/site-packages/torch/cuda/__init__.py:63: FutureWarning: The pynvml package is deprecated. Please install nvidia-ml-py instead. If you did not install pynvml directly, please report this to the maintainers of the package that installed pynvml for you.
+  import pynvml  # type: ignore[import]
+Redis가 설치되지 않았습니다. 캐싱이 비활성화됩니다.
+2026-02-14 19:47:27,039 - src.api.main - WARNING - prometheus_fastapi_instrumentator 미설치: /metrics 비활성화. 설치: pip install prometheus-client prometheus-fastapi-instrumentator
+INFO:     Started server process [26950]
+INFO:     Waiting for application startup.
+2026-02-14 19:47:27,077 - src.api.main - INFO - FastAPI 애플리케이션 시작
+/Users/js/tasteam-new-async/src/api/dependencies.py:56: UserWarning: Local mode is not recommended for collections with more than 20,000 points. Collection <reviews_collection> contains 20622 points. Consider using Qdrant in Docker or Qdrant Cloud for better performance with large datasets.
+  client = QdrantClient(path=qdrant_path)
+/Users/js/tasteam-new-async/src/vector_search.py:69: UserWarning: The model sentence-transformers/paraphrase-multilingual-mpnet-base-v2 now uses mean pooling instead of CLS embedding. In order to preserve the previous behaviour, consider either pinning fastembed version to 0.5.1 or using `add_custom_model` functionality.
+  self._dense_model = TextEmbedding(Config.EMBEDDING_MODEL)
+2026-02-14 19:47:30,044 - src.vector_search - INFO - Dense 벡터 모델 로드 완료: sentence-transformers/paraphrase-multilingual-mpnet-base-v2
+2026-02-14 19:47:30,247 - src.vector_search - INFO - Sparse 벡터 모델 로드 완료: Qdrant/bm25
+2026-02-14 19:47:30,281 - src.api.main - INFO - VectorSearch(임베딩) warm-up 완료
+2026-02-14 19:47:30,281 - src.llm_utils - INFO - vLLM RunPod Pod 직접 연결: http://213.173.108.70:17517/v1
+2026-02-14 19:47:30,744 - httpx - INFO - HTTP Request: HEAD https://huggingface.co/Dilwolf/Kakao_app-kr_sentiment/resolve/main/config.json "HTTP/1.1 307 Temporary Redirect"
+2026-02-14 19:47:30,753 - httpx - INFO - HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/Dilwolf/Kakao_app-kr_sentiment/aaae4554e0c4b5cf45c6f27722b21717d027f5ff/config.json "HTTP/1.1 200 OK"
+2026-02-14 19:47:30,977 - httpx - INFO - HTTP Request: HEAD https://huggingface.co/Dilwolf/Kakao_app-kr_sentiment/resolve/main/config.json "HTTP/1.1 307 Temporary Redirect"
+2026-02-14 19:47:30,989 - httpx - INFO - HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/Dilwolf/Kakao_app-kr_sentiment/aaae4554e0c4b5cf45c6f27722b21717d027f5ff/config.json "HTTP/1.1 200 OK"
+Loading weights: 100%|█| 201/201 [00:00<00:0
+2026-02-14 19:47:31,340 - httpx - INFO - HTTP Request: GET https://huggingface.co/api/models/Dilwolf/Kakao_app-kr_sentiment/tree/main/additional_chat_templates?recursive=false&expand=false "HTTP/1.1 404 Not Found"
+2026-02-14 19:47:31,593 - httpx - INFO - HTTP Request: GET https://huggingface.co/api/models/Dilwolf/Kakao_app-kr_sentiment/tree/main?recursive=true&expand=false "HTTP/1.1 200 OK"
+2026-02-14 19:47:31,943 - httpx - INFO - HTTP Request: GET https://huggingface.co/api/models/Dilwolf/Kakao_app-kr_sentiment "HTTP/1.1 200 OK"
+2026-02-14 19:47:31,947 - src.sentiment_analysis - INFO - Sentiment 모델 로딩 완료: Dilwolf/Kakao_app-kr_sentiment (device=-1)
+2026-02-14 19:47:32,531 - src.api.main - INFO - Sentiment pipeline warm-up 완료
+2026-02-14 19:47:32,532 - src.api.main - INFO - 서비스 warm-up 완료, readiness=True
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8001 (Press CTRL+C to quit)
+INFO:     127.0.0.1:61625 - "GET /health HTTP/1.1" 200 OK
+2026-02-14 19:48:09,566 - src.api.routers.vector - INFO - 포인트 준비 시작: 리뷰 142개, 레스토랑 5개
+2026-02-14 19:48:09,567 - src.vector_search - INFO - 총 142개의 리뷰를 배치로 인코딩합니다 (배치 크기: 32, 하이브리드: Dense + Sparse)
+2026-02-14 19:48:29,315 - src.vector_search - INFO - 총 142개의 포인트를 생성했습니다.
+2026-02-14 19:48:29,315 - src.api.routers.vector - INFO - 포인트 준비 완료: 142개 포인트 생성됨
+2026-02-14 19:48:29,318 - src.vector_search - INFO - 142개의 포인트를 upload_collection으로 업로드 시작... (컬렉션 형식: named 벡터)
+/Users/js/tasteam-new-async/src/vector_search.py:450: UserWarning: Local mode is not recommended for collections with more than 20,000 points. Current collection contains 20622 points. Consider using Qdrant in Docker or Qdrant Cloud for better performance with large datasets.
+  self.client.upload_collection(
+2026-02-14 19:48:29,410 - src.vector_search - INFO - 142개의 포인트를 upload_collection으로 업로드 완료했습니다.
+2026-02-14 19:48:29,410 - src.api.routers.vector - INFO - 업로드 완료: 142개 포인트
+2026-02-14 19:48:29,623 - src.vector_search - INFO - 레스토랑 3의 대표 벡터를 업데이트했습니다.
+2026-02-14 19:48:29,737 - src.vector_search - INFO - 레스토랑 1의 대표 벡터를 업데이트했습니다.
+2026-02-14 19:48:29,850 - src.vector_search - INFO - 레스토랑 2의 대표 벡터를 업데이트했습니다.
+2026-02-14 19:48:29,965 - src.vector_search - INFO - 레스토랑 5의 대표 벡터를 업데이트했습니다.
+2026-02-14 19:48:30,079 - src.vector_search - INFO - 레스토랑 4의 대표 벡터를 업데이트했습니다.
+2026-02-14 19:48:30,079 - src.api.routers.vector - INFO - restaurant_vectors 컬렉션에 5개 레스토랑 대표 벡터 생성 완료
+INFO:     127.0.0.1:61626 - "POST /api/v1/vector/upload HTTP/1.1" 200 OK
+2026-02-14 19:48:30,084 - src.cache - WARNING - Redis가 설치되지 않아 캐싱이 비활성화됩니다.
+2026-02-14 19:48:30,084 - src.cache - WARNING - Redis가 없어 락을 건너뜁니다.
+2026-02-14 19:48:30,205 - src.sentiment_analysis - INFO - 총 20개의 리뷰를 sentiment 모델로 분류합니다 (restaurant_id: 1).
+2026-02-14 19:48:32,180 - httpx - INFO - HTTP Request: POST http://213.173.108.70:17517/v1/chat/completions "HTTP/1.1 200 OK"
+2026-02-14 19:48:32,188 - src.sentiment_analysis - INFO - LLM 재판정 완료: 2개 리뷰 중 2개 재분류
+INFO:     127.0.0.1:61630 - "POST /api/v1/sentiment/analyze HTTP/1.1" 200 OK
+2026-02-14 19:48:32,347 - src.sentiment_analysis - INFO - 총 20개의 리뷰를 sentiment 모델로 분류합니다 (restaurant_id: 1).
+2026-02-14 19:48:32,457 - src.sentiment_analysis - INFO - 총 20개의 리뷰를 sentiment 모델로 분류합니다 (restaurant_id: 2).
+2026-02-14 19:48:32,565 - src.sentiment_analysis - INFO - 총 20개의 리뷰를 sentiment 모델로 분류합니다 (restaurant_id: 3).
+2026-02-14 19:48:32,677 - src.sentiment_analysis - INFO - 총 62개의 리뷰를 sentiment 모델로 분류합니다 (restaurant_id: 4).
+2026-02-14 19:48:32,788 - src.sentiment_analysis - INFO - 총 20개의 리뷰를 sentiment 모델로 분류합니다 (restaurant_id: 5).
+2026-02-14 19:48:36,114 - httpx - INFO - HTTP Request: POST http://213.173.108.70:17517/v1/chat/completions "HTTP/1.1 200 OK"
+2026-02-14 19:48:36,114 - src.sentiment_analysis - INFO - LLM 재판정 완료: 2개 리뷰 중 2개 재분류
+2026-02-14 19:48:36,520 - httpx - INFO - HTTP Request: POST http://213.173.108.70:17517/v1/chat/completions "HTTP/1.1 200 OK"
+2026-02-14 19:48:36,521 - src.sentiment_analysis - INFO - LLM 재판정 완료: 2개 리뷰 중 2개 재분류
+2026-02-14 19:48:36,636 - httpx - INFO - HTTP Request: POST http://213.173.108.70:17517/v1/chat/completions "HTTP/1.1 200 OK"
+2026-02-14 19:48:36,637 - src.sentiment_analysis - INFO - LLM 재판정 완료: 2개 리뷰 중 2개 재분류
+2026-02-14 19:48:37,232 - httpx - INFO - HTTP Request: POST http://213.173.108.70:17517/v1/chat/completions "HTTP/1.1 200 OK"
+2026-02-14 19:48:37,235 - src.sentiment_analysis - INFO - LLM 재판정 완료: 4개 리뷰 중 4개 재분류
+INFO:     127.0.0.1:61632 - "POST /api/v1/sentiment/analyze/batch HTTP/1.1" 200 OK
+2026-02-14 19:48:37,245 - src.cache - WARNING - Redis가 없어 락을 건너뜁니다.
+2026-02-14 19:48:37,246 - src.api.routers.llm - INFO - 요약: 기본 시드만 사용
+2026-02-14 19:48:45,234 - httpx - INFO - HTTP Request: POST http://213.173.108.70:17517/v1/chat/completions "HTTP/1.1 200 OK"
+INFO:     127.0.0.1:61637 - "POST /api/v1/llm/summarize HTTP/1.1" 200 OK
+2026-02-14 19:48:45,254 - src.api.routers.llm - INFO - 요약: 기본 시드만 사용
+2026-02-14 19:48:48,869 - httpx - INFO - HTTP Request: POST http://213.173.108.70:17517/v1/chat/completions "HTTP/1.1 200 OK"
+2026-02-14 19:48:53,720 - httpx - INFO - HTTP Request: POST http://213.173.108.70:17517/v1/chat/completions "HTTP/1.1 200 OK"
+INFO:     127.0.0.1:61639 - "POST /api/v1/llm/summarize/batch HTTP/1.1" 200 OK
+2026-02-14 19:48:53,732 - src.cache - WARNING - Redis가 없어 락을 건너뜁니다.
+2026-02-14 19:48:53,732 - src.comparison - INFO - comparison 진행: restaurant_id=4, restaurant_name=(이름없음)
+2026-02-14 19:48:53,802 - src.comparison - INFO - 전체 평균 ① 파일 시도 (Spark 직접 읽기): path=data/test_data_sample.json
+WARNING: Using incubator modules: jdk.incubator.vector
+Setting default log level to "OFF".
+To adjust logging level use sc.setLogLevel(newLevel). For SparkR, use setLogLevel(newLevel).
+/Users/js/miniconda3/envs/env_ai/lib/python3.11/site-packages/torch/cuda/__init__.py:63: FutureWarning: The pynvml package is deprecated. Please install nvidia-ml-py instead. If you did not install pynvml directly, please report this to the maintainers of the package that installed pynvml for you.
+  import pynvml  # type: ignore[import]
+Quantization is not supported for ArchType::neon. Fall back to non-quantized model.
+2026-02-14 19:49:09,829 - src.comparison - INFO - 전체 평균 ① 파일 사용 (Spark 직접 읽기): path=data/test_data_sample.json → service=0.6000, price=0.1818
+Quantization is not supported for ArchType::neon. Fall back to non-quantized model.
+2026-02-14 19:49:11,665 - src.comparison - INFO - 표본(단일 음식점) restaurant_id=4 service=0.6200, price=0.5000 | lift service=3%, price=175%
+2026-02-14 19:49:11,666 - src.comparison_pipeline - INFO - 표본 리뷰수 n=62 >= 50이므로 톤 '좋은 편' 사용
+2026-02-14 19:49:12,728 - httpx - INFO - HTTP Request: POST http://213.173.108.70:17517/v1/chat/completions "HTTP/1.1 200 OK"
+2026-02-14 19:49:12,794 - httpx - INFO - HTTP Request: POST http://213.173.108.70:17517/v1/chat/completions "HTTP/1.1 200 OK"
+INFO:     127.0.0.1:61643 - "POST /api/v1/llm/comparison HTTP/1.1" 200 OK
+2026-02-14 19:49:12,817 - src.comparison - INFO - comparison 진행: restaurant_id=4, restaurant_name=(이름없음)
+2026-02-14 19:49:12,817 - src.comparison - INFO - 전체 평균 ① 파일 시도 (Spark 직접 읽기): path=data/test_data_sample.json
+Quantization is not supported for ArchType::neon. Fall back to non-quantized model.
+2026-02-14 19:49:14,837 - src.comparison - INFO - 전체 평균 ① 파일 사용 (Spark 직접 읽기): path=data/test_data_sample.json → service=0.6000, price=0.1818
+Quantization is not supported for ArchType::neon. Fall back to non-quantized model.
+2026-02-14 19:49:16,569 - src.comparison - INFO - 표본(단일 음식점) restaurant_id=4 service=0.6200, price=0.5000 | lift service=3%, price=175%
+2026-02-14 19:49:16,569 - src.comparison_pipeline - INFO - 표본 리뷰수 n=62 >= 50이므로 톤 '좋은 편' 사용
+2026-02-14 19:49:16,569 - src.comparison - INFO - comparison 진행: restaurant_id=5, restaurant_name=(이름없음)
+2026-02-14 19:49:16,569 - src.comparison - INFO - 전체 평균 ① 파일 시도 (Spark 직접 읽기): path=data/test_data_sample.json
+Quantization is not supported for ArchType::neon. Fall back to non-quantized model.
+2026-02-14 19:49:18,523 - src.comparison - INFO - 전체 평균 ① 파일 사용 (Spark 직접 읽기): path=data/test_data_sample.json → service=0.6000, price=0.1818
+Quantization is not supported for ArchType::neon. Fall back to non-quantized model.
+2026-02-14 19:49:20,295 - src.comparison - INFO - 표본(단일 음식점) restaurant_id=5 service=0.6700, price=0.0700 | lift service=12%, price=-61%
+2026-02-14 19:49:20,295 - src.comparison_pipeline - INFO - 표본 리뷰수 20 <= n=20 < 50이므로 톤 '상대적으로 좋은 편' 사용
+2026-02-14 19:49:21,367 - httpx - INFO - HTTP Request: POST http://213.173.108.70:17517/v1/chat/completions "HTTP/1.1 200 OK"
+2026-02-14 19:49:21,392 - httpx - INFO - HTTP Request: POST http://213.173.108.70:17517/v1/chat/completions "HTTP/1.1 200 OK"
+2026-02-14 19:49:21,476 - httpx - INFO - HTTP Request: POST http://213.173.108.70:17517/v1/chat/completions "HTTP/1.1 200 OK"
+INFO:     127.0.0.1:61669 - "POST /api/v1/llm/comparison/batch HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61690 - "POST /api/v1/vector/search/similar HTTP/1.1" 200 OK

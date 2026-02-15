@@ -1,0 +1,213 @@
+(env_ai) js@jinsoos-MacBook-Pro tasteam-new-async % python app
+.py
+/Users/js/miniconda3/envs/env_ai/lib/python3.11/site-packages/torch/cuda/__init__.py:63: FutureWarning: The pynvml package is deprecated. Please install nvidia-ml-py instead. If you did not install pynvml directly, please report this to the maintainers of the package that installed pynvml for you.
+  import pynvml  # type: ignore[import]
+Redis가 설치되지 않았습니다. 캐싱이 비활성화됩니다.
+2026-02-13 14:03:37,199 - src.api.main - WARNING - prometheus_fastapi_instrumentator 미설치: /metrics 비활성화. 설치: pip install prometheus-client prometheus-fastapi-instrumentator
+INFO:     Started server process [2689]
+INFO:     Waiting for application startup.
+2026-02-13 14:03:37,239 - src.api.main - INFO - FastAPI 애플리케이션 시작
+/Users/js/tasteam-new-async/src/api/dependencies.py:56: UserWarning: Local mode is not recommended for collections with more than 20,000 points. Collection <reviews_collection> contains 20622 points. Consider using Qdrant in Docker or Qdrant Cloud for better performance with large datasets.
+  client = QdrantClient(path=qdrant_path)
+/Users/js/tasteam-new-async/src/vector_search.py:69: UserWarning: The model sentence-transformers/paraphrase-multilingual-mpnet-base-v2 now uses mean pooling instead of CLS embedding. In order to preserve the previous behaviour, consider either pinning fastembed version to 0.5.1 or using `add_custom_model` functionality.
+  self._dense_model = TextEmbedding(Config.EMBEDDING_MODEL)
+2026-02-13 14:03:40,267 - src.vector_search - INFO - Dense 벡터 모델 로드 완료: sentence-transformers/paraphrase-multilingual-mpnet-base-v2
+2026-02-13 14:03:40,368 - src.vector_search - INFO - Sparse 벡터 모델 로드 완료: Qdrant/bm25
+2026-02-13 14:03:40,374 - src.api.main - INFO - VectorSearch(임베딩) warm-up 완료
+2026-02-13 14:03:40,374 - src.llm_utils - INFO - vLLM RunPod Serverless: 엔드포인트 g09uegksn7h7ed (요청 시 GPU 기동, 유휴 시 스케일다운)
+2026-02-13 14:03:40,998 - httpx - INFO - HTTP Request: HEAD https://huggingface.co/Dilwolf/Kakao_app-kr_sentiment/resolve/main/config.json "HTTP/1.1 307 Temporary Redirect"
+2026-02-13 14:03:41,013 - httpx - INFO - HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/Dilwolf/Kakao_app-kr_sentiment/aaae4554e0c4b5cf45c6f27722b21717d027f5ff/config.json "HTTP/1.1 200 OK"
+2026-02-13 14:03:41,304 - httpx - INFO - HTTP Request: HEAD https://huggingface.co/Dilwolf/Kakao_app-kr_sentiment/resolve/main/config.json "HTTP/1.1 307 Temporary Redirect"
+2026-02-13 14:03:41,316 - httpx - INFO - HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/Dilwolf/Kakao_app-kr_sentiment/aaae4554e0c4b5cf45c6f27722b21717d027f5ff/config.json "HTTP/1.1 200 OK"
+Loading weights: 100%|█| 201/20
+2026-02-13 14:03:41,697 - httpx - INFO - HTTP Request: GET https://huggingface.co/api/models/Dilwolf/Kakao_app-kr_sentiment/tree/main/additional_chat_templates?recursive=false&expand=false "HTTP/1.1 404 Not Found"
+2026-02-13 14:03:41,935 - httpx - INFO - HTTP Request: GET https://huggingface.co/api/models/Dilwolf/Kakao_app-kr_sentiment/tree/main?recursive=true&expand=false "HTTP/1.1 200 OK"
+2026-02-13 14:03:42,361 - httpx - INFO - HTTP Request: GET https://huggingface.co/api/models/Dilwolf/Kakao_app-kr_sentiment "HTTP/1.1 200 OK"
+2026-02-13 14:03:42,363 - src.sentiment_analysis - INFO - Sentiment 모델 로딩 완료: Dilwolf/Kakao_app-kr_sentiment (device=-1)
+2026-02-13 14:03:42,999 - src.api.main - INFO - Sentiment pipeline warm-up 완료
+2026-02-13 14:03:43,000 - src.api.main - INFO - 서비스 warm-up 완료, readiness=True
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8001 (Press CTRL+C to quit)
+INFO:     127.0.0.1:57392 - "GET /health HTTP/1.1" 200 OK
+2026-02-13 14:03:57,093 - src.api.routers.vector - INFO - 포인트 준비 시작: 리뷰 142개, 레스토랑 5개
+2026-02-13 14:03:57,094 - src.vector_search - INFO - 총 142개의 리뷰를 배치로 인코딩합니다 (배치 크기: 32, 하이브리드: Dense + Sparse)
+2026-02-13 14:04:17,471 - src.vector_search - INFO - 총 142개의 포인트를 생성했습니다.
+2026-02-13 14:04:17,471 - src.api.routers.vector - INFO - 포인트 준비 완료: 142개 포인트 생성됨
+2026-02-13 14:04:17,474 - src.vector_search - INFO - 142개의 포인트를 upload_collection으로 업로드 시작... (컬렉션 형식: named 벡터)
+/Users/js/tasteam-new-async/src/vector_search.py:450: UserWarning: Local mode is not recommended for collections with more than 20,000 points. Current collection contains 20622 points. Consider using Qdrant in Docker or Qdrant Cloud for better performance with large datasets.
+  self.client.upload_collection(
+2026-02-13 14:04:17,580 - src.vector_search - INFO - 142개의 포인트를 upload_collection으로 업로드 완료했습니다.
+2026-02-13 14:04:17,580 - src.api.routers.vector - INFO - 업로드 완료: 142개 포인트
+2026-02-13 14:04:17,824 - src.vector_search - INFO - 레스토랑 2의 대표 벡터를 업데이트했습니다.
+2026-02-13 14:04:17,947 - src.vector_search - INFO - 레스토랑 5의 대표 벡터를 업데이트했습니다.
+2026-02-13 14:04:18,073 - src.vector_search - INFO - 레스토랑 3의 대표 벡터를 업데이트했습니다.
+2026-02-13 14:04:18,198 - src.vector_search - INFO - 레스토랑 4의 대표 벡터를 업데이트했습니다.
+2026-02-13 14:04:18,324 - src.vector_search - INFO - 레스토랑 1의 대표 벡터를 업데이트했습니다.
+2026-02-13 14:04:18,324 - src.api.routers.vector - INFO - restaurant_vectors 컬렉션에 5개 레스토랑 대표 벡터 생성 완료
+INFO:     127.0.0.1:57394 - "POST /api/v1/vector/upload HTTP/1.1" 200 OK
+2026-02-13 14:04:18,337 - src.cache - WARNING - Redis가 설치되지 않아 캐싱이 비활성화됩니다.
+2026-02-13 14:04:18,337 - src.cache - WARNING - Redis가 없어 락을 건너뜁니다.
+2026-02-13 14:04:18,469 - src.sentiment_analysis - INFO - 총 20개의 리뷰를 sentiment 모델로 분류합니다 (restaurant_id: 1).
+2026-02-13 14:04:20,374 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/run "HTTP/1.1 200 OK"
+2026-02-13 14:04:20,648 - httpx - INFO - HTTP Request: GET https://api.runpod.ai/v2/g09uegksn7h7ed/status/10267719-e41f-4e1e-bd29-cbfa94f9793c-e1 "HTTP/1.1 200 OK"
+2026-02-13 14:04:22,986 - httpx - INFO - HTTP Request: GET https://api.runpod.ai/v2/g09uegksn7h7ed/status/10267719-e41f-4e1e-bd29-cbfa94f9793c-e1 "HTTP/1.1 200 OK"
+2026-02-13 14:04:25,343 - httpx - INFO - HTTP Request: GET https://api.runpod.ai/v2/g09uegksn7h7ed/status/10267719-e41f-4e1e-bd29-cbfa94f9793c-e1 "HTTP/1.1 200 OK"
+2026-02-13 14:04:25,345 - src.sentiment_analysis - WARNING - LLM 재판정 실패: JSON 파싱 불가(비표준 형식). 1차 분류 결과를 사용합니다.
+INFO:     127.0.0.1:57424 - "POST /api/v1/sentiment/analyze HTTP/1.1" 200 OK
+2026-02-13 14:04:25,492 - src.sentiment_analysis - INFO - 총 20개의 리뷰를 sentiment 모델로 분류합니다 (restaurant_id: 1).
+2026-02-13 14:04:25,605 - src.sentiment_analysis - INFO - 총 20개의 리뷰를 sentiment 모델로 분류합니다 (restaurant_id: 2).
+2026-02-13 14:04:25,721 - src.sentiment_analysis - INFO - 총 20개의 리뷰를 sentiment 모델로 분류합니다 (restaurant_id: 3).
+2026-02-13 14:04:26,497 - src.sentiment_analysis - INFO - 총 62개의 리뷰를 sentiment 모델로 분류합니다 (restaurant_id: 4).
+2026-02-13 14:04:26,617 - src.sentiment_analysis - INFO - 총 20개의 리뷰를 sentiment 모델로 분류합니다 (restaurant_id: 5).
+2026-02-13 14:04:29,745 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/run "HTTP/1.1 200 OK"
+2026-02-13 14:04:29,788 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/run "HTTP/1.1 200 OK"
+2026-02-13 14:04:29,935 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/run "HTTP/1.1 200 OK"
+2026-02-13 14:04:30,064 - httpx - INFO - HTTP Request: GET https://api.runpod.ai/v2/g09uegksn7h7ed/status/7a65cda0-5c9e-4024-a9b3-749fa58ac996-e2 "HTTP/1.1 200 OK"
+2026-02-13 14:04:30,067 - httpx - INFO - HTTP Request: GET https://api.runpod.ai/v2/g09uegksn7h7ed/status/2e7df3d5-1e53-4b02-a49d-c641636a56a8-e1 "HTTP/1.1 200 OK"
+2026-02-13 14:04:30,134 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/run "HTTP/1.1 200 OK"
+2026-02-13 14:04:30,202 - httpx - INFO - HTTP Request: GET https://api.runpod.ai/v2/g09uegksn7h7ed/status/a4466ec8-f64f-4295-9fd5-019a015a0212-e1 "HTTP/1.1 200 OK"
+2026-02-13 14:04:30,402 - httpx - INFO - HTTP Request: GET https://api.runpod.ai/v2/g09uegksn7h7ed/status/219f1fe0-9001-4ca6-b1b9-1788136d095c-e1 "HTTP/1.1 200 OK"
+2026-02-13 14:04:31,531 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/run "HTTP/1.1 200 OK"
+2026-02-13 14:04:31,805 - httpx - INFO - HTTP Request: GET https://api.runpod.ai/v2/g09uegksn7h7ed/status/5634c33d-7301-487c-b02d-694c7a23222b-e1 "HTTP/1.1 200 OK"
+2026-02-13 14:04:32,332 - httpx - INFO - HTTP Request: GET https://api.runpod.ai/v2/g09uegksn7h7ed/status/2e7df3d5-1e53-4b02-a49d-c641636a56a8-e1 "HTTP/1.1 200 OK"
+2026-02-13 14:04:32,341 - httpx - INFO - HTTP Request: GET https://api.runpod.ai/v2/g09uegksn7h7ed/status/7a65cda0-5c9e-4024-a9b3-749fa58ac996-e2 "HTTP/1.1 200 OK"
+2026-02-13 14:04:32,342 - src.sentiment_analysis - WARNING - LLM 재판정 실패: JSON 파싱 불가(비표준 형식). 1차 분류 결과를 사용합니다.
+2026-02-13 14:04:32,466 - httpx - INFO - HTTP Request: GET https://api.runpod.ai/v2/g09uegksn7h7ed/status/a4466ec8-f64f-4295-9fd5-019a015a0212-e1 "HTTP/1.1 200 OK"
+2026-02-13 14:04:32,684 - httpx - INFO - HTTP Request: GET https://api.runpod.ai/v2/g09uegksn7h7ed/status/219f1fe0-9001-4ca6-b1b9-1788136d095c-e1 "HTTP/1.1 200 OK"
+2026-02-13 14:04:34,103 - httpx - INFO - HTTP Request: GET https://api.runpod.ai/v2/g09uegksn7h7ed/status/5634c33d-7301-487c-b02d-694c7a23222b-e1 "HTTP/1.1 200 OK"
+2026-02-13 14:04:34,609 - httpx - INFO - HTTP Request: GET https://api.runpod.ai/v2/g09uegksn7h7ed/status/2e7df3d5-1e53-4b02-a49d-c641636a56a8-e1 "HTTP/1.1 200 OK"
+2026-02-13 14:04:34,612 - src.sentiment_analysis - WARNING - LLM 재판정 실패: JSON 파싱 불가(비표준 형식). 1차 분류 결과를 사용합니다.
+2026-02-13 14:04:34,787 - httpx - INFO - HTTP Request: GET https://api.runpod.ai/v2/g09uegksn7h7ed/status/a4466ec8-f64f-4295-9fd5-019a015a0212-e1 "HTTP/1.1 200 OK"
+2026-02-13 14:04:34,790 - src.sentiment_analysis - WARNING - LLM 재판정 실패: JSON 파싱 불가(비표준 형식). 1차 분류 결과를 사용합니다.
+2026-02-13 14:04:34,955 - httpx - INFO - HTTP Request: GET https://api.runpod.ai/v2/g09uegksn7h7ed/status/219f1fe0-9001-4ca6-b1b9-1788136d095c-e1 "HTTP/1.1 200 OK"
+2026-02-13 14:04:34,958 - src.sentiment_analysis - WARNING - LLM 재판정 실패: JSON 파싱 불가(비표준 형식). 1차 분류 결과를 사용합니다.
+2026-02-13 14:04:36,371 - httpx - INFO - HTTP Request: GET https://api.runpod.ai/v2/g09uegksn7h7ed/status/5634c33d-7301-487c-b02d-694c7a23222b-e1 "HTTP/1.1 200 OK"
+2026-02-13 14:04:36,374 - src.sentiment_analysis - WARNING - LLM 재판정 실패: JSON 파싱 불가(비표준 형식). 1차 분류 결과를 사용합니다.
+INFO:     127.0.0.1:57445 - "POST /api/v1/sentiment/analyze/batch HTTP/1.1" 200 OK
+2026-02-13 14:04:36,406 - src.cache - WARNING - Redis가 없어 락을 건너뜁니다.
+2026-02-13 14:04:36,406 - src.api.routers.llm - INFO - 요약: 기본 시드만 사용
+2026-02-13 14:04:43,574 - src.summary_pipeline - ERROR - JSON 파싱 실패: relaxed parse failed on fix
+INFO:     127.0.0.1:57474 - "POST /api/v1/llm/summarize HTTP/1.1" 200 OK
+2026-02-13 14:04:43,602 - src.api.routers.llm - INFO - 요약: 기본 시드만 사용
+2026-02-13 14:04:45,791 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/run "HTTP/1.1 200 OK"
+2026-02-13 14:04:45,993 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/run "HTTP/1.1 200 OK"
+2026-02-13 14:04:46,057 - httpx - INFO - HTTP Request: GET https://api.runpod.ai/v2/g09uegksn7h7ed/status/fd99b5d7-1303-478e-8538-77320ebcb43c-e2 "HTTP/1.1 200 OK"
+2026-02-13 14:04:46,314 - httpx - INFO - HTTP Request: GET https://api.runpod.ai/v2/g09uegksn7h7ed/status/8532bea6-6d08-402c-ab01-c5a20742977e-e2 "HTTP/1.1 200 OK"
+2026-02-13 14:04:48,411 - httpx - INFO - HTTP Request: GET https://api.runpod.ai/v2/g09uegksn7h7ed/status/fd99b5d7-1303-478e-8538-77320ebcb43c-e2 "HTTP/1.1 200 OK"
+2026-02-13 14:04:48,579 - httpx - INFO - HTTP Request: GET https://api.runpod.ai/v2/g09uegksn7h7ed/status/8532bea6-6d08-402c-ab01-c5a20742977e-e2 "HTTP/1.1 200 OK"
+2026-02-13 14:04:48,836 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/run "HTTP/1.1 200 OK"
+2026-02-13 14:04:49,108 - httpx - INFO - HTTP Request: GET https://api.runpod.ai/v2/g09uegksn7h7ed/status/8b635d67-c04a-43d2-9fbf-4acb72382028-e1 "HTTP/1.1 200 OK"
+2026-02-13 14:04:50,852 - httpx - INFO - HTTP Request: GET https://api.runpod.ai/v2/g09uegksn7h7ed/status/8532bea6-6d08-402c-ab01-c5a20742977e-e2 "HTTP/1.1 200 OK"
+2026-02-13 14:04:51,264 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/run "HTTP/1.1 200 OK"
+2026-02-13 14:04:51,376 - httpx - INFO - HTTP Request: GET https://api.runpod.ai/v2/g09uegksn7h7ed/status/8b635d67-c04a-43d2-9fbf-4acb72382028-e1 "HTTP/1.1 200 OK"
+2026-02-13 14:04:51,379 - src.summary_pipeline - ERROR - JSON 파싱 실패: relaxed parse failed on fix
+2026-02-13 14:04:51,556 - httpx - INFO - HTTP Request: GET https://api.runpod.ai/v2/g09uegksn7h7ed/status/7f28ce93-e920-4058-9bc8-ceaf854a0205-e1 "HTTP/1.1 200 OK"
+2026-02-13 14:04:53,828 - httpx - INFO - HTTP Request: GET https://api.runpod.ai/v2/g09uegksn7h7ed/status/7f28ce93-e920-4058-9bc8-ceaf854a0205-e1 "HTTP/1.1 200 OK"
+2026-02-13 14:04:53,830 - src.summary_pipeline - ERROR - JSON 파싱 실패: relaxed parse failed on fix
+INFO:     127.0.0.1:57490 - "POST /api/v1/llm/summarize/batch HTTP/1.1" 200 OK
+2026-02-13 14:04:53,848 - src.cache - WARNING - Redis가 없어 락을 건너뜁니다.
+2026-02-13 14:04:53,849 - src.comparison - INFO - comparison 진행: restaurant_id=4, restaurant_name=(이름없음)
+2026-02-13 14:04:53,922 - src.comparison - INFO - 전체 평균 ① 파일 시도 (Spark 직접 읽기): path=data/test_data_sample.json
+WARNING: Using incubator modules: jdk.incubator.vector
+/Users/js/miniconda3/envs/env_ai/lib/python3.11/site-packages/torch/cuda/__init__.py:63: FutureWarning: The pynvml package is deprecated. Please install nvidia-ml-py instead. If you did not install pynvml directly, please report this to the maintainers of the package that installed pynvml for you.
+  import pynvml  # type: ignore[import]
+Quantization is not supported for ArchType::neon. Fall back to non-quantized model.
+
+---
+
+RunPod 응답이 여전히 파싱에 실패합니다. 응답 추출 방식과 실제 형식을 확인한 뒤, 추출·파싱을 강화하겠습니다.
+
+
+[3 tools called]
+
+
+RunPod vLLM의 status 응답 형식 확인 중. 이어서 괄호 매칭 추출과 리스트형 output 처리 추가.
+
+
+[4 tools called]
+
+
+RunPod가 `output`을 리스트로 반환합니다. 리스트에서 생성 텍스트를 올바르게 추출하고, 괄호 매칭으로 JSON 블록을 추출하는 로직을 추가합니다.
+
+
+[4 tools called]
+
+
+RunPod가 `output[0].output` 형태로 반환하는 경우 대비 중.
+
+
+[1 tool called]
+
+
+괄호 매칭으로 JSON 블록을 추출하는 함수를 추가하고, summary에서 사용합니다.
+
+
+[2 tools called]
+
+
+수정: `extract_json_block`이 `[{...}]`에서 첫 `{`만 잡지 않도록, 텍스트에서 첫 `[` 또는 `{` 중 먼저 나온 것부터 괄호 매칭하도록 변경합니다.
+
+
+[1 tool called]
+
+
+parse_json_relaxed에서 문자열이 `[`로 시작하면 배열을 우선 추출하도록 변경합니다.
+
+
+[2 tools called]
+
+
+수정 반영했습니다. 요약만 정리합니다.
+
+---
+
+## 1. RunPod `output`에서 생성 텍스트만 쓰기 (`llm_utils.py`)
+
+- **원인**: RunPod vLLM이 `output`을 **리스트**로 줌  
+  `[{"choices": [{"text": "..."}]}]` 등.  
+  기존에는 `str(output)`으로 통째로 문자열화해, 그 문자열을 그대로 JSON처럼 파싱하려 해서 실패함.
+- **수정**:
+  - **`_extract_runpod_output(output)`** 추가:
+    - `output`이 **리스트**면 `output[0]` 사용.
+    - 그 다음 순서로 생성 텍스트 추출:
+      - `first.get("output")`
+      - `choices[0].get("text")`
+      - `choices[0].get("message", {}).get("content")`
+      - `choices[0].get("tokens")` → 리스트면 `" ".join(...)`
+    - 위에 해당 없으면 기존처럼 `str(output)` 등으로 fallback.
+  - **동기/비동기** RunPod 완료 처리에서 모두  
+    `return self._extract_runpod_output(output)` 로 통일.
+
+이제 RunPod가 리스트/choices 구조로 주어도, **실제 생성 문자열만** sentiment/summary/comparison 파서로 넘어갑니다.
+
+---
+
+## 2. 괄호 매칭으로 JSON 블록만 추출 (`json_parse_utils.py`)
+
+- **`extract_json_block(text, want_object)`** 추가:
+  - 앞뒤 마크다운(```json, ```) 제거 후,
+  - 첫 `[` 또는 `{` 중 **먼저 나온 것**부터 **괄호 깊이**로 끝까지 찾아서,
+  - 그 한 블록(배열 또는 객체)만 잘라서 반환.
+- **`parse_json_relaxed`** 에서:
+  - 문자열이 `[`로 시작하면 배열 우선, 아니면 객체 우선으로  
+    `extract_json_block(..., want_object=...)` 한 번 호출해,
+  - 그 결과로 나온 **한 블록 문자열**만 가지고 relaxed 파싱 시도.
+
+그래서 응답 앞뒤에 설명이 붙어 있거나, 중첩 `{}`/`[]`가 있어도 **실제 JSON 한 덩어리**만 골라서 파싱합니다.
+
+---
+
+## 3. Sentiment / Summary 동작
+
+- **Sentiment**: RunPod에서 **생성 텍스트만** 오므로 `"[{...}]"` 형태 문자열이 들어가고,  
+  `parse_json_relaxed`가 배열 블록 추출 + relaxed 파싱으로 처리할 수 있음.
+- **Summary**:  
+  - 첫 파싱 실패 시 “유효한 JSON으로만 변환” 재요청하는 흐름은 그대로 두고,  
+  - 그 재요청 응답도 `_extract_runpod_output`로 문자열만 뽑은 뒤  
+  - 같은 `parse_json_relaxed`(및 필요 시 `extract_json_block`)로 파싱하므로  
+  “relaxed parse failed on fix” 는, fix 응답도 리스트/choices 형태였을 때는 이제 정리된 문자열로 파싱 시도하게 됨.
+
+---
+
+다시 한 번 `python app.py` 로 올려서 sentiment / summarize 호출해 보시면,  
+RunPod 응답이 리스트 형식이어도 생성 텍스트만 쓰고, 앞뒤 텍스트·중첩 괄호는 걸러져서 파싱되도록 맞춰 두었습니다.

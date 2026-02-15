@@ -1,0 +1,199 @@
+conda activate env_ai
+(base) js@jinsoos-MacBook-Pro tasteam-new-async % conda activate env_ai
+(env_ai) js@jinsoos-MacBook-Pro tasteam-new-async % export RUNPOD_VLLM_ENDPOINT_ID="
+g09uegksn7h7ed"
+(env_ai) js@jinsoos-MacBook-Pro tasteam-new-async % echo $ RUNPOD_VLLM_ENDPOINT_ID
+$ RUNPOD_VLLM_ENDPOINT_ID
+(env_ai) js@jinsoos-MacBook-Pro tasteam-new-async % echo $RUNPOD_VLLM_ENDPOI
+NT_ID
+
+g09uegksn7h7ed
+(env_ai) js@jinsoos-MacBook-Pro tasteam-new-async % python app.py          
+/Users/js/miniconda3/envs/env_ai/lib/python3.11/site-packages/torch/cuda/__init__.py:63: FutureWarning: The pynvml package is deprecated. Please install nvidia-ml-py instead. If you did not install pynvml directly, please report this to the maintainers of the package that installed pynvml for you.
+  import pynvml  # type: ignore[import]
+Redis가 설치되지 않았습니다. 캐싱이 비활성화됩니다.
+2026-02-13 13:50:22,380 - src.api.main - WARNING - prometheus_fastapi_instrumentator 미설치: /metrics 비활성화. 설치: pip install prometheus-client prometheus-fastapi-instrumentator
+INFO:     Started server process [1246]
+INFO:     Waiting for application startup.
+2026-02-13 13:50:22,416 - src.api.main - INFO - FastAPI 애플리케이션 시작
+/Users/js/tasteam-new-async/src/api/dependencies.py:56: UserWarning: Local mode is not recommended for collections with more than 20,000 points. Collection <reviews_collection> contains 20622 points. Consider using Qdrant in Docker or Qdrant Cloud for better performance with large datasets.
+  client = QdrantClient(path=qdrant_path)
+/Users/js/tasteam-new-async/src/vector_search.py:69: UserWarning: The model sentence-transformers/paraphrase-multilingual-mpnet-base-v2 now uses mean pooling instead of CLS embedding. In order to preserve the previous behaviour, consider either pinning fastembed version to 0.5.1 or using `add_custom_model` functionality.
+  self._dense_model = TextEmbedding(Config.EMBEDDING_MODEL)
+2026-02-13 13:50:25,625 - src.vector_search - INFO - Dense 벡터 모델 로드 완료: sentence-transformers/paraphrase-multilingual-mpnet-base-v2
+2026-02-13 13:50:25,720 - src.vector_search - INFO - Sparse 벡터 모델 로드 완료: Qdrant/bm25
+2026-02-13 13:50:25,729 - src.api.main - INFO - VectorSearch(임베딩) warm-up 완료
+2026-02-13 13:50:25,729 - src.llm_utils - INFO - vLLM RunPod Serverless: 엔드포인트 
+g09uegksn7h7ed (요청 시 GPU 기동, 유휴 시 스케일다운)
+2026-02-13 13:50:26,240 - httpx - INFO - HTTP Request: HEAD https://huggingface.co/Dilwolf/Kakao_app-kr_sentiment/resolve/main/config.json "HTTP/1.1 307 Temporary Redirect"
+2026-02-13 13:50:26,252 - httpx - INFO - HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/Dilwolf/Kakao_app-kr_sentiment/aaae4554e0c4b5cf45c6f27722b21717d027f5ff/config.json "HTTP/1.1 200 OK"
+2026-02-13 13:50:26,496 - httpx - INFO - HTTP Request: HEAD https://huggingface.co/Dilwolf/Kakao_app-kr_sentiment/resolve/main/config.json "HTTP/1.1 307 Temporary Redirect"
+2026-02-13 13:50:26,511 - httpx - INFO - HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/Dilwolf/Kakao_app-kr_sentiment/aaae4554e0c4b5cf45c6f27722b21717d027f5ff/config.json "HTTP/1.1 200 OK"
+Loading weights: 100%|█| 201/20
+2026-02-13 13:50:26,960 - httpx - INFO - HTTP Request: GET https://huggingface.co/api/models/Dilwolf/Kakao_app-kr_sentiment/tree/main/additional_chat_templates?recursive=false&expand=false "HTTP/1.1 404 Not Found"
+2026-02-13 13:50:27,189 - httpx - INFO - HTTP Request: GET https://huggingface.co/api/models/Dilwolf/Kakao_app-kr_sentiment/tree/main?recursive=true&expand=false "HTTP/1.1 200 OK"
+2026-02-13 13:50:27,574 - httpx - INFO - HTTP Request: GET https://huggingface.co/api/models/Dilwolf/Kakao_app-kr_sentiment "HTTP/1.1 200 OK"
+2026-02-13 13:50:27,575 - src.sentiment_analysis - INFO - Sentiment 모델 로딩 완료: Dilwolf/Kakao_app-kr_sentiment (device=-1)
+2026-02-13 13:50:28,208 - src.api.main - INFO - Sentiment pipeline warm-up 완료
+2026-02-13 13:50:28,209 - src.api.main - INFO - 서비스 warm-up 완료, readiness=True
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8001 (Press CTRL+C to quit)
+INFO:     127.0.0.1:56113 - "GET /health HTTP/1.1" 200 OK
+2026-02-13 13:50:44,882 - src.api.routers.vector - INFO - 포인트 준비 시작: 리뷰 142개, 레스토랑 5개
+2026-02-13 13:50:44,884 - src.vector_search - INFO - 총 142개의 리뷰를 배치로 인코딩합니다 (배치 크기: 32, 하이브리드: Dense + Sparse)
+2026-02-13 13:51:06,595 - src.vector_search - INFO - 총 142개의 포인트를 생성했습니다.
+2026-02-13 13:51:06,595 - src.api.routers.vector - INFO - 포인트 준비 완료: 142개 포인트 생성됨
+2026-02-13 13:51:06,598 - src.vector_search - INFO - 142개의 포인트를 upload_collection으로 업로드 시작... (컬렉션 형식: named 벡터)
+/Users/js/tasteam-new-async/src/vector_search.py:450: UserWarning: Local mode is not recommended for collections with more than 20,000 points. Current collection contains 20622 points. Consider using Qdrant in Docker or Qdrant Cloud for better performance with large datasets.
+  self.client.upload_collection(
+2026-02-13 13:51:06,754 - src.vector_search - INFO - 142개의 포인트를 upload_collection으로 업로드 완료했습니다.
+2026-02-13 13:51:06,754 - src.api.routers.vector - INFO - 업로드 완료: 142개 포인트
+2026-02-13 13:51:06,981 - src.vector_search - INFO - 레스토랑 1의 대표 벡터를 업데이트했습니다.
+2026-02-13 13:51:07,093 - src.vector_search - INFO - 레스토랑 2의 대표 벡터를 업데이트했습니다.
+2026-02-13 13:51:07,208 - src.vector_search - INFO - 레스토랑 3의 대표 벡터를 업데이트했습니다.
+2026-02-13 13:51:07,349 - src.vector_search - INFO - 레스토랑 4의 대표 벡터를 업데이트했습니다.
+2026-02-13 13:51:07,507 - src.vector_search - INFO - 레스토랑 5의 대표 벡터를 업데이트했습니다.
+2026-02-13 13:51:07,507 - src.api.routers.vector - INFO - restaurant_vectors 컬렉션에 5개 레스토랑 대표 벡터 생성 완료
+INFO:     127.0.0.1:56115 - "POST /api/v1/vector/upload HTTP/1.1" 200 OK
+2026-02-13 13:51:07,552 - src.cache - WARNING - Redis가 설치되지 않아 캐싱이 비활성화됩니다.
+2026-02-13 13:51:07,552 - src.cache - WARNING - Redis가 없어 락을 건너뜁니다.
+2026-02-13 13:51:07,707 - src.sentiment_analysis - INFO - 총 20개의 리뷰를 sentiment 모델로 분류합니다 (restaurant_id: 1).
+2026-02-13 13:51:08,587 - src.llm_utils - ERROR - RunPod 비동기 호출 실패: Invalid non-printable ASCII character in URL, '\n' at position 25.
+2026-02-13 13:51:09,603 - src.llm_utils - ERROR - RunPod 비동기 호출 실패: Invalid non-printable ASCII character in URL, '\n' at position 25.
+2026-02-13 13:51:11,620 - src.llm_utils - ERROR - RunPod 비동기 호출 실패: Invalid non-printable ASCII character in URL, '\n' at position 25.
+2026-02-13 13:51:11,620 - src.sentiment_analysis - WARNING - LLM 재판정 실패: Invalid non-printable ASCII character in URL, '\n' at position 25.. 1차 분류 결과를 사용합니다.
+INFO:     127.0.0.1:56143 - "POST /api/v1/sentiment/analyze HTTP/1.1" 200 OK
+2026-02-13 13:51:11,756 - src.sentiment_analysis - INFO - 총 20개의 리뷰를 sentiment 모델로 분류합니다 (restaurant_id: 1).
+2026-02-13 13:51:11,867 - src.sentiment_analysis - INFO - 총 20개의 리뷰를 sentiment 모델로 분류합니다 (restaurant_id: 2).
+2026-02-13 13:51:11,978 - src.sentiment_analysis - INFO - 총 20개의 리뷰를 sentiment 모델로 분류합니다 (restaurant_id: 3).
+2026-02-13 13:51:12,091 - src.sentiment_analysis - INFO - 총 62개의 리뷰를 sentiment 모델로 분류합니다 (restaurant_id: 4).
+2026-02-13 13:51:12,206 - src.sentiment_analysis - INFO - 총 20개의 리뷰를 sentiment 모델로 분류합니다 (restaurant_id: 5).
+2026-02-13 13:51:14,535 - src.llm_utils - ERROR - RunPod 비동기 호출 실패: Invalid non-printable ASCII character in URL, '\n' at position 25.
+2026-02-13 13:51:14,819 - src.llm_utils - ERROR - RunPod 비동기 호출 실패: Invalid non-printable ASCII character in URL, '\n' at position 25.
+2026-02-13 13:51:14,945 - src.llm_utils - ERROR - RunPod 비동기 호출 실패: Invalid non-printable ASCII character in URL, '\n' at position 25.
+2026-02-13 13:51:15,125 - src.llm_utils - ERROR - RunPod 비동기 호출 실패: Invalid non-printable ASCII character in URL, '\n' at position 25.
+2026-02-13 13:51:15,542 - src.llm_utils - ERROR - RunPod 비동기 호출 실패: Invalid non-printable ASCII character in URL, '\n' at position 25.
+2026-02-13 13:51:15,826 - src.llm_utils - ERROR - RunPod 비동기 호출 실패: Invalid non-printable ASCII character in URL, '\n' at position 25.
+2026-02-13 13:51:15,951 - src.llm_utils - ERROR - RunPod 비동기 호출 실패: Invalid non-printable ASCII character in URL, '\n' at position 25.
+2026-02-13 13:51:16,063 - src.llm_utils - ERROR - RunPod 비동기 호출 실패: Invalid non-printable ASCII character in URL, '\n' at position 25.
+2026-02-13 13:51:16,131 - src.llm_utils - ERROR - RunPod 비동기 호출 실패: Invalid non-printable ASCII character in URL, '\n' at position 25.
+2026-02-13 13:51:17,082 - src.llm_utils - ERROR - RunPod 비동기 호출 실패: Invalid non-printable ASCII character in URL, '\n' at position 25.
+2026-02-13 13:51:17,559 - src.llm_utils - ERROR - RunPod 비동기 호출 실패: Invalid non-printable ASCII character in URL, '\n' at position 25.
+2026-02-13 13:51:17,559 - src.sentiment_analysis - WARNING - LLM 재판정 실패: Invalid non-printable ASCII character in URL, '\n' at position 25.. 1차 분류 결과를 사용합니다.
+2026-02-13 13:51:17,842 - src.llm_utils - ERROR - RunPod 비동기 호출 실패: Invalid non-printable ASCII character in URL, '\n' at position 25.
+2026-02-13 13:51:17,842 - src.sentiment_analysis - WARNING - LLM 재판정 실패: Invalid non-printable ASCII character in URL, '\n' at position 25.. 1차 분류 결과를 사용합니다.
+2026-02-13 13:51:17,970 - src.llm_utils - ERROR - RunPod 비동기 호출 실패: Invalid non-printable ASCII character in URL, '\n' at position 25.
+2026-02-13 13:51:17,970 - src.sentiment_analysis - WARNING - LLM 재판정 실패: Invalid non-printable ASCII character in URL, '\n' at position 25.. 1차 분류 결과를 사용합니다.
+2026-02-13 13:51:18,148 - src.llm_utils - ERROR - RunPod 비동기 호출 실패: Invalid non-printable ASCII character in URL, '\n' at position 25.
+2026-02-13 13:51:18,148 - src.sentiment_analysis - WARNING - LLM 재판정 실패: Invalid non-printable ASCII character in URL, '\n' at position 25.. 1차 분류 결과를 사용합니다.
+2026-02-13 13:51:19,098 - src.llm_utils - ERROR - RunPod 비동기 호출 실패: Invalid non-printable ASCII character in URL, '\n' at position 25.
+2026-02-13 13:51:19,098 - src.sentiment_analysis - WARNING - LLM 재판정 실패: Invalid non-printable ASCII character in URL, '\n' at position 25.. 1차 분류 결과를 사용합니다.
+INFO:     127.0.0.1:56153 - "POST /api/v1/sentiment/analyze/batch HTTP/1.1" 200 OK
+2026-02-13 13:51:19,114 - src.cache - WARNING - Redis가 없어 락을 건너뜁니다.
+2026-02-13 13:51:19,114 - src.api.routers.llm - INFO - 요약: 기본 시드만 사용
+2026-02-13 13:51:20,447 - src.llm_utils - WARNING - RunPod 요청 실패 (시도 1/3): 상태 코드 404, 응답: 
+2026-02-13 13:51:21,814 - src.llm_utils - WARNING - RunPod 요청 실패 (시도 2/3): 상태 코드 404, 응답: 
+2026-02-13 13:51:24,170 - src.llm_utils - WARNING - RunPod 요청 실패 (시도 3/3): 상태 코드 404, 응답: 
+2026-02-13 13:51:24,170 - src.llm_utils - ERROR - RunPod 호출 실패: RunPod 요청 실패: 
+2026-02-13 13:51:24,170 - src.summary_pipeline - ERROR - LLM 호출 실패: RunPod 요청 실패: 
+INFO:     127.0.0.1:56169 - "POST /api/v1/llm/summarize HTTP/1.1" 200 OK
+2026-02-13 13:51:24,184 - src.api.routers.llm - INFO - 요약: 기본 시드만 사용
+2026-02-13 13:51:25,099 - src.llm_utils - ERROR - RunPod 비동기 호출 실패: Invalid non-printable ASCII character in URL, '\n' at position 25.
+2026-02-13 13:51:25,195 - src.llm_utils - ERROR - RunPod 비동기 호출 실패: Invalid non-printable ASCII character in URL, '\n' at position 25.
+2026-02-13 13:51:26,120 - src.llm_utils - ERROR - RunPod 비동기 호출 실패: Invalid non-printable ASCII character in URL, '\n' at position 25.
+2026-02-13 13:51:26,211 - src.llm_utils - ERROR - RunPod 비동기 호출 실패: Invalid non-printable ASCII character in URL, '\n' at position 25.
+2026-02-13 13:51:28,140 - src.llm_utils - ERROR - RunPod 비동기 호출 실패: Invalid non-printable ASCII character in URL, '\n' at position 25.
+2026-02-13 13:51:28,140 - src.summary_pipeline - ERROR - LLM 비동기 호출 실패: Invalid non-printable ASCII character in URL, '\n' at position 25.
+2026-02-13 13:51:28,227 - src.llm_utils - ERROR - RunPod 비동기 호출 실패: Invalid non-printable ASCII character in URL, '\n' at position 25.
+2026-02-13 13:51:28,227 - src.summary_pipeline - ERROR - LLM 비동기 호출 실패: Invalid non-printable ASCII character in URL, '\n' at position 25.
+INFO:     127.0.0.1:56180 - "POST /api/v1/llm/summarize/batch HTTP/1.1" 200 OK
+2026-02-13 13:51:28,235 - src.cache - WARNING - Redis가 없어 락을 건너뜁니다.
+2026-02-13 13:51:28,235 - src.comparison - INFO - comparison 진행: restaurant_id=4, restaurant_name=(이름없음)
+2026-02-13 13:51:28,334 - src.comparison - INFO - 전체 평균 ① 파일 시도 (Spark 직접 읽기): path=data/test_data_sample.json
+WARNING: Using incubator modules: jdk.incubator.vector
+/Users/js/miniconda3/envs/env_ai/lib/python3.11/site-packages/torch/cuda/__init__.py:63: FutureWarning: The pynvml package is deprecated. Please install nvidia-ml-py instead. If you did not install pynvml directly, please report this to the maintainers of the package that installed pynvml for you.
+  import pynvml  # type: ignore[import]
+Quantization is not supported for ArchType::neon. Fall back to non-quantized model.
+2026-02-13 13:51:44,274 - src.comparison - INFO - 전체 평균 ① 파일 사용 (Spark 직접 읽기): path=data/test_data_sample.json → service=0.6000, price=0.1818
+Quantization is not supported for ArchType::neon. Fall back to non-quantized model.
+2026-02-13 13:51:46,155 - src.comparison - INFO - 표본(단일 음식점) restaurant_id=4 service=0.6200, price=0.5000 | lift service=3%, price=175%
+2026-02-13 13:51:46,155 - src.comparison_pipeline - INFO - 표본 리뷰수 n=62 >= 50이므로 톤 '좋은 편' 사용
+2026-02-13 13:51:46,165 - src.llm_utils - ERROR - RunPod 비동기 호출 실패: Invalid non-printable ASCII character in URL, '\n' at position 25.
+2026-02-13 13:51:46,172 - src.llm_utils - ERROR - RunPod 비동기 호출 실패: Invalid non-printable ASCII character in URL, '\n' at position 25.
+2026-02-13 13:51:47,171 - src.llm_utils - ERROR - RunPod 비동기 호출 실패: Invalid non-printable ASCII character in URL, '\n' at position 25.
+2026-02-13 13:51:47,179 - src.llm_utils - ERROR - RunPod 비동기 호출 실패: Invalid non-printable ASCII character in URL, '\n' at position 25.
+2026-02-13 13:51:49,185 - src.llm_utils - ERROR - RunPod 비동기 호출 실패: Invalid non-printable ASCII character in URL, '\n' at position 25.
+2026-02-13 13:51:49,185 - src.llm_utils - WARNING - 비교 해석 LLM 실패: Invalid non-printable ASCII character in URL, '\n' at position 25.
+2026-02-13 13:51:49,193 - src.llm_utils - ERROR - RunPod 비동기 호출 실패: Invalid non-printable ASCII character in URL, '\n' at position 25.
+2026-02-13 13:51:49,193 - src.llm_utils - WARNING - 비교 해석 LLM 실패: Invalid non-printable ASCII character in URL, '\n' at position 25.
+INFO:     127.0.0.1:56186 - "POST /api/v1/llm/comparison HTTP/1.1" 200 OK
+2026-02-13 13:51:49,223 - src.comparison - INFO - comparison 진행: restaurant_id=4, restaurant_name=(이름없음)
+2026-02-13 13:51:49,223 - src.comparison - INFO - 전체 평균 ① 파일 시도 (Spark 직접 읽기): path=data/test_data_sample.json
+Quantization is not supported for ArchType::neon. Fall back to non-quantized model.
+2026-02-13 13:51:51,489 - src.comparison - INFO - 전체 평균 ① 파일 사용 (Spark 직접 읽기): path=data/test_data_sample.json → service=0.6000, price=0.1818
+Quantization is not supported for ArchType::neon. Fall back to non-quantized model.
+2026-02-13 13:51:53,345 - src.comparison - INFO - 표본(단일 음식점) restaurant_id=4 service=0.6200, price=0.5000 | lift service=3%, price=175%
+2026-02-13 13:51:53,345 - src.comparison_pipeline - INFO - 표본 리뷰수 n=62 >= 50이므로 톤 '좋은 편' 사용
+2026-02-13 13:51:53,345 - src.comparison - INFO - comparison 진행: restaurant_id=5, restaurant_name=(이름없음)
+2026-02-13 13:51:53,345 - src.comparison - INFO - 전체 평균 ① 파일 시도 (Spark 직접 읽기): path=data/test_data_sample.json
+Quantization is not supported for ArchType::neon. Fall back to non-quantized model.
+2026-02-13 13:51:55,387 - src.comparison - INFO - 전체 평균 ① 파일 사용 (Spark 직접 읽기): path=data/test_data_sample.json → service=0.6000, price=0.1818
+Quantization is not supported for ArchType::neon. Fall back to non-quantized model.
+2026-02-13 13:51:57,166 - src.comparison - INFO - 표본(단일 음식점) restaurant_id=5 service=0.6700, price=0.0700 | lift service=12%, price=-61%
+2026-02-13 13:51:57,166 - src.comparison_pipeline - INFO - 표본 리뷰수 20 <= n=20 < 50이므로 톤 '상대적으로 좋은 편' 사용
+2026-02-13 13:51:57,172 - src.llm_utils - ERROR - RunPod 비동기 호출 실패: Invalid non-printable ASCII character in URL, '\n' at position 25.
+2026-02-13 13:51:57,177 - src.llm_utils - ERROR - RunPod 비동기 호출 실패: Invalid non-printable ASCII character in URL, '\n' at position 25.
+2026-02-13 13:51:57,184 - src.llm_utils - ERROR - RunPod 비동기 호출 실패: Invalid non-printable ASCII character in URL, '\n' at position 25.
+2026-02-13 13:51:58,192 - src.llm_utils - ERROR - RunPod 비동기 호출 실패: Invalid non-printable ASCII character in URL, '\n' at position 25.
+2026-02-13 13:51:58,205 - src.llm_utils - ERROR - RunPod 비동기 호출 실패: Invalid non-printable ASCII character in URL, '\n' at position 25.
+2026-02-13 13:51:58,214 - src.llm_utils - ERROR - RunPod 비동기 호출 실패: Invalid non-printable ASCII character in URL, '\n' at position 25.
+2026-02-13 13:52:00,210 - src.llm_utils - ERROR - RunPod 비동기 호출 실패: Invalid non-printable ASCII character in URL, '\n' at position 25.
+2026-02-13 13:52:00,211 - src.llm_utils - WARNING - 비교 해석 LLM 실패: Invalid non-printable ASCII character in URL, '\n' at position 25.
+2026-02-13 13:52:00,224 - src.llm_utils - ERROR - RunPod 비동기 호출 실패: Invalid non-printable ASCII character in URL, '\n' at position 25.
+2026-02-13 13:52:00,224 - src.llm_utils - WARNING - 비교 해석 LLM 실패: Invalid non-printable ASCII character in URL, '\n' at position 25.
+2026-02-13 13:52:00,234 - src.llm_utils - ERROR - RunPod 비동기 호출 실패: Invalid non-printable ASCII character in URL, '\n' at position 25.
+2026-02-13 13:52:00,234 - src.llm_utils - WARNING - 비교 해석 LLM 실패: Invalid non-printable ASCII character in URL, '\n' at position 25.
+INFO:     127.0.0.1:56233 - "POST /api/v1/llm/comparison/batch HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56263 - "POST /api/v1/vector/search/similar HTTP/1.1" 200 OK
+
+---
+
+터미널 로그를 보면 **RunPod 호출 실패의 직접적인 원인**이 하나로 보입니다.
+
+---
+
+## 원인: `RUNPOD_VLLM_ENDPOINT_ID`에 줄바꿈이 들어감
+
+설정한 방식이 이렇게 되어 있습니다:
+
+```bash
+export RUNPOD_VLLM_ENDPOINT_ID="
+g09uegksn7h7ed"
+```
+
+따옴표가 두 줄에 걸쳐 있어서, **값 앞에 개행 문자(`\n`)가 포함**됩니다.  
+그래서 실제 값은 `"\ng09uegksn7h7ed"` 같은 형태가 되고, 이걸로 RunPod URL을 만들면 **URL 안에 제어 문자(개행)가 들어가**  
+`Invalid non-printable ASCII character in URL, '\n' at position 25` 에러가 납니다.
+
+---
+
+## 해결 방법
+
+환경 변수를 **한 줄로** 설정하세요.
+
+```bash
+export RUNPOD_VLLM_ENDPOINT_ID="g09uegksn7h7ed"
+```
+
+그다음 앱 다시 실행:
+
+```bash
+python app.py
+```
+
+---
+
+## 참고
+
+- **404** 로그는 RunPod 엔드포인트가 아직 없거나, ID/URL이 잘못된 경우에도 나올 수 있습니다. 위처럼 endpoint ID를 고친 뒤에도 404가 나오면 RunPod 대시보드에서 엔드포인트 ID와 상태를 확인하는 게 좋습니다.
+- 나중에 코드에서 `RUNPOD_VLLM_ENDPOINT_ID`를 읽을 때 `.strip()` 으로 앞뒤 공백/줄바꿈을 제거해 두면, 실수로 여러 줄로 export 해도 더 안전합니다.

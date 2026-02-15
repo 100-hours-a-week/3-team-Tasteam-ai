@@ -46,7 +46,7 @@
 [요청] → 락 획득 → SKIP 여부 → 시드 결정 → 카테고리별 검색 → LLM 요약 → 후처리 → 응답
 ```
 
-- **시드**: `DEFAULT_SERVICE_SEEDS`, `DEFAULT_PRICE_SEEDS`, `DEFAULT_FOOD_SEEDS` 만 사용 (파일/ASPECT_SEEDS_FILE 미사용).
+- **시드**: **음식점마다** 해당 리뷰에서 recall seed를 생성해 사용(실패 시 `DEFAULT_SERVICE_SEEDS` 등 기본 시드 폴백). 상세: `docs/spark/SUMMARY_RECALL_SEEDS.md`.
 - **검색**: 카테고리별로 `_retrieve_category_hits_accuracy_first` 호출 → 1차 Dense → 조건부 2차 Hybrid → 부족 시 넓은 쿼리 → 최근 리뷰 폴백.
 - **요약**: 검색된 리뷰를 `summarize_aspects_new`(또는 배치 시 `summarize_aspects_new_async`)로 한 번에 3카테고리 + overall_summary 생성.
 - **후처리**: evidence 인덱스 → 실제 객체 치환, price 게이트(가격 키워드 없을 때 고정 문구).

@@ -40,6 +40,8 @@ psutil>=7.0.0
 
 # Redis: 캐싱 시스템 (Phase 2)
 redis>=5.0.0
+# RQ: 작업 큐 (배치 분리, 재시도, DLQ)
+rq>=1.15.0
 
 # OpenAI: 빠른 검증용 LLM API
 openai>=1.0.0

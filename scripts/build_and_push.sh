@@ -25,13 +25,13 @@ if [ -z "$DOCKERHUB_USERNAME" ]; then
 fi
 
 case "$VARIANT" in
-  cuda)
-    DOCKERFILE="dockerfile"
-    TAG_SUFFIX=""
-    ;;
   cpu)
-    DOCKERFILE="Dockerfile.cpu"
+    DOCKERFILE="dockerfile"
     TAG_SUFFIX="-cpu"
+    ;;
+  cuda)
+    DOCKERFILE="Dockerfile.runpod-vllm"
+    TAG_SUFFIX=""
     ;;
   *)
     echo "❌ VARIANT는 cuda 또는 cpu 여야 합니다. (입력: $VARIANT)"

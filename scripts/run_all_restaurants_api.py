@@ -331,12 +331,32 @@ def main() -> None:
     parser.add_argument("--apis", type=str, nargs="+", default=["summary", "sentiment", "comparison"], help="호출할 API: summary sentiment comparison")
     parser.add_argument("--timeout", type=int, default=600, help="API 요청 타임아웃(초)")
     parser.add_argument("--no-upload", action="store_true", help="벡터 업로드 생략 (이미 업로드된 경우)")
+    parser.add_argument("--upload-only", action="store_true", help="벡터 업로드만 수행 후 종료 (ingestion 배치용)")
     parser.add_argument("--upload-timeout", type=int, default=DEFAULT_UPLOAD_TIMEOUT, help="벡터 업로드 요청 타임아웃(초)")
     args = parser.parse_args()
 
     if not args.input.is_file():
         print(f"오류: 입력 파일이 없습니다: {args.input}", file=sys.stderr)
         sys.exit(1)
+
+    if args.upload_only:
+        # ingestion 전용: 벡터 업로드만 수행
+        async def _upload_only():
+            reviews, restaurants = load_data(args.input)
+            if not reviews and not restaurants:
+                print("경고: reviews, restaurants 모두 비어 있습니다.", file=sys.stderr)
+                return
+            async with httpx.AsyncClient() as client:
+                upload_payload = {"reviews": reviews, "restaurants": restaurants or []}
+                print(f"벡터 업로드 중: 리뷰 {len(reviews)}개, 레스토랑 {len(restaurants or [])}개...")
+                ok, msg = await call_upload_async(client, args.base_url, upload_payload, timeout=float(args.upload_timeout))
+                if ok:
+                    print(msg)
+                else:
+                    print(f"실패: {msg}", file=sys.stderr)
+                    sys.exit(1)
+        asyncio.run(_upload_only())
+        return
 
     def _run_one_port(port: int) -> Tuple[int, Dict[str, Any]]:
         url = f"http://localhost:{port}"

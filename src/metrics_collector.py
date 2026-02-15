@@ -171,6 +171,7 @@ class MetricsCollector:
         batch_size: Optional[int] = None,
         cache_hit: Optional[bool] = None,
         model_version: Optional[str] = None,
+        prompt_version: Optional[str] = None,
         error_count: int = 0,
         warning_count: int = 0,
         additional_info: Optional[Dict[str, Any]] = None,
@@ -198,9 +199,11 @@ class MetricsCollector:
         request_id = str(uuid.uuid4())
         processing_time_ms = (time.time() - start_time) * 1000
 
-        # 모델 버전 기본값
+        # 모델/프롬프트 버전 기본값
         if model_version is None:
             model_version = Config.LLM_MODEL
+        if prompt_version is None:
+            prompt_version = getattr(Config, "PROMPT_VERSION", "v1")
         
         # status 자동 결정 (명시되지 않은 경우)
         if status is None:
@@ -250,6 +253,7 @@ class MetricsCollector:
                     batch_size=batch_size,
                     cache_hit=cache_hit,
                     model_version=model_version,
+                    prompt_version=prompt_version,
                     error_count=error_count,
                     warning_count=warning_count,
                 )

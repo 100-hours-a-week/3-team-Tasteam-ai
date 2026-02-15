@@ -26,10 +26,34 @@ from ...metrics_collector import MetricsCollector
 from ...config import Config
 from ...comparison import ComparisonPipeline
 from ...cache import acquire_lock
-from ...summary_pipeline import summarize_aspects_new, summarize_aspects_new_async
+from ...summary_pipeline import summarize_aspects_new, summarize_aspects_new_async, CATEGORY_EMPTY_DEFAULT
 from ...aspect_seeds import DEFAULT_SERVICE_SEEDS, DEFAULT_PRICE_SEEDS, DEFAULT_FOOD_SEEDS
+from ...comparison_pipeline import compute_recall_seeds_from_reviews, recall_seeds_to_seed_lists
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_SEED_LIST = [DEFAULT_SERVICE_SEEDS, DEFAULT_PRICE_SEEDS, DEFAULT_FOOD_SEEDS]
+DEFAULT_NAME_LIST = ["service", "price", "food"]
+
+
+def _get_seed_list_for_restaurant(vector_search: VectorSearch, restaurant_id: int) -> tuple:
+    """
+    해당 음식점 리뷰에서 recall seed를 생성해 시드 리스트 반환.
+    실패 또는 시드 부족 시 기본 시드 반환.
+    Returns:
+        (seed_list, name_list) — 각 카테고리별 구문 리스트와 이름.
+    """
+    try:
+        reviews = vector_search.get_restaurant_reviews(str(restaurant_id))
+        if not reviews:
+            return (DEFAULT_SEED_LIST, DEFAULT_NAME_LIST)
+        recall_seeds = compute_recall_seeds_from_reviews(reviews)
+        seed_list, name_list = recall_seeds_to_seed_lists(recall_seeds)
+        if seed_list and name_list and any(len(s) > 0 for s in seed_list):
+            return (seed_list, name_list)
+    except Exception as e:
+        logger.warning("요약용 recall seed 생성 실패(restaurant_id=%s), 기본 시드 사용: %s", restaurant_id, e)
+    return (DEFAULT_SEED_LIST, DEFAULT_NAME_LIST)
 router = APIRouter()
 
 _CATEGORY_KEYWORDS = {
@@ -103,7 +127,8 @@ def _retrieve_category_hits_accuracy_first(
     정확도 위주의 카테고리별 리뷰 회수:
     1) Dense-only로 후보 확보(큰 topK, min_score≈0)
     2) Dense 결과가 부족/불명확하면 Hybrid(RRF) 수행
-    3) 여전히 부족하면 카테고리만 넓은 쿼리 1회 재검색 → 그래도 부족하면 최근 리뷰 N개로 채움
+    3) 여전히 부족하면 카테고리만 넓은 쿼리 1회 재검색.
+    서치 결과가 부족하면 빈/적은 결과 그대로 반환 → summary_pipeline에서 카테고리별 디폴트 문구 사용.
     """
     k_min = min(3, max(1, final_limit))
     # 1차 Dense-only 후보: LLM에 넣을 final_limit보다 넓게
@@ -164,15 +189,7 @@ def _retrieve_category_hits_accuracy_first(
             merged = _dedup_hits_by_review_id(best_hits + retry_hits)
             best_hits = merged
 
-    # 4차: 그래도 부족하면 최근 리뷰로 채움(마지막 수단)
-    if len(best_hits) < k_min:
-        recent_payloads = vector_search.get_recent_restaurant_reviews(
-            restaurant_id=restaurant_id,
-            limit=max(final_limit, k_min),
-        )
-        recent_hits = _recent_payloads_to_hits(recent_payloads)
-        best_hits = _dedup_hits_by_review_id(best_hits + recent_hits)
-
+    # 서치 결과가 부족해도 최근 리뷰로 채우지 않음 → summary_pipeline에서 카테고리별 디폴트 문구 사용
     return best_hits
 
 
@@ -185,7 +202,12 @@ def _build_category_result(result: Dict[str, Any], restaurant_id: int, restauran
             cat_summary = result.get(cat, {}).get("summary", "")
             if cat_summary:
                 summaries.append(cat_summary)
-        overall_summary = " ".join(summaries) if summaries else "요약할 리뷰가 없어요."
+        # 카테고리 전부 디폴트 문구면 전체 요약은 한 문장만 (서비스. 가격. 음식 반복 방지)
+        _defaults = {CATEGORY_EMPTY_DEFAULT[c]["summary"] for c in ("service", "price", "food")}
+        if len(summaries) == 3 and set(summaries) == _defaults:
+            overall_summary = "아직 충분한 리뷰 정보가 쌓이지 않았어요."
+        else:
+            overall_summary = " ".join(summaries) if summaries else "아직 충분한 리뷰 정보가 쌓이지 않았어요."
     from ...models import CategorySummary
     categories_dict = {}
     for cat in ["service", "price", "food"]:
@@ -209,13 +231,14 @@ async def _process_one_restaurant_async(
     request: SummaryBatchRequest,
     vector_search: VectorSearch,
     llm_utils: LLMUtils,
-    seed_list: List[List[str]],
-    name_list: List[str],
     search_sem: asyncio.Semaphore,
     llm_sem: asyncio.Semaphore,
 ) -> Dict[str, Any]:
-    """한 레스토랑: search_async에 따라 aspect 3개 병렬/순차 → 요약."""
+    """한 레스토랑: 해당 음식점 recall seed로 검색 후 요약."""
     restaurant_id = restaurant_data.get("restaurant_id")
+    seed_list, name_list = await asyncio.to_thread(
+        _get_seed_list_for_restaurant, vector_search, restaurant_id
+    )
 
     async def do_one_search(seeds: List[str], name: str) -> tuple:
         query_seeds = seeds[:10] if len(seeds) > 10 else seeds
@@ -282,16 +305,14 @@ async def _batch_summarize_async(
     request: SummaryBatchRequest,
     vector_search: VectorSearch,
     llm_utils: LLMUtils,
-    seed_list: List[List[str]],
-    name_list: List[str],
 ) -> List[Dict[str, Any]]:
-    """배치 요약: search_async=aspect 병렬, restaurant_async=음식점 간 병렬."""
+    """배치 요약: 음식점마다 recall seed 생성 후 검색·요약 (search_async/restaurant_async에 따라 병렬)."""
     search_sem = asyncio.Semaphore(Config.BATCH_SEARCH_CONCURRENCY)
     llm_sem = asyncio.Semaphore(Config.BATCH_LLM_CONCURRENCY)
 
     async def one(rd: Dict[str, Any]) -> Dict[str, Any]:
         return await _process_one_restaurant_async(
-            rd, request, vector_search, llm_utils, seed_list, name_list, search_sem, llm_sem
+            rd, request, vector_search, llm_utils, search_sem, llm_sem
         )
 
     if Config.SUMMARY_RESTAURANT_ASYNC:
@@ -400,10 +421,11 @@ async def summarize_reviews(
                     )
             
             # 새로운 파이프라인: 하이브리드 검색 + Aspect 기반 카테고리별 요약
-        # 1. 기본 시드만 사용 (DEFAULT_*_SEEDS, 파일/ASPECT_SEEDS_FILE 미사용)
-        seed_list = [DEFAULT_SERVICE_SEEDS, DEFAULT_PRICE_SEEDS, DEFAULT_FOOD_SEEDS]
-        name_list = ["service", "price", "food"]
-        logger.info("요약: 기본 시드만 사용")
+        # 1. 해당 음식점 리뷰에서 recall seed 생성 (실패 시 기본 시드)
+        seed_list, name_list = await asyncio.to_thread(
+            _get_seed_list_for_restaurant, vector_search, request.restaurant_id
+        )
+        logger.info("요약: recall seed 사용(restaurant_id=%s)", request.restaurant_id)
         
         # 2. 카테고리별 하이브리드 검색
         hits_dict = {}
@@ -465,7 +487,11 @@ async def summarize_reviews(
                 cat_summary = result.get(cat, {}).get("summary", "")
                 if cat_summary:
                     summaries.append(cat_summary)
-            overall_summary = " ".join(summaries) if summaries else "요약할 리뷰가 없어요."
+            _defaults = {CATEGORY_EMPTY_DEFAULT[c]["summary"] for c in ("service", "price", "food")}
+            if len(summaries) == 3 and set(summaries) == _defaults:
+                overall_summary = "아직 충분한 리뷰 정보가 쌓이지 않았어요."
+            else:
+                overall_summary = " ".join(summaries) if summaries else "아직 충분한 리뷰 정보가 쌓이지 않았어요."
         
         # categories를 CategorySummary 모델로 변환
         from ...models import CategorySummary
@@ -756,12 +782,8 @@ async def summarize_reviews_batch(
     """
     start_time = time.time()
     try:
-        seed_list = [DEFAULT_SERVICE_SEEDS, DEFAULT_PRICE_SEEDS, DEFAULT_FOOD_SEEDS]
-        name_list = ["service", "price", "food"]
-        logger.info("요약: 기본 시드만 사용")
-
         if Config.SUMMARY_SEARCH_ASYNC or Config.SUMMARY_RESTAURANT_ASYNC:
-            results = await _batch_summarize_async(request, vector_search, llm_utils, seed_list, name_list)
+            results = await _batch_summarize_async(request, vector_search, llm_utils)
             # TTFUR = t1 - t0 (요청 수신 시각 t0 → 응답 반환 직전 t1)
             elapsed_ms = (time.time() - start_time) * 1000
             metrics.record_llm_ttft(analysis_type="summary", ttft_ms=elapsed_ms)
@@ -779,7 +801,9 @@ async def summarize_reviews_batch(
         results = []
         for restaurant_data in request.restaurants:
             restaurant_id = restaurant_data.get("restaurant_id")
-            
+            seed_list, name_list = await asyncio.to_thread(
+                _get_seed_list_for_restaurant, vector_search, restaurant_id
+            )
             # 카테고리별 하이브리드 검색
             hits_dict = {}
             hits_data_dict = {}
