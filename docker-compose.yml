@@ -21,8 +21,11 @@ services:
       REDIS_HOST: "redis"
       REDIS_PORT: "6379"
       REDIS_DB: "0"
+      SPARK_SERVICE_URL: "http://spark-service:8002"
     depends_on:
       redis:
+        condition: service_healthy
+      spark-service:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8001/ready"]
@@ -36,6 +39,44 @@ services:
       context: .
       dockerfile: Dockerfile.metrics
     ports: ["1041:1041"]
+
+  # RQ 워커 (BATCH_USE_QUEUE=true 시 배치 작업 소비, 실패 시 DLQ)
+  batch-worker:
+    build:
+      context: .
+      dockerfile: dockerfile
+    env_file: [.env]
+    environment:
+      REDIS_HOST: "redis"
+      REDIS_PORT: "6379"
+      REDIS_DB: "0"
+      SPARK_SERVICE_URL: "http://spark-service:8002"
+    command: ["python", "scripts/rq_worker.py"]
+    depends_on:
+      redis:
+        condition: service_healthy
+      spark-service:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Spark 마이크로서비스 (전체 평균·recall seeds 계산). new_async·batch-worker는 SPARK_SERVICE_URL로 여기 호출.
+  spark-service:
+    build:
+      context: .
+      dockerfile: dockerfile
+    env_file: [.env]
+    environment:
+      SPARK_SERVICE_PORT: "8002"
+    ports:
+      - "8002:8002"
+    command: ["python", "scripts/spark_service.py"]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    restart: unless-stopped
 
   node-exporter:
     image: prom/node-exporter:v1.7.0

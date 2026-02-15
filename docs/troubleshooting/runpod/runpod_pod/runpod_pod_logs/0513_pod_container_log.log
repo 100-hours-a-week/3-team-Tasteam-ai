@@ -1,0 +1,374 @@
+2026-02-14T08:13:58.637421017Z [1;36m(APIServer pid=19)[0;0m INFO:     59.6.138.20:58470 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+2026-02-14T08:13:59.380687318Z [1;36m(APIServer pid=19)[0;0m INFO 02-14 00:13:59 [loggers.py:127] Engine 000: Avg prompt throughput: 148.5 tokens/s, Avg generation throughput: 22.2 tokens/s, Running: 0 reqs, Waiting: 0 reqs, GPU KV cache usage: 0.0%, Prefix cache hit rate: 51.3%
+2026-02-14T08:14:02.581631202Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:02 [serving_chat.py:263] Error in preprocessing prompt inputs
+2026-02-14T08:14:02.581649697Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:02 [serving_chat.py:263] Traceback (most recent call last):
+2026-02-14T08:14:02.581652031Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:02 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_chat.py", line 239, in create_chat_completion
+2026-02-14T08:14:02.581653544Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:02 [serving_chat.py:263]     ) = await self._preprocess_chat(
+2026-02-14T08:14:02.581655107Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:02 [serving_chat.py:263]         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-02-14T08:14:02.581656289Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:02 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 822, in _preprocess_chat
+2026-02-14T08:14:02.581657562Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:02 [serving_chat.py:263]     prompt_inputs = await self._tokenize_prompt_input_async(
+2026-02-14T08:14:02.581659255Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:02 [serving_chat.py:263]                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-02-14T08:14:02.581660477Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:02 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 702, in _tokenize_prompt_input_async
+2026-02-14T08:14:02.581662020Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:02 [serving_chat.py:263]     async for result in self._tokenize_prompt_inputs_async(
+2026-02-14T08:14:02.581663272Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:02 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 723, in _tokenize_prompt_inputs_async
+2026-02-14T08:14:02.581664745Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:02 [serving_chat.py:263]     yield await self._normalize_prompt_text_to_input(
+2026-02-14T08:14:02.581665907Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:02 [serving_chat.py:263]           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-02-14T08:14:02.581667490Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:02 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 592, in _normalize_prompt_text_to_input
+2026-02-14T08:14:02.581668692Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:02 [serving_chat.py:263]     return self._validate_input(request, input_ids, input_text)
+2026-02-14T08:14:02.581669915Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:02 [serving_chat.py:263]            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-02-14T08:14:02.581671017Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:02 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 683, in _validate_input
+2026-02-14T08:14:02.581672189Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:02 [serving_chat.py:263]     raise ValueError(
+2026-02-14T08:14:02.581683821Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:02 [serving_chat.py:263] ValueError: 'max_tokens' or 'max_completion_tokens' is too large: 2048. This model's maximum context length is 4096 tokens and your request has 2321 input tokens (2048 > 4096 - 2321).
+2026-02-14T08:14:02.581737872Z [1;36m(APIServer pid=19)[0;0m INFO:     59.6.138.20:58474 - "POST /v1/chat/completions HTTP/1.1" 400 Bad Request
+2026-02-14T08:14:02.777086823Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:02 [serving_chat.py:263] Error in preprocessing prompt inputs
+2026-02-14T08:14:02.777093696Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:02 [serving_chat.py:263] Traceback (most recent call last):
+2026-02-14T08:14:02.777095119Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:02 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_chat.py", line 239, in create_chat_completion
+2026-02-14T08:14:02.777096291Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:02 [serving_chat.py:263]     ) = await self._preprocess_chat(
+2026-02-14T08:14:02.777097483Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:02 [serving_chat.py:263]         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-02-14T08:14:02.777098685Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:02 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 822, in _preprocess_chat
+2026-02-14T08:14:02.777100268Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:02 [serving_chat.py:263]     prompt_inputs = await self._tokenize_prompt_input_async(
+2026-02-14T08:14:02.777101410Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:02 [serving_chat.py:263]                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-02-14T08:14:02.777102512Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:02 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 702, in _tokenize_prompt_input_async
+2026-02-14T08:14:02.777103715Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:02 [serving_chat.py:263]     async for result in self._tokenize_prompt_inputs_async(
+2026-02-14T08:14:02.777104817Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:02 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 723, in _tokenize_prompt_inputs_async
+2026-02-14T08:14:02.777105909Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:02 [serving_chat.py:263]     yield await self._normalize_prompt_text_to_input(
+2026-02-14T08:14:02.777107011Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:02 [serving_chat.py:263]           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-02-14T08:14:02.777110297Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:02 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 592, in _normalize_prompt_text_to_input
+2026-02-14T08:14:02.777111539Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:02 [serving_chat.py:263]     return self._validate_input(request, input_ids, input_text)
+2026-02-14T08:14:02.777112721Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:02 [serving_chat.py:263]            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-02-14T08:14:02.777113814Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:02 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 683, in _validate_input
+2026-02-14T08:14:02.777115276Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:02 [serving_chat.py:263]     raise ValueError(
+2026-02-14T08:14:02.777116428Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:02 [serving_chat.py:263] ValueError: 'max_tokens' or 'max_completion_tokens' is too large: 2048. This model's maximum context length is 4096 tokens and your request has 3076 input tokens (2048 > 4096 - 3076).
+2026-02-14T08:14:02.777221535Z [1;36m(APIServer pid=19)[0;0m INFO:     59.6.138.20:58475 - "POST /v1/chat/completions HTTP/1.1" 400 Bad Request
+2026-02-14T08:14:03.752174393Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:03 [serving_chat.py:263] Error in preprocessing prompt inputs
+2026-02-14T08:14:03.752190643Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:03 [serving_chat.py:263] Traceback (most recent call last):
+2026-02-14T08:14:03.752192156Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:03 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_chat.py", line 239, in create_chat_completion
+2026-02-14T08:14:03.752193649Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:03 [serving_chat.py:263]     ) = await self._preprocess_chat(
+2026-02-14T08:14:03.752194821Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:03 [serving_chat.py:263]         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-02-14T08:14:03.752196024Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:03 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 822, in _preprocess_chat
+2026-02-14T08:14:03.752203978Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:03 [serving_chat.py:263]     prompt_inputs = await self._tokenize_prompt_input_async(
+2026-02-14T08:14:03.752205521Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:03 [serving_chat.py:263]                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-02-14T08:14:03.752206794Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:03 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 702, in _tokenize_prompt_input_async
+2026-02-14T08:14:03.752208136Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:03 [serving_chat.py:263]     async for result in self._tokenize_prompt_inputs_async(
+2026-02-14T08:14:03.752209238Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:03 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 723, in _tokenize_prompt_inputs_async
+2026-02-14T08:14:03.752210340Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:03 [serving_chat.py:263]     yield await self._normalize_prompt_text_to_input(
+2026-02-14T08:14:03.752211402Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:03 [serving_chat.py:263]           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-02-14T08:14:03.752213075Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:03 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 592, in _normalize_prompt_text_to_input
+2026-02-14T08:14:03.752214207Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:03 [serving_chat.py:263]     return self._validate_input(request, input_ids, input_text)
+2026-02-14T08:14:03.752215320Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:03 [serving_chat.py:263]            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-02-14T08:14:03.752216422Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:03 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 683, in _validate_input
+2026-02-14T08:14:03.752217574Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:03 [serving_chat.py:263]     raise ValueError(
+2026-02-14T08:14:03.752218756Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:03 [serving_chat.py:263] ValueError: 'max_tokens' or 'max_completion_tokens' is too large: 2048. This model's maximum context length is 4096 tokens and your request has 3205 input tokens (2048 > 4096 - 3205).
+2026-02-14T08:14:03.752259652Z [1;36m(APIServer pid=19)[0;0m INFO:     59.6.138.20:58476 - "POST /v1/chat/completions HTTP/1.1" 400 Bad Request
+2026-02-14T08:14:03.876706556Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:03 [serving_chat.py:263] Error in preprocessing prompt inputs
+2026-02-14T08:14:03.876717126Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:03 [serving_chat.py:263] Traceback (most recent call last):
+2026-02-14T08:14:03.876719972Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:03 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_chat.py", line 239, in create_chat_completion
+2026-02-14T08:14:03.876728397Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:03 [serving_chat.py:263]     ) = await self._preprocess_chat(
+2026-02-14T08:14:03.876730521Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:03 [serving_chat.py:263]         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-02-14T08:14:03.876732725Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:03 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 822, in _preprocess_chat
+2026-02-14T08:14:03.876734769Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:03 [serving_chat.py:263]     prompt_inputs = await self._tokenize_prompt_input_async(
+2026-02-14T08:14:03.876736703Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:03 [serving_chat.py:263]                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-02-14T08:14:03.876738596Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:03 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 702, in _tokenize_prompt_input_async
+2026-02-14T08:14:03.876740670Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:03 [serving_chat.py:263]     async for result in self._tokenize_prompt_inputs_async(
+2026-02-14T08:14:03.876742614Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:03 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 723, in _tokenize_prompt_inputs_async
+2026-02-14T08:14:03.876744517Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:03 [serving_chat.py:263]     yield await self._normalize_prompt_text_to_input(
+2026-02-14T08:14:03.876746441Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:03 [serving_chat.py:263]           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-02-14T08:14:03.876748896Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:03 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 592, in _normalize_prompt_text_to_input
+2026-02-14T08:14:03.876750839Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:03 [serving_chat.py:263]     return self._validate_input(request, input_ids, input_text)
+2026-02-14T08:14:03.876752803Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:03 [serving_chat.py:263]            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-02-14T08:14:03.876754736Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:03 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 683, in _validate_input
+2026-02-14T08:14:03.876756700Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:03 [serving_chat.py:263]     raise ValueError(
+2026-02-14T08:14:03.876758694Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:03 [serving_chat.py:263] ValueError: 'max_tokens' or 'max_completion_tokens' is too large: 2048. This model's maximum context length is 4096 tokens and your request has 2321 input tokens (2048 > 4096 - 2321).
+2026-02-14T08:14:03.876761469Z [1;36m(APIServer pid=19)[0;0m INFO:     59.6.138.20:58474 - "POST /v1/chat/completions HTTP/1.1" 400 Bad Request
+2026-02-14T08:14:04.071502695Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:04 [serving_chat.py:263] Error in preprocessing prompt inputs
+2026-02-14T08:14:04.071512824Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:04 [serving_chat.py:263] Traceback (most recent call last):
+2026-02-14T08:14:04.071515519Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:04 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_chat.py", line 239, in create_chat_completion
+2026-02-14T08:14:04.071517703Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:04 [serving_chat.py:263]     ) = await self._preprocess_chat(
+2026-02-14T08:14:04.071519767Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:04 [serving_chat.py:263]         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-02-14T08:14:04.071521670Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:04 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 822, in _preprocess_chat
+2026-02-14T08:14:04.071529835Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:04 [serving_chat.py:263]     prompt_inputs = await self._tokenize_prompt_input_async(
+2026-02-14T08:14:04.071531959Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:04 [serving_chat.py:263]                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-02-14T08:14:04.071533943Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:04 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 702, in _tokenize_prompt_input_async
+2026-02-14T08:14:04.071536237Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:04 [serving_chat.py:263]     async for result in self._tokenize_prompt_inputs_async(
+2026-02-14T08:14:04.071538251Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:04 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 723, in _tokenize_prompt_inputs_async
+2026-02-14T08:14:04.071540195Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:04 [serving_chat.py:263]     yield await self._normalize_prompt_text_to_input(
+2026-02-14T08:14:04.071542108Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:04 [serving_chat.py:263]           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-02-14T08:14:04.071544453Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:04 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 592, in _normalize_prompt_text_to_input
+2026-02-14T08:14:04.071546416Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:04 [serving_chat.py:263]     return self._validate_input(request, input_ids, input_text)
+2026-02-14T08:14:04.071548360Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:04 [serving_chat.py:263]            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-02-14T08:14:04.071550294Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:04 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 683, in _validate_input
+2026-02-14T08:14:04.071552197Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:04 [serving_chat.py:263]     raise ValueError(
+2026-02-14T08:14:04.071554211Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:04 [serving_chat.py:263] ValueError: 'max_tokens' or 'max_completion_tokens' is too large: 2048. This model's maximum context length is 4096 tokens and your request has 3076 input tokens (2048 > 4096 - 3076).
+2026-02-14T08:14:04.071610326Z [1;36m(APIServer pid=19)[0;0m INFO:     59.6.138.20:58475 - "POST /v1/chat/completions HTTP/1.1" 400 Bad Request
+2026-02-14T08:14:05.043698901Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:05 [serving_chat.py:263] Error in preprocessing prompt inputs
+2026-02-14T08:14:05.043715712Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:05 [serving_chat.py:263] Traceback (most recent call last):
+2026-02-14T08:14:05.043718467Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:05 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_chat.py", line 239, in create_chat_completion
+2026-02-14T08:14:05.043720681Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:05 [serving_chat.py:263]     ) = await self._preprocess_chat(
+2026-02-14T08:14:05.043722675Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:05 [serving_chat.py:263]         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-02-14T08:14:05.043724599Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:05 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 822, in _preprocess_chat
+2026-02-14T08:14:05.043726663Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:05 [serving_chat.py:263]     prompt_inputs = await self._tokenize_prompt_input_async(
+2026-02-14T08:14:05.043728867Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:05 [serving_chat.py:263]                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-02-14T08:14:05.043736611Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:05 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 702, in _tokenize_prompt_input_async
+2026-02-14T08:14:05.043738915Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:05 [serving_chat.py:263]     async for result in self._tokenize_prompt_inputs_async(
+2026-02-14T08:14:05.043740899Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:05 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 723, in _tokenize_prompt_inputs_async
+2026-02-14T08:14:05.043742843Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:05 [serving_chat.py:263]     yield await self._normalize_prompt_text_to_input(
+2026-02-14T08:14:05.043744756Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:05 [serving_chat.py:263]           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-02-14T08:14:05.043747271Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:05 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 592, in _normalize_prompt_text_to_input
+2026-02-14T08:14:05.043749315Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:05 [serving_chat.py:263]     return self._validate_input(request, input_ids, input_text)
+2026-02-14T08:14:05.043751299Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:05 [serving_chat.py:263]            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-02-14T08:14:05.043753202Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:05 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 683, in _validate_input
+2026-02-14T08:14:05.043757380Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:05 [serving_chat.py:263]     raise ValueError(
+2026-02-14T08:14:05.043759474Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:05 [serving_chat.py:263] ValueError: 'max_tokens' or 'max_completion_tokens' is too large: 2048. This model's maximum context length is 4096 tokens and your request has 3205 input tokens (2048 > 4096 - 3205).
+2026-02-14T08:14:05.043761598Z [1;36m(APIServer pid=19)[0;0m INFO:     59.6.138.20:58476 - "POST /v1/chat/completions HTTP/1.1" 400 Bad Request
+2026-02-14T08:14:05.855942181Z [1;36m(APIServer pid=19)[0;0m INFO:     59.6.138.20:58472 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+2026-02-14T08:14:06.174589520Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:06 [serving_chat.py:263] Error in preprocessing prompt inputs
+2026-02-14T08:14:06.174599869Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:06 [serving_chat.py:263] Traceback (most recent call last):
+2026-02-14T08:14:06.174601372Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:06 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_chat.py", line 239, in create_chat_completion
+2026-02-14T08:14:06.174603055Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:06 [serving_chat.py:263]     ) = await self._preprocess_chat(
+2026-02-14T08:14:06.174604267Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:06 [serving_chat.py:263]         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-02-14T08:14:06.174605450Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:06 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 822, in _preprocess_chat
+2026-02-14T08:14:06.174606772Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:06 [serving_chat.py:263]     prompt_inputs = await self._tokenize_prompt_input_async(
+2026-02-14T08:14:06.174608545Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:06 [serving_chat.py:263]                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-02-14T08:14:06.174609728Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:06 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 702, in _tokenize_prompt_input_async
+2026-02-14T08:14:06.174611120Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:06 [serving_chat.py:263]     async for result in self._tokenize_prompt_inputs_async(
+2026-02-14T08:14:06.174616931Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:06 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 723, in _tokenize_prompt_inputs_async
+2026-02-14T08:14:06.174618123Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:06 [serving_chat.py:263]     yield await self._normalize_prompt_text_to_input(
+2026-02-14T08:14:06.174619285Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:06 [serving_chat.py:263]           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-02-14T08:14:06.174620868Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:06 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 592, in _normalize_prompt_text_to_input
+2026-02-14T08:14:06.174622101Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:06 [serving_chat.py:263]     return self._validate_input(request, input_ids, input_text)
+2026-02-14T08:14:06.174623303Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:06 [serving_chat.py:263]            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-02-14T08:14:06.174624475Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:06 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 683, in _validate_input
+2026-02-14T08:14:06.174625667Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:06 [serving_chat.py:263]     raise ValueError(
+2026-02-14T08:14:06.174626900Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:06 [serving_chat.py:263] ValueError: 'max_tokens' or 'max_completion_tokens' is too large: 2048. This model's maximum context length is 4096 tokens and your request has 2321 input tokens (2048 > 4096 - 2321).
+2026-02-14T08:14:06.174705416Z [1;36m(APIServer pid=19)[0;0m INFO:     59.6.138.20:58474 - "POST /v1/chat/completions HTTP/1.1" 400 Bad Request
+2026-02-14T08:14:06.373246324Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:06 [serving_chat.py:263] Error in preprocessing prompt inputs
+2026-02-14T08:14:06.373254860Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:06 [serving_chat.py:263] Traceback (most recent call last):
+2026-02-14T08:14:06.373256573Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:06 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_chat.py", line 239, in create_chat_completion
+2026-02-14T08:14:06.373258146Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:06 [serving_chat.py:263]     ) = await self._preprocess_chat(
+2026-02-14T08:14:06.373259579Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:06 [serving_chat.py:263]         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-02-14T08:14:06.373260761Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:06 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 822, in _preprocess_chat
+2026-02-14T08:14:06.373261923Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:06 [serving_chat.py:263]     prompt_inputs = await self._tokenize_prompt_input_async(
+2026-02-14T08:14:06.373263466Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:06 [serving_chat.py:263]                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-02-14T08:14:06.373264628Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:06 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 702, in _tokenize_prompt_input_async
+2026-02-14T08:14:06.373266381Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:06 [serving_chat.py:263]     async for result in self._tokenize_prompt_inputs_async(
+2026-02-14T08:14:06.373267864Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:06 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 723, in _tokenize_prompt_inputs_async
+2026-02-14T08:14:06.373268996Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:06 [serving_chat.py:263]     yield await self._normalize_prompt_text_to_input(
+2026-02-14T08:14:06.373273595Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:06 [serving_chat.py:263]           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-02-14T08:14:06.373275188Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:06 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 592, in _normalize_prompt_text_to_input
+2026-02-14T08:14:06.373276350Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:06 [serving_chat.py:263]     return self._validate_input(request, input_ids, input_text)
+2026-02-14T08:14:06.373277502Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:06 [serving_chat.py:263]            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-02-14T08:14:06.373278634Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:06 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 683, in _validate_input
+2026-02-14T08:14:06.373279866Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:06 [serving_chat.py:263]     raise ValueError(
+2026-02-14T08:14:06.373281069Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:06 [serving_chat.py:263] ValueError: 'max_tokens' or 'max_completion_tokens' is too large: 2048. This model's maximum context length is 4096 tokens and your request has 3076 input tokens (2048 > 4096 - 3076).
+2026-02-14T08:14:06.373296538Z [1;36m(APIServer pid=19)[0;0m INFO:     59.6.138.20:58475 - "POST /v1/chat/completions HTTP/1.1" 400 Bad Request
+2026-02-14T08:14:06.419279250Z [1;36m(APIServer pid=19)[0;0m INFO:     59.6.138.20:58473 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+2026-02-14T08:14:07.337078998Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:07 [serving_chat.py:263] Error in preprocessing prompt inputs
+2026-02-14T08:14:07.337092784Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:07 [serving_chat.py:263] Traceback (most recent call last):
+2026-02-14T08:14:07.337094417Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:07 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_chat.py", line 239, in create_chat_completion
+2026-02-14T08:14:07.337095980Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:07 [serving_chat.py:263]     ) = await self._preprocess_chat(
+2026-02-14T08:14:07.337097413Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:07 [serving_chat.py:263]         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-02-14T08:14:07.337100398Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:07 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 822, in _preprocess_chat
+2026-02-14T08:14:07.337101671Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:07 [serving_chat.py:263]     prompt_inputs = await self._tokenize_prompt_input_async(
+2026-02-14T08:14:07.337103574Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:07 [serving_chat.py:263]                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-02-14T08:14:07.337104686Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:07 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 702, in _tokenize_prompt_input_async
+2026-02-14T08:14:07.337107201Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:07 [serving_chat.py:263]     async for result in self._tokenize_prompt_inputs_async(
+2026-02-14T08:14:07.337108433Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:07 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 723, in _tokenize_prompt_inputs_async
+2026-02-14T08:14:07.337109666Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:07 [serving_chat.py:263]     yield await self._normalize_prompt_text_to_input(
+2026-02-14T08:14:07.337110758Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:07 [serving_chat.py:263]           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-02-14T08:14:07.337116378Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:07 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 592, in _normalize_prompt_text_to_input
+2026-02-14T08:14:07.337123401Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:07 [serving_chat.py:263]     return self._validate_input(request, input_ids, input_text)
+2026-02-14T08:14:07.337124624Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:07 [serving_chat.py:263]            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-02-14T08:14:07.337125796Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:07 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 683, in _validate_input
+2026-02-14T08:14:07.337127008Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:07 [serving_chat.py:263]     raise ValueError(
+2026-02-14T08:14:07.337128200Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:07 [serving_chat.py:263] ValueError: 'max_tokens' or 'max_completion_tokens' is too large: 2048. This model's maximum context length is 4096 tokens and your request has 3205 input tokens (2048 > 4096 - 3205).
+2026-02-14T08:14:07.337129623Z [1;36m(APIServer pid=19)[0;0m INFO:     59.6.138.20:58476 - "POST /v1/chat/completions HTTP/1.1" 400 Bad Request
+2026-02-14T08:14:08.649966183Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:08 [serving_chat.py:263] Error in preprocessing prompt inputs
+2026-02-14T08:14:08.649976662Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:08 [serving_chat.py:263] Traceback (most recent call last):
+2026-02-14T08:14:08.649978275Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:08 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_chat.py", line 239, in create_chat_completion
+2026-02-14T08:14:08.649979788Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:08 [serving_chat.py:263]     ) = await self._preprocess_chat(
+2026-02-14T08:14:08.649981271Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:08 [serving_chat.py:263]         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-02-14T08:14:08.649982373Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:08 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 822, in _preprocess_chat
+2026-02-14T08:14:08.649983555Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:08 [serving_chat.py:263]     prompt_inputs = await self._tokenize_prompt_input_async(
+2026-02-14T08:14:08.649985228Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:08 [serving_chat.py:263]                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-02-14T08:14:08.649986310Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:08 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 702, in _tokenize_prompt_input_async
+2026-02-14T08:14:08.649987743Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:08 [serving_chat.py:263]     async for result in self._tokenize_prompt_inputs_async(
+2026-02-14T08:14:08.649988835Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:08 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 723, in _tokenize_prompt_inputs_async
+2026-02-14T08:14:08.649989917Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:08 [serving_chat.py:263]     yield await self._normalize_prompt_text_to_input(
+2026-02-14T08:14:08.649991019Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:08 [serving_chat.py:263]           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-02-14T08:14:08.649992382Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:08 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 592, in _normalize_prompt_text_to_input
+2026-02-14T08:14:08.649993494Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:08 [serving_chat.py:263]     return self._validate_input(request, input_ids, input_text)
+2026-02-14T08:14:08.649994576Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:08 [serving_chat.py:263]            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-02-14T08:14:08.649999936Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:08 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 683, in _validate_input
+2026-02-14T08:14:08.650001178Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:08 [serving_chat.py:263]     raise ValueError(
+2026-02-14T08:14:08.650002391Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:08 [serving_chat.py:263] ValueError: 'max_tokens' or 'max_completion_tokens' is too large: 1500. This model's maximum context length is 4096 tokens and your request has 2878 input tokens (1500 > 4096 - 2878).
+2026-02-14T08:14:08.650015766Z [1;36m(APIServer pid=19)[0;0m INFO:     59.6.138.20:58478 - "POST /v1/chat/completions HTTP/1.1" 400 Bad Request
+2026-02-14T08:14:09.380310002Z [1;36m(APIServer pid=19)[0;0m INFO 02-14 00:14:09 [loggers.py:127] Engine 000: Avg prompt throughput: 352.9 tokens/s, Avg generation throughput: 46.5 tokens/s, Running: 0 reqs, Waiting: 0 reqs, GPU KV cache usage: 0.0%, Prefix cache hit rate: 65.5%
+2026-02-14T08:14:09.965058589Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:09 [serving_chat.py:263] Error in preprocessing prompt inputs
+2026-02-14T08:14:09.965065663Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:09 [serving_chat.py:263] Traceback (most recent call last):
+2026-02-14T08:14:09.965067356Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:09 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_chat.py", line 239, in create_chat_completion
+2026-02-14T08:14:09.965069129Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:09 [serving_chat.py:263]     ) = await self._preprocess_chat(
+2026-02-14T08:14:09.965070421Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:09 [serving_chat.py:263]         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-02-14T08:14:09.965071664Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:09 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 822, in _preprocess_chat
+2026-02-14T08:14:09.965072836Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:09 [serving_chat.py:263]     prompt_inputs = await self._tokenize_prompt_input_async(
+2026-02-14T08:14:09.965074299Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:09 [serving_chat.py:263]                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-02-14T08:14:09.965075461Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:09 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 702, in _tokenize_prompt_input_async
+2026-02-14T08:14:09.965077004Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:09 [serving_chat.py:263]     async for result in self._tokenize_prompt_inputs_async(
+2026-02-14T08:14:09.965078116Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:09 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 723, in _tokenize_prompt_inputs_async
+2026-02-14T08:14:09.965079258Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:09 [serving_chat.py:263]     yield await self._normalize_prompt_text_to_input(
+2026-02-14T08:14:09.965080360Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:09 [serving_chat.py:263]           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-02-14T08:14:09.965081723Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:09 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 592, in _normalize_prompt_text_to_input
+2026-02-14T08:14:09.965082845Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:09 [serving_chat.py:263]     return self._validate_input(request, input_ids, input_text)
+2026-02-14T08:14:09.965083937Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:09 [serving_chat.py:263]            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-02-14T08:14:09.965085019Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:09 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 683, in _validate_input
+2026-02-14T08:14:09.965090098Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:09 [serving_chat.py:263]     raise ValueError(
+2026-02-14T08:14:09.965091361Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:09 [serving_chat.py:263] ValueError: 'max_tokens' or 'max_completion_tokens' is too large: 1500. This model's maximum context length is 4096 tokens and your request has 2878 input tokens (1500 > 4096 - 2878).
+2026-02-14T08:14:09.965117289Z [1;36m(APIServer pid=19)[0;0m INFO:     59.6.138.20:58478 - "POST /v1/chat/completions HTTP/1.1" 400 Bad Request
+2026-02-14T08:14:12.300738977Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:12 [serving_chat.py:263] Error in preprocessing prompt inputs
+2026-02-14T08:14:12.300757121Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:12 [serving_chat.py:263] Traceback (most recent call last):
+2026-02-14T08:14:12.300760167Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:12 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_chat.py", line 239, in create_chat_completion
+2026-02-14T08:14:12.300762721Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:12 [serving_chat.py:263]     ) = await self._preprocess_chat(
+2026-02-14T08:14:12.300764695Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:12 [serving_chat.py:263]         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-02-14T08:14:12.300766609Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:12 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 822, in _preprocess_chat
+2026-02-14T08:14:12.300768733Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:12 [serving_chat.py:263]     prompt_inputs = await self._tokenize_prompt_input_async(
+2026-02-14T08:14:12.300771127Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:12 [serving_chat.py:263]                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-02-14T08:14:12.300773091Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:12 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 702, in _tokenize_prompt_input_async
+2026-02-14T08:14:12.300775345Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:12 [serving_chat.py:263]     async for result in self._tokenize_prompt_inputs_async(
+2026-02-14T08:14:12.300777269Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:12 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 723, in _tokenize_prompt_inputs_async
+2026-02-14T08:14:12.300779202Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:12 [serving_chat.py:263]     yield await self._normalize_prompt_text_to_input(
+2026-02-14T08:14:12.300781597Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:12 [serving_chat.py:263]           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-02-14T08:14:12.300785033Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:12 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 592, in _normalize_prompt_text_to_input
+2026-02-14T08:14:12.300788039Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:12 [serving_chat.py:263]     return self._validate_input(request, input_ids, input_text)
+2026-02-14T08:14:12.300790854Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:12 [serving_chat.py:263]            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-02-14T08:14:12.300793629Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:12 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 683, in _validate_input
+2026-02-14T08:14:12.300796434Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:12 [serving_chat.py:263]     raise ValueError(
+2026-02-14T08:14:12.300799230Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:12 [serving_chat.py:263] ValueError: 'max_tokens' or 'max_completion_tokens' is too large: 1500. This model's maximum context length is 4096 tokens and your request has 2878 input tokens (1500 > 4096 - 2878).
+2026-02-14T08:14:12.300812034Z [1;36m(APIServer pid=19)[0;0m INFO:     59.6.138.20:58478 - "POST /v1/chat/completions HTTP/1.1" 400 Bad Request
+2026-02-14T08:14:13.839414806Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:13 [serving_chat.py:263] Error in preprocessing prompt inputs
+2026-02-14T08:14:13.839433100Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:13 [serving_chat.py:263] Traceback (most recent call last):
+2026-02-14T08:14:13.839435825Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:13 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_chat.py", line 239, in create_chat_completion
+2026-02-14T08:14:13.839438019Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:13 [serving_chat.py:263]     ) = await self._preprocess_chat(
+2026-02-14T08:14:13.839440003Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:13 [serving_chat.py:263]         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-02-14T08:14:13.839441977Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:13 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 822, in _preprocess_chat
+2026-02-14T08:14:13.839443980Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:13 [serving_chat.py:263]     prompt_inputs = await self._tokenize_prompt_input_async(
+2026-02-14T08:14:13.839446225Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:13 [serving_chat.py:263]                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-02-14T08:14:13.839448268Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:13 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 702, in _tokenize_prompt_input_async
+2026-02-14T08:14:13.839450192Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:13 [serving_chat.py:263]     async for result in self._tokenize_prompt_inputs_async(
+2026-02-14T08:14:13.839452186Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:13 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 723, in _tokenize_prompt_inputs_async
+2026-02-14T08:14:13.839455602Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:13 [serving_chat.py:263]     yield await self._normalize_prompt_text_to_input(
+2026-02-14T08:14:13.839457666Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:13 [serving_chat.py:263]           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-02-14T08:14:13.839460321Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:13 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 592, in _normalize_prompt_text_to_input
+2026-02-14T08:14:13.839462395Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:13 [serving_chat.py:263]     return self._validate_input(request, input_ids, input_text)
+2026-02-14T08:14:13.839464318Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:13 [serving_chat.py:263]            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-02-14T08:14:13.839466322Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:13 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 683, in _validate_input
+2026-02-14T08:14:13.839468356Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:13 [serving_chat.py:263]     raise ValueError(
+2026-02-14T08:14:13.839470340Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:13 [serving_chat.py:263] ValueError: 'max_tokens' or 'max_completion_tokens' is too large: 1500. This model's maximum context length is 4096 tokens and your request has 2878 input tokens (1500 > 4096 - 2878).
+2026-02-14T08:14:13.839692515Z [1;36m(APIServer pid=19)[0;0m INFO:     59.6.138.20:58481 - "POST /v1/chat/completions HTTP/1.1" 400 Bad Request
+2026-02-14T08:14:14.074877040Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:14 [serving_chat.py:263] Error in preprocessing prompt inputs
+2026-02-14T08:14:14.074885886Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:14 [serving_chat.py:263] Traceback (most recent call last):
+2026-02-14T08:14:14.074893781Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:14 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_chat.py", line 239, in create_chat_completion
+2026-02-14T08:14:14.074896025Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:14 [serving_chat.py:263]     ) = await self._preprocess_chat(
+2026-02-14T08:14:14.074897819Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:14 [serving_chat.py:263]         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-02-14T08:14:14.074899642Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:14 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 822, in _preprocess_chat
+2026-02-14T08:14:14.074901385Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:14 [serving_chat.py:263]     prompt_inputs = await self._tokenize_prompt_input_async(
+2026-02-14T08:14:14.074903499Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:14 [serving_chat.py:263]                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-02-14T08:14:14.074905503Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:14 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 702, in _tokenize_prompt_input_async
+2026-02-14T08:14:14.074907407Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:14 [serving_chat.py:263]     async for result in self._tokenize_prompt_inputs_async(
+2026-02-14T08:14:14.074909380Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:14 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 723, in _tokenize_prompt_inputs_async
+2026-02-14T08:14:14.074911294Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:14 [serving_chat.py:263]     yield await self._normalize_prompt_text_to_input(
+2026-02-14T08:14:14.074912947Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:14 [serving_chat.py:263]           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-02-14T08:14:14.074914880Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:14 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 592, in _normalize_prompt_text_to_input
+2026-02-14T08:14:14.074916544Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:14 [serving_chat.py:263]     return self._validate_input(request, input_ids, input_text)
+2026-02-14T08:14:14.074918217Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:14 [serving_chat.py:263]            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-02-14T08:14:14.074919850Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:14 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 675, in _validate_input
+2026-02-14T08:14:14.074921503Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:14 [serving_chat.py:263]     raise ValueError(
+2026-02-14T08:14:14.074923206Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:14 [serving_chat.py:263] ValueError: This model's maximum context length is 4096 tokens. However, your request has 4731 input tokens. Please reduce the length of the input messages.
+2026-02-14T08:14:14.074924929Z [1;36m(APIServer pid=19)[0;0m INFO:     59.6.138.20:58480 - "POST /v1/chat/completions HTTP/1.1" 400 Bad Request
+2026-02-14T08:14:15.135161004Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:15 [serving_chat.py:263] Error in preprocessing prompt inputs
+2026-02-14T08:14:15.135174669Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:15 [serving_chat.py:263] Traceback (most recent call last):
+2026-02-14T08:14:15.135177404Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:15 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_chat.py", line 239, in create_chat_completion
+2026-02-14T08:14:15.135180009Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:15 [serving_chat.py:263]     ) = await self._preprocess_chat(
+2026-02-14T08:14:15.135182133Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:15 [serving_chat.py:263]         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-02-14T08:14:15.135190329Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:15 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 822, in _preprocess_chat
+2026-02-14T08:14:15.135192533Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:15 [serving_chat.py:263]     prompt_inputs = await self._tokenize_prompt_input_async(
+2026-02-14T08:14:15.135195178Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:15 [serving_chat.py:263]                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-02-14T08:14:15.135197221Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:15 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 702, in _tokenize_prompt_input_async
+2026-02-14T08:14:15.135199365Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:15 [serving_chat.py:263]     async for result in self._tokenize_prompt_inputs_async(
+2026-02-14T08:14:15.135201369Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:15 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 723, in _tokenize_prompt_inputs_async
+2026-02-14T08:14:15.135203403Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:15 [serving_chat.py:263]     yield await self._normalize_prompt_text_to_input(
+2026-02-14T08:14:15.135205357Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:15 [serving_chat.py:263]           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-02-14T08:14:15.135207871Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:15 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 592, in _normalize_prompt_text_to_input
+2026-02-14T08:14:15.135209945Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:15 [serving_chat.py:263]     return self._validate_input(request, input_ids, input_text)
+2026-02-14T08:14:15.135211929Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:15 [serving_chat.py:263]            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-02-14T08:14:15.135213853Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:15 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 683, in _validate_input
+2026-02-14T08:14:15.135215796Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:15 [serving_chat.py:263]     raise ValueError(
+2026-02-14T08:14:15.135217960Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:15 [serving_chat.py:263] ValueError: 'max_tokens' or 'max_completion_tokens' is too large: 1500. This model's maximum context length is 4096 tokens and your request has 2878 input tokens (1500 > 4096 - 2878).
+2026-02-14T08:14:15.135220295Z [1;36m(APIServer pid=19)[0;0m INFO:     59.6.138.20:58481 - "POST /v1/chat/completions HTTP/1.1" 400 Bad Request
+2026-02-14T08:14:15.395286654Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:15 [serving_chat.py:263] Error in preprocessing prompt inputs
+2026-02-14T08:14:15.395293126Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:15 [serving_chat.py:263] Traceback (most recent call last):
+2026-02-14T08:14:15.395294609Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:15 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_chat.py", line 239, in create_chat_completion
+2026-02-14T08:14:15.395295831Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:15 [serving_chat.py:263]     ) = await self._preprocess_chat(
+2026-02-14T08:14:15.395297014Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:15 [serving_chat.py:263]         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-02-14T08:14:15.395298206Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:15 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 822, in _preprocess_chat
+2026-02-14T08:14:15.395299358Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:15 [serving_chat.py:263]     prompt_inputs = await self._tokenize_prompt_input_async(
+2026-02-14T08:14:15.395304167Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:15 [serving_chat.py:263]                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-02-14T08:14:15.395305409Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:15 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 702, in _tokenize_prompt_input_async
+2026-02-14T08:14:15.395306722Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:15 [serving_chat.py:263]     async for result in self._tokenize_prompt_inputs_async(
+2026-02-14T08:14:15.395307974Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:15 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 723, in _tokenize_prompt_inputs_async
+2026-02-14T08:14:15.395309116Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:15 [serving_chat.py:263]     yield await self._normalize_prompt_text_to_input(
+2026-02-14T08:14:15.395310248Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:15 [serving_chat.py:263]           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-02-14T08:14:15.395311541Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:15 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 592, in _normalize_prompt_text_to_input
+2026-02-14T08:14:15.395312663Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:15 [serving_chat.py:263]     return self._validate_input(request, input_ids, input_text)
+2026-02-14T08:14:15.395313775Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:15 [serving_chat.py:263]            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-02-14T08:14:15.395314867Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:15 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 675, in _validate_input
+2026-02-14T08:14:15.395316009Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:15 [serving_chat.py:263]     raise ValueError(
+2026-02-14T08:14:15.395317171Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:15 [serving_chat.py:263] ValueError: This model's maximum context length is 4096 tokens. However, your request has 4731 input tokens. Please reduce the length of the input messages.
+2026-02-14T08:14:15.395463074Z [1;36m(APIServer pid=19)[0;0m INFO:     59.6.138.20:58480 - "POST /v1/chat/completions HTTP/1.1" 400 Bad Request
+2026-02-14T08:14:17.431089464Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:17 [serving_chat.py:263] Error in preprocessing prompt inputs
+2026-02-14T08:14:17.431103881Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:17 [serving_chat.py:263] Traceback (most recent call last):
+2026-02-14T08:14:17.431106025Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:17 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_chat.py", line 239, in create_chat_completion
+2026-02-14T08:14:17.431108911Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:17 [serving_chat.py:263]     ) = await self._preprocess_chat(
+2026-02-14T08:14:17.431110353Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:17 [serving_chat.py:263]         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-02-14T08:14:17.431112447Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:17 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 822, in _preprocess_chat
+2026-02-14T08:14:17.431113709Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:17 [serving_chat.py:263]     prompt_inputs = await self._tokenize_prompt_input_async(
+2026-02-14T08:14:17.431115393Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:17 [serving_chat.py:263]                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-02-14T08:14:17.431116535Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:17 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 702, in _tokenize_prompt_input_async
+2026-02-14T08:14:17.431123708Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:17 [serving_chat.py:263]     async for result in self._tokenize_prompt_inputs_async(
+2026-02-14T08:14:17.431124991Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:17 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 723, in _tokenize_prompt_inputs_async
+2026-02-14T08:14:17.431126313Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:17 [serving_chat.py:263]     yield await self._normalize_prompt_text_to_input(
+2026-02-14T08:14:17.431127425Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:17 [serving_chat.py:263]           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-02-14T08:14:17.431129218Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:17 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 592, in _normalize_prompt_text_to_input
+2026-02-14T08:14:17.431130391Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:17 [serving_chat.py:263]     return self._validate_input(request, input_ids, input_text)
+2026-02-14T08:14:17.431131633Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:17 [serving_chat.py:263]            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-02-14T08:14:17.431132795Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:17 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 683, in _validate_input
+2026-02-14T08:14:17.431134017Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:17 [serving_chat.py:263]     raise ValueError(
+2026-02-14T08:14:17.431135370Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:17 [serving_chat.py:263] ValueError: 'max_tokens' or 'max_completion_tokens' is too large: 1500. This model's maximum context length is 4096 tokens and your request has 2878 input tokens (1500 > 4096 - 2878).
+2026-02-14T08:14:17.431154345Z [1;36m(APIServer pid=19)[0;0m INFO:     59.6.138.20:58481 - "POST /v1/chat/completions HTTP/1.1" 400 Bad Request
+2026-02-14T08:14:17.695333682Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:17 [serving_chat.py:263] Error in preprocessing prompt inputs
+2026-02-14T08:14:17.695340014Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:17 [serving_chat.py:263] Traceback (most recent call last):
+2026-02-14T08:14:17.695342208Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:17 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_chat.py", line 239, in create_chat_completion
+2026-02-14T08:14:17.695343491Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:17 [serving_chat.py:263]     ) = await self._preprocess_chat(
+2026-02-14T08:14:17.695344793Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:17 [serving_chat.py:263]         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-02-14T08:14:17.695345955Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:17 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 822, in _preprocess_chat
+2026-02-14T08:14:17.695347168Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:17 [serving_chat.py:263]     prompt_inputs = await self._tokenize_prompt_input_async(
+2026-02-14T08:14:17.695348280Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:17 [serving_chat.py:263]                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-02-14T08:14:17.695349352Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:17 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 702, in _tokenize_prompt_input_async
+2026-02-14T08:14:17.695350474Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:17 [serving_chat.py:263]     async for result in self._tokenize_prompt_inputs_async(
+2026-02-14T08:14:17.695352337Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:17 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 723, in _tokenize_prompt_inputs_async
+2026-02-14T08:14:17.695353439Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:17 [serving_chat.py:263]     yield await self._normalize_prompt_text_to_input(
+2026-02-14T08:14:17.695357878Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:17 [serving_chat.py:263]           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-02-14T08:14:17.695359531Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:17 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 592, in _normalize_prompt_text_to_input
+2026-02-14T08:14:17.695360663Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:17 [serving_chat.py:263]     return self._validate_input(request, input_ids, input_text)
+2026-02-14T08:14:17.695361895Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:17 [serving_chat.py:263]            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-02-14T08:14:17.695363027Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:17 [serving_chat.py:263]   File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/serving_engine.py", line 675, in _validate_input
+2026-02-14T08:14:17.695364189Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:17 [serving_chat.py:263]     raise ValueError(
+2026-02-14T08:14:17.695365612Z [1;36m(APIServer pid=19)[0;0m ERROR 02-14 00:14:17 [serving_chat.py:263] ValueError: This model's maximum context length is 4096 tokens. However, your request has 4731 input tokens. Please reduce the length of the input messages.
+2026-02-14T08:14:17.695490856Z [1;36m(APIServer pid=19)[0;0m INFO:     59.6.138.20:58480 - "POST /v1/chat/completions HTTP/1.1" 400 Bad Request
+2026-02-14T08:14:19.380954995Z [1;36m(APIServer pid=19)[0;0m INFO 02-14 00:14:19 [loggers.py:127] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 0.0 tokens/s, Running: 0 reqs, Waiting: 0 reqs, GPU KV cache usage: 0.0%, Prefix cache hit rate: 65.5%
+2026-02-14T08:14:36.742481438Z [1;36m(APIServer pid=19)[0;0m INFO:     59.6.138.20:58506 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+2026-02-14T08:14:36.742542552Z [1;36m(APIServer pid=19)[0;0m INFO:     59.6.138.20:58507 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+2026-02-14T08:14:39.382212954Z [1;36m(APIServer pid=19)[0;0m INFO 02-14 00:14:39 [loggers.py:127] Engine 000: Avg prompt throughput: 77.8 tokens/s, Avg generation throughput: 6.1 tokens/s, Running: 0 reqs, Waiting: 0 reqs, GPU KV cache usage: 0.0%, Prefix cache hit rate: 67.4%
+2026-02-14T08:14:45.418758138Z [1;36m(APIServer pid=19)[0;0m INFO:     59.6.138.20:58526 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+2026-02-14T08:14:45.467630171Z [1;36m(APIServer pid=19)[0;0m INFO:     59.6.138.20:58527 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+2026-02-14T08:14:45.547602792Z [1;36m(APIServer pid=19)[0;0m INFO:     59.6.138.20:58525 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+2026-02-14T08:14:49.382353395Z [1;36m(APIServer pid=19)[0;0m INFO 02-14 00:14:49 [loggers.py:127] Engine 000: Avg prompt throughput: 114.5 tokens/s, Avg generation throughput: 9.3 tokens/s, Running: 0 reqs, Waiting: 0 reqs, GPU KV cache usage: 0.0%, Prefix cache hit rate: 69.8%
+2026-02-14T08:14:59.382590607Z [1;36m(APIServer pid=19)[0;0m INFO 02-14 00:14:59 [loggers.py:127] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 0.0 tokens/s, Running: 0 reqs, Waiting: 0 reqs, GPU KV cache usage: 0.0%, Prefix cache hit rate: 69.8%

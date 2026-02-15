@@ -17,7 +17,7 @@ from contextlib import asynccontextmanager
 import logging
 import uuid
 
-from .routers import sentiment, vector, llm, test
+from .routers import sentiment, llm, test, batch, vector
 from .dependencies import get_qdrant_client, get_vector_search, get_sentiment_analyzer
 from ..cpu_monitor import get_cpu_monitor
 from ..metrics_collector import app_queue_depth_inc, app_queue_depth_dec, set_event_loop_lag_seconds
@@ -248,9 +248,10 @@ app.add_middleware(
 
 # 라우터 등록
 app.include_router(sentiment.router, prefix="/api/v1/sentiment", tags=["sentiment"])
-app.include_router(vector.router, prefix="/api/v1/vector", tags=["vector"])
 app.include_router(llm.router, prefix="/api/v1/llm", tags=["llm"])
 app.include_router(test.router, prefix="/api/v1/test", tags=["test"])
+app.include_router(batch.router, prefix="/api/v1", tags=["batch"])
+app.include_router(vector.router, prefix="/api/v1/vector", tags=["vector"])
 
 
 @app.get("/", response_model=dict)

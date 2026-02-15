@@ -1,0 +1,147 @@
+(env_ai) js@jinsoos-MacBook-Pro tasteam-new-async % python app.py
+/Users/js/miniconda3/envs/env_ai/lib/python3.11/site-packages/torch/cuda/__init__.py:63: FutureWarning: The pynvml package is deprecated. Please install nvidia-ml-py instead. If you did not install pynvml directly, please report this to the maintainers of the package that installed pynvml for you.
+  import pynvml  # type: ignore[import]
+Redis가 설치되지 않았습니다. 캐싱이 비활성화됩니다.
+2026-02-14 17:33:49,140 - src.api.main - WARNING - prometheus_fastapi_instrumentator 미설치: /metrics 비활성화. 설치: pip install prometheus-client prometheus-fastapi-instrumentator
+INFO:     Started server process [22411]
+INFO:     Waiting for application startup.
+2026-02-14 17:33:49,173 - src.api.main - INFO - FastAPI 애플리케이션 시작
+/Users/js/tasteam-new-async/src/api/dependencies.py:56: UserWarning: Local mode is not recommended for collections with more than 20,000 points. Collection <reviews_collection> contains 20622 points. Consider using Qdrant in Docker or Qdrant Cloud for better performance with large datasets.
+  client = QdrantClient(path=qdrant_path)
+/Users/js/tasteam-new-async/src/vector_search.py:69: UserWarning: The model sentence-transformers/paraphrase-multilingual-mpnet-base-v2 now uses mean pooling instead of CLS embedding. In order to preserve the previous behaviour, consider either pinning fastembed version to 0.5.1 or using `add_custom_model` functionality.
+  self._dense_model = TextEmbedding(Config.EMBEDDING_MODEL)
+2026-02-14 17:33:51,071 - src.vector_search - INFO - Dense 벡터 모델 로드 완료: sentence-transformers/paraphrase-multilingual-mpnet-base-v2
+2026-02-14 17:33:51,184 - src.vector_search - INFO - Sparse 벡터 모델 로드 완료: Qdrant/bm25
+2026-02-14 17:33:51,188 - src.api.main - INFO - VectorSearch(임베딩) warm-up 완료
+2026-02-14 17:33:51,188 - src.llm_utils - INFO - vLLM RunPod Pod 직접 연결: http://213.173.108.70:17517/v1
+2026-02-14 17:33:51,635 - httpx - INFO - HTTP Request: HEAD https://huggingface.co/Dilwolf/Kakao_app-kr_sentiment/resolve/main/config.json "HTTP/1.1 307 Temporary Redirect"
+2026-02-14 17:33:51,645 - httpx - INFO - HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/Dilwolf/Kakao_app-kr_sentiment/aaae4554e0c4b5cf45c6f27722b21717d027f5ff/config.json "HTTP/1.1 200 OK"
+2026-02-14 17:33:51,864 - httpx - INFO - HTTP Request: HEAD https://huggingface.co/Dilwolf/Kakao_app-kr_sentiment/resolve/main/config.json "HTTP/1.1 307 Temporary Redirect"
+2026-02-14 17:33:51,877 - httpx - INFO - HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/Dilwolf/Kakao_app-kr_sentiment/aaae4554e0c4b5cf45c6f27722b21717d027f5ff/config.json "HTTP/1.1 200 OK"
+Loading weights: 100%|█| 201/201 [00:00<00:0
+2026-02-14 17:33:52,220 - httpx - INFO - HTTP Request: GET https://huggingface.co/api/models/Dilwolf/Kakao_app-kr_sentiment/tree/main/additional_chat_templates?recursive=false&expand=false "HTTP/1.1 404 Not Found"
+2026-02-14 17:33:52,447 - httpx - INFO - HTTP Request: GET https://huggingface.co/api/models/Dilwolf/Kakao_app-kr_sentiment/tree/main?recursive=true&expand=false "HTTP/1.1 200 OK"
+2026-02-14 17:33:52,800 - httpx - INFO - HTTP Request: GET https://huggingface.co/api/models/Dilwolf/Kakao_app-kr_sentiment "HTTP/1.1 200 OK"
+2026-02-14 17:33:52,803 - src.sentiment_analysis - INFO - Sentiment 모델 로딩 완료: Dilwolf/Kakao_app-kr_sentiment (device=-1)
+2026-02-14 17:33:53,244 - src.api.main - INFO - Sentiment pipeline warm-up 완료
+2026-02-14 17:33:53,244 - src.api.main - INFO - 서비스 warm-up 완료, readiness=True
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8001 (Press CTRL+C to quit)
+INFO:     127.0.0.1:58884 - "GET /health HTTP/1.1" 200 OK
+2026-02-14 17:34:05,954 - src.api.routers.vector - INFO - 포인트 준비 시작: 리뷰 142개, 레스토랑 5개
+2026-02-14 17:34:05,955 - src.vector_search - INFO - 총 142개의 리뷰를 배치로 인코딩합니다 (배치 크기: 32, 하이브리드: Dense + Sparse)
+2026-02-14 17:34:25,776 - src.vector_search - INFO - 총 142개의 포인트를 생성했습니다.
+2026-02-14 17:34:25,776 - src.api.routers.vector - INFO - 포인트 준비 완료: 142개 포인트 생성됨
+2026-02-14 17:34:25,779 - src.vector_search - INFO - 142개의 포인트를 upload_collection으로 업로드 시작... (컬렉션 형식: named 벡터)
+/Users/js/tasteam-new-async/src/vector_search.py:450: UserWarning: Local mode is not recommended for collections with more than 20,000 points. Current collection contains 20622 points. Consider using Qdrant in Docker or Qdrant Cloud for better performance with large datasets.
+  self.client.upload_collection(
+2026-02-14 17:34:25,856 - src.vector_search - INFO - 142개의 포인트를 upload_collection으로 업로드 완료했습니다.
+2026-02-14 17:34:25,856 - src.api.routers.vector - INFO - 업로드 완료: 142개 포인트
+2026-02-14 17:34:26,037 - src.vector_search - INFO - 레스토랑 4의 대표 벡터를 업데이트했습니다.
+2026-02-14 17:34:26,152 - src.vector_search - INFO - 레스토랑 3의 대표 벡터를 업데이트했습니다.
+2026-02-14 17:34:26,269 - src.vector_search - INFO - 레스토랑 1의 대표 벡터를 업데이트했습니다.
+2026-02-14 17:34:26,381 - src.vector_search - INFO - 레스토랑 2의 대표 벡터를 업데이트했습니다.
+2026-02-14 17:34:26,495 - src.vector_search - INFO - 레스토랑 5의 대표 벡터를 업데이트했습니다.
+2026-02-14 17:34:26,495 - src.api.routers.vector - INFO - restaurant_vectors 컬렉션에 5개 레스토랑 대표 벡터 생성 완료
+INFO:     127.0.0.1:58885 - "POST /api/v1/vector/upload HTTP/1.1" 200 OK
+2026-02-14 17:34:26,500 - src.cache - WARNING - Redis가 설치되지 않아 캐싱이 비활성화됩니다.
+2026-02-14 17:34:26,500 - src.cache - WARNING - Redis가 없어 락을 건너뜁니다.
+2026-02-14 17:34:26,612 - src.sentiment_analysis - INFO - 총 20개의 리뷰를 sentiment 모델로 분류합니다 (restaurant_id: 1).
+2026-02-14 17:34:31,789 - httpx - INFO - HTTP Request: POST http://213.173.108.70:17517/v1/chat/completions "HTTP/1.1 200 OK"
+2026-02-14 17:34:31,795 - src.sentiment_analysis - INFO - LLM 재판정 완료: 20개 리뷰 중 19개 재분류
+INFO:     127.0.0.1:58888 - "POST /api/v1/sentiment/analyze HTTP/1.1" 200 OK
+2026-02-14 17:34:31,992 - src.sentiment_analysis - INFO - 총 20개의 리뷰를 sentiment 모델로 분류합니다 (restaurant_id: 1).
+2026-02-14 17:34:32,101 - src.sentiment_analysis - INFO - 총 20개의 리뷰를 sentiment 모델로 분류합니다 (restaurant_id: 2).
+2026-02-14 17:34:32,210 - src.sentiment_analysis - INFO - 총 20개의 리뷰를 sentiment 모델로 분류합니다 (restaurant_id: 3).
+2026-02-14 17:34:32,321 - src.sentiment_analysis - INFO - 총 62개의 리뷰를 sentiment 모델로 분류합니다 (restaurant_id: 4).
+2026-02-14 17:34:32,433 - src.sentiment_analysis - INFO - 총 20개의 리뷰를 sentiment 모델로 분류합니다 (restaurant_id: 5).
+2026-02-14 17:34:35,996 - httpx - INFO - HTTP Request: POST http://213.173.108.70:17517/v1/chat/completions "HTTP/1.1 400 Bad Request"
+2026-02-14 17:34:35,997 - src.llm_utils - WARNING - RunPod OpenAI API 실패 (시도 1/3): Error code: 400 - {'error': {'message': "'max_tokens' or 'max_completion_tokens' is too large: 1024. This model's maximum context length is 4096 tokens and your request has 3076 input tokens (1024 > 4096 - 3076). None", 'type': 'BadRequestError', 'param': None, 'code': 400}}
+2026-02-14 17:34:37,013 - httpx - INFO - HTTP Request: POST http://213.173.108.70:17517/v1/chat/completions "HTTP/1.1 400 Bad Request"
+2026-02-14 17:34:37,014 - src.llm_utils - WARNING - RunPod OpenAI API 실패 (시도 1/3): Error code: 400 - {'error': {'message': "'max_tokens' or 'max_completion_tokens' is too large: 1024. This model's maximum context length is 4096 tokens and your request has 3205 input tokens (1024 > 4096 - 3205). None", 'type': 'BadRequestError', 'param': None, 'code': 400}}
+2026-02-14 17:34:37,294 - httpx - INFO - HTTP Request: POST http://213.173.108.70:17517/v1/chat/completions "HTTP/1.1 400 Bad Request"
+2026-02-14 17:34:37,295 - src.llm_utils - WARNING - RunPod OpenAI API 실패 (시도 2/3): Error code: 400 - {'error': {'message': "'max_tokens' or 'max_completion_tokens' is too large: 1024. This model's maximum context length is 4096 tokens and your request has 3076 input tokens (1024 > 4096 - 3076). None", 'type': 'BadRequestError', 'param': None, 'code': 400}}
+2026-02-14 17:34:38,311 - httpx - INFO - HTTP Request: POST http://213.173.108.70:17517/v1/chat/completions "HTTP/1.1 400 Bad Request"
+2026-02-14 17:34:38,313 - src.llm_utils - WARNING - RunPod OpenAI API 실패 (시도 2/3): Error code: 400 - {'error': {'message': "'max_tokens' or 'max_completion_tokens' is too large: 1024. This model's maximum context length is 4096 tokens and your request has 3205 input tokens (1024 > 4096 - 3205). None", 'type': 'BadRequestError', 'param': None, 'code': 400}}
+2026-02-14 17:34:39,269 - httpx - INFO - HTTP Request: POST http://213.173.108.70:17517/v1/chat/completions "HTTP/1.1 200 OK"
+2026-02-14 17:34:39,271 - src.sentiment_analysis - INFO - LLM 재판정 완료: 20개 리뷰 중 19개 재분류
+2026-02-14 17:34:39,454 - httpx - INFO - HTTP Request: POST http://213.173.108.70:17517/v1/chat/completions "HTTP/1.1 200 OK"
+2026-02-14 17:34:39,457 - src.sentiment_analysis - INFO - LLM 재판정 완료: 20개 리뷰 중 17개 재분류
+2026-02-14 17:34:39,593 - httpx - INFO - HTTP Request: POST http://213.173.108.70:17517/v1/chat/completions "HTTP/1.1 400 Bad Request"
+2026-02-14 17:34:39,595 - src.llm_utils - WARNING - RunPod OpenAI API 실패 (시도 3/3): Error code: 400 - {'error': {'message': "'max_tokens' or 'max_completion_tokens' is too large: 1024. This model's maximum context length is 4096 tokens and your request has 3076 input tokens (1024 > 4096 - 3076). None", 'type': 'BadRequestError', 'param': None, 'code': 400}}
+2026-02-14 17:34:39,596 - src.sentiment_analysis - WARNING - LLM 재판정 실패: Error code: 400 - {'error': {'message': "'max_tokens' or 'max_completion_tokens' is too large: 1024. This model's maximum context length is 4096 tokens and your request has 3076 input tokens (1024 > 4096 - 3076). None", 'type': 'BadRequestError', 'param': None, 'code': 400}}. 1차 분류 결과를 사용합니다.
+2026-02-14 17:34:39,888 - httpx - INFO - HTTP Request: POST http://213.173.108.70:17517/v1/chat/completions "HTTP/1.1 200 OK"
+2026-02-14 17:34:39,890 - src.sentiment_analysis - INFO - LLM 재판정 완료: 20개 리뷰 중 20개 재분류
+2026-02-14 17:34:40,687 - httpx - INFO - HTTP Request: POST http://213.173.108.70:17517/v1/chat/completions "HTTP/1.1 400 Bad Request"
+2026-02-14 17:34:40,689 - src.llm_utils - WARNING - RunPod OpenAI API 실패 (시도 3/3): Error code: 400 - {'error': {'message': "'max_tokens' or 'max_completion_tokens' is too large: 1024. This model's maximum context length is 4096 tokens and your request has 3205 input tokens (1024 > 4096 - 3205). None", 'type': 'BadRequestError', 'param': None, 'code': 400}}
+2026-02-14 17:34:40,689 - src.sentiment_analysis - WARNING - LLM 재판정 실패: Error code: 400 - {'error': {'message': "'max_tokens' or 'max_completion_tokens' is too large: 1024. This model's maximum context length is 4096 tokens and your request has 3205 input tokens (1024 > 4096 - 3205). None", 'type': 'BadRequestError', 'param': None, 'code': 400}}. 1차 분류 결과를 사용합니다.
+INFO:     127.0.0.1:58891 - "POST /api/v1/sentiment/analyze/batch HTTP/1.1" 200 OK
+2026-02-14 17:34:40,703 - src.cache - WARNING - Redis가 없어 락을 건너뜁니다.
+2026-02-14 17:34:40,703 - src.api.routers.llm - INFO - 요약: 기본 시드만 사용
+2026-02-14 17:34:48,797 - httpx - INFO - HTTP Request: POST http://213.173.108.70:17517/v1/chat/completions "HTTP/1.1 200 OK"
+INFO:     127.0.0.1:58899 - "POST /api/v1/llm/summarize HTTP/1.1" 200 OK
+2026-02-14 17:34:48,822 - src.api.routers.llm - INFO - 요약: 기본 시드만 사용
+2026-02-14 17:34:51,604 - httpx - INFO - HTTP Request: POST http://213.173.108.70:17517/v1/chat/completions "HTTP/1.1 400 Bad Request"
+2026-02-14 17:34:51,605 - src.llm_utils - WARNING - RunPod OpenAI API 실패 (시도 1/3): Error code: 400 - {'error': {'message': "This model's maximum context length is 4096 tokens. However, your request has 4731 input tokens. Please reduce the length of the input messages. None", 'type': 'BadRequestError', 'param': None, 'code': 400}}
+2026-02-14 17:34:53,507 - httpx - INFO - HTTP Request: POST http://213.173.108.70:17517/v1/chat/completions "HTTP/1.1 400 Bad Request"
+2026-02-14 17:34:53,507 - src.llm_utils - WARNING - RunPod OpenAI API 실패 (시도 2/3): Error code: 400 - {'error': {'message': "This model's maximum context length is 4096 tokens. However, your request has 4731 input tokens. Please reduce the length of the input messages. None", 'type': 'BadRequestError', 'param': None, 'code': 400}}
+2026-02-14 17:34:56,075 - httpx - INFO - HTTP Request: POST http://213.173.108.70:17517/v1/chat/completions "HTTP/1.1 400 Bad Request"
+2026-02-14 17:34:56,076 - src.llm_utils - WARNING - RunPod OpenAI API 실패 (시도 3/3): Error code: 400 - {'error': {'message': "This model's maximum context length is 4096 tokens. However, your request has 4731 input tokens. Please reduce the length of the input messages. None", 'type': 'BadRequestError', 'param': None, 'code': 400}}
+2026-02-14 17:34:56,077 - src.summary_pipeline - ERROR - LLM 비동기 호출 실패: Error code: 400 - {'error': {'message': "This model's maximum context length is 4096 tokens. However, your request has 4731 input tokens. Please reduce the length of the input messages. None", 'type': 'BadRequestError', 'param': None, 'code': 400}}
+2026-02-14 17:35:11,029 - httpx - INFO - HTTP Request: POST http://213.173.108.70:17517/v1/chat/completions "HTTP/1.1 200 OK"
+2026-02-14 17:35:11,032 - src.api.routers.llm - ERROR - 배치 요약 restaurant_async: restaurant_id=1 실패: 'service'
+Traceback (most recent call last):
+  File "/Users/js/tasteam-new-async/src/api/routers/llm.py", line 293, in one
+    return await _process_one_restaurant_async(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/js/tasteam-new-async/src/api/routers/llm.py", line 255, in _process_one_restaurant_async
+    result = await summarize_aspects_new_async(
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/js/tasteam-new-async/src/summary_pipeline.py", line 346, in summarize_aspects_new_async
+    out[cat]["evidence"] = [
+    ~~~^^^^^
+KeyError: 'service'
+2026-02-14 17:35:11,038 - src.api.routers.llm - ERROR - 배치 리뷰 요약 중 오류: 500: 배치 요약 중 오류: 'service'
+Traceback (most recent call last):
+  File "/Users/js/tasteam-new-async/src/api/routers/llm.py", line 764, in summarize_reviews_batch
+    results = await _batch_summarize_async(request, vector_search, llm_utils, seed_list, name_list)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/js/tasteam-new-async/src/api/routers/llm.py", line 308, in _batch_summarize_async
+    raise HTTPException(status_code=500, detail=f"배치 요약 중 오류: {res!s}")
+fastapi.exceptions.HTTPException: 500: 배치 요약 중 오류: 'service'
+INFO:     127.0.0.1:58902 - "POST /api/v1/llm/summarize/batch HTTP/1.1" 500 Internal Server Error
+2026-02-14 17:35:11,049 - src.cache - WARNING - Redis가 없어 락을 건너뜁니다.
+2026-02-14 17:35:11,049 - src.comparison - INFO - comparison 진행: restaurant_id=4, restaurant_name=(이름없음)
+2026-02-14 17:35:11,112 - src.comparison - INFO - 전체 평균 ① 파일 시도 (Spark 직접 읽기): path=data/test_data_sample.json
+WARNING: Using incubator modules: jdk.incubator.vector
+Setting default log level to "OFF".
+To adjust logging level use sc.setLogLevel(newLevel). For SparkR, use setLogLevel(newLevel).
+/Users/js/miniconda3/envs/env_ai/lib/python3.11/site-packages/torch/cuda/__init__.py:63: FutureWarning: The pynvml package is deprecated. Please install nvidia-ml-py instead. If you did not install pynvml directly, please report this to the maintainers of the package that installed pynvml for you.
+  import pynvml  # type: ignore[import]
+Quantization is not supported for ArchType::neon. Fall back to non-quantized model.
+2026-02-14 17:35:27,328 - src.comparison - INFO - 전체 평균 ① 파일 사용 (Spark 직접 읽기): path=data/test_data_sample.json → service=0.6000, price=0.1818
+Quantization is not supported for ArchType::neon. Fall back to non-quantized model.
+2026-02-14 17:35:29,164 - src.comparison - INFO - 표본(단일 음식점) restaurant_id=4 service=0.6200, price=0.5000 | lift service=3%, price=175%
+2026-02-14 17:35:29,164 - src.comparison_pipeline - INFO - 표본 리뷰수 n=62 >= 50이므로 톤 '좋은 편' 사용
+2026-02-14 17:35:30,267 - httpx - INFO - HTTP Request: POST http://213.173.108.70:17517/v1/chat/completions "HTTP/1.1 200 OK"
+2026-02-14 17:35:30,271 - httpx - INFO - HTTP Request: POST http://213.173.108.70:17517/v1/chat/completions "HTTP/1.1 200 OK"
+INFO:     127.0.0.1:58905 - "POST /api/v1/llm/comparison HTTP/1.1" 200 OK
+2026-02-14 17:35:30,289 - src.comparison - INFO - comparison 진행: restaurant_id=4, restaurant_name=(이름없음)
+2026-02-14 17:35:30,289 - src.comparison - INFO - 전체 평균 ① 파일 시도 (Spark 직접 읽기): path=data/test_data_sample.json
+Quantization is not supported for ArchType::neon. Fall back to non-quantized model.
+2026-02-14 17:35:32,301 - src.comparison - INFO - 전체 평균 ① 파일 사용 (Spark 직접 읽기): path=data/test_data_sample.json → service=0.6000, price=0.1818
+Quantization is not supported for ArchType::neon. Fall back to non-quantized model.
+2026-02-14 17:35:34,031 - src.comparison - INFO - 표본(단일 음식점) restaurant_id=4 service=0.6200, price=0.5000 | lift service=3%, price=175%
+2026-02-14 17:35:34,031 - src.comparison_pipeline - INFO - 표본 리뷰수 n=62 >= 50이므로 톤 '좋은 편' 사용
+2026-02-14 17:35:34,031 - src.comparison - INFO - comparison 진행: restaurant_id=5, restaurant_name=(이름없음)
+2026-02-14 17:35:34,032 - src.comparison - INFO - 전체 평균 ① 파일 시도 (Spark 직접 읽기): path=data/test_data_sample.json
+Quantization is not supported for ArchType::neon. Fall back to non-quantized model.
+2026-02-14 17:35:36,038 - src.comparison - INFO - 전체 평균 ① 파일 사용 (Spark 직접 읽기): path=data/test_data_sample.json → service=0.6000, price=0.1818
+Quantization is not supported for ArchType::neon. Fall back to non-quantized model.
+2026-02-14 17:35:37,771 - src.comparison - INFO - 표본(단일 음식점) restaurant_id=5 service=0.6700, price=0.0700 | lift service=12%, price=-61%
+2026-02-14 17:35:37,771 - src.comparison_pipeline - INFO - 표본 리뷰수 20 <= n=20 < 50이므로 톤 '상대적으로 좋은 편' 사용
+2026-02-14 17:35:38,845 - httpx - INFO - HTTP Request: POST http://213.173.108.70:17517/v1/chat/completions "HTTP/1.1 200 OK"
+2026-02-14 17:35:38,928 - httpx - INFO - HTTP Request: POST http://213.173.108.70:17517/v1/chat/completions "HTTP/1.1 200 OK"
+2026-02-14 17:35:38,954 - httpx - INFO - HTTP Request: POST http://213.173.108.70:17517/v1/chat/completions "HTTP/1.1 200 OK"
+INFO:     127.0.0.1:58929 - "POST /api/v1/llm/comparison/batch HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58951 - "POST /api/v1/vector/search/similar HTTP/1.1" 200 OK

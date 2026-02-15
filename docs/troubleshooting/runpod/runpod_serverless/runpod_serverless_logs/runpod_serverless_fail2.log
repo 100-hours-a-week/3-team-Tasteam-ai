@@ -1,0 +1,217 @@
+(env_ai) js@jinsoos-MacBook-Pro tasteam-new-async % export RUNPOD_VLLM_ENDPOINT_ID="g09uegksn7h7ed"
+(env_ai) js@jinsoos-MacBook-Pro tasteam-new-async % python app.py
+/Users/js/miniconda3/envs/env_ai/lib/python3.11/site-packages/torch/cuda/__init__.py:63: FutureWarning: The pynvml package is deprecated. Please install nvidia-ml-py instead. If you did not install pynvml directly, please report this to the maintainers of the package that installed pynvml for you.
+  import pynvml  # type: ignore[import]
+Redis가 설치되지 않았습니다. 캐싱이 비활성화됩니다.
+2026-02-13 13:55:08,780 - src.api.main - WARNING - prometheus_fastapi_instrumentator 미설치: /metrics 비활성화. 설치: pip install prometheus-client prometheus-fastapi-instrumentator
+INFO:     Started server process [1936]
+INFO:     Waiting for application startup.
+2026-02-13 13:55:08,813 - src.api.main - INFO - FastAPI 애플리케이션 시작
+/Users/js/tasteam-new-async/src/api/dependencies.py:56: UserWarning: Local mode is not recommended for collections with more than 20,000 points. Collection <reviews_collection> contains 20622 points. Consider using Qdrant in Docker or Qdrant Cloud for better performance with large datasets.
+  client = QdrantClient(path=qdrant_path)
+/Users/js/tasteam-new-async/src/vector_search.py:69: UserWarning: The model sentence-transformers/paraphrase-multilingual-mpnet-base-v2 now uses mean pooling instead of CLS embedding. In order to preserve the previous behaviour, consider either pinning fastembed version to 0.5.1 or using `add_custom_model` functionality.
+  self._dense_model = TextEmbedding(Config.EMBEDDING_MODEL)
+2026-02-13 13:55:11,412 - src.vector_search - INFO - Dense 벡터 모델 로드 완료: sentence-transformers/paraphrase-multilingual-mpnet-base-v2
+2026-02-13 13:55:11,509 - src.vector_search - INFO - Sparse 벡터 모델 로드 완료: Qdrant/bm25
+2026-02-13 13:55:11,514 - src.api.main - INFO - VectorSearch(임베딩) warm-up 완료
+2026-02-13 13:55:11,514 - src.llm_utils - INFO - vLLM RunPod Serverless: 엔드포인트 g09uegksn7h7ed (요청 시 GPU 기동, 유휴 시 스케일다운)
+2026-02-13 13:55:11,996 - httpx - INFO - HTTP Request: HEAD https://huggingface.co/Dilwolf/Kakao_app-kr_sentiment/resolve/main/config.json "HTTP/1.1 307 Temporary Redirect"
+2026-02-13 13:55:12,009 - httpx - INFO - HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/Dilwolf/Kakao_app-kr_sentiment/aaae4554e0c4b5cf45c6f27722b21717d027f5ff/config.json "HTTP/1.1 200 OK"
+2026-02-13 13:55:12,260 - httpx - INFO - HTTP Request: HEAD https://huggingface.co/Dilwolf/Kakao_app-kr_sentiment/resolve/main/config.json "HTTP/1.1 307 Temporary Redirect"
+2026-02-13 13:55:12,278 - httpx - INFO - HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/Dilwolf/Kakao_app-kr_sentiment/aaae4554e0c4b5cf45c6f27722b21717d027f5ff/config.json "HTTP/1.1 200 OK"
+Loading weights: 100%|██████████████| 201/201 [00:00<00:00, 5633.74it/s, Materializing param=classifier.weight]
+2026-02-13 13:55:12,616 - httpx - INFO - HTTP Request: GET https://huggingface.co/api/models/Dilwolf/Kakao_app-kr_sentiment/tree/main/additional_chat_templates?recursive=false&expand=false "HTTP/1.1 404 Not Found"
+2026-02-13 13:55:12,844 - httpx - INFO - HTTP Request: GET https://huggingface.co/api/models/Dilwolf/Kakao_app-kr_sentiment/tree/main?recursive=true&expand=false "HTTP/1.1 200 OK"
+2026-02-13 13:55:13,268 - httpx - INFO - HTTP Request: GET https://huggingface.co/api/models/Dilwolf/Kakao_app-kr_sentiment "HTTP/1.1 200 OK"
+2026-02-13 13:55:13,272 - src.sentiment_analysis - INFO - Sentiment 모델 로딩 완료: Dilwolf/Kakao_app-kr_sentiment (device=-1)
+2026-02-13 13:55:13,840 - src.api.main - INFO - Sentiment pipeline warm-up 완료
+2026-02-13 13:55:13,840 - src.api.main - INFO - 서비스 warm-up 완료, readiness=True
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8001 (Press CTRL+C to quit)
+INFO:     127.0.0.1:56553 - "GET /health HTTP/1.1" 200 OK
+2026-02-13 13:55:37,519 - src.api.routers.vector - INFO - 포인트 준비 시작: 리뷰 142개, 레스토랑 5개
+2026-02-13 13:55:37,520 - src.vector_search - INFO - 총 142개의 리뷰를 배치로 인코딩합니다 (배치 크기: 32, 하이브리드: Dense + Sparse)
+2026-02-13 13:55:57,448 - src.vector_search - INFO - 총 142개의 포인트를 생성했습니다.
+2026-02-13 13:55:57,448 - src.api.routers.vector - INFO - 포인트 준비 완료: 142개 포인트 생성됨
+2026-02-13 13:55:57,450 - src.vector_search - INFO - 142개의 포인트를 upload_collection으로 업로드 시작... (컬렉션 형식: named 벡터)
+/Users/js/tasteam-new-async/src/vector_search.py:450: UserWarning: Local mode is not recommended for collections with more than 20,000 points. Current collection contains 20622 points. Consider using Qdrant in Docker or Qdrant Cloud for better performance with large datasets.
+  self.client.upload_collection(
+2026-02-13 13:55:57,540 - src.vector_search - INFO - 142개의 포인트를 upload_collection으로 업로드 완료했습니다.
+2026-02-13 13:55:57,540 - src.api.routers.vector - INFO - 업로드 완료: 142개 포인트
+2026-02-13 13:55:57,762 - src.vector_search - INFO - 레스토랑 5의 대표 벡터를 업데이트했습니다.
+2026-02-13 13:55:57,875 - src.vector_search - INFO - 레스토랑 2의 대표 벡터를 업데이트했습니다.
+2026-02-13 13:55:57,989 - src.vector_search - INFO - 레스토랑 4의 대표 벡터를 업데이트했습니다.
+2026-02-13 13:55:58,105 - src.vector_search - INFO - 레스토랑 1의 대표 벡터를 업데이트했습니다.
+2026-02-13 13:55:58,218 - src.vector_search - INFO - 레스토랑 3의 대표 벡터를 업데이트했습니다.
+2026-02-13 13:55:58,218 - src.api.routers.vector - INFO - restaurant_vectors 컬렉션에 5개 레스토랑 대표 벡터 생성 완료
+INFO:     127.0.0.1:56555 - "POST /api/v1/vector/upload HTTP/1.1" 200 OK
+2026-02-13 13:55:58,223 - src.cache - WARNING - Redis가 설치되지 않아 캐싱이 비활성화됩니다.
+2026-02-13 13:55:58,223 - src.cache - WARNING - Redis가 없어 락을 건너뜁니다.
+2026-02-13 13:55:58,340 - src.sentiment_analysis - INFO - 총 20개의 리뷰를 sentiment 모델로 분류합니다 (restaurant_id: 1).
+2026-02-13 13:55:59,655 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/run "HTTP/1.1 200 OK"
+2026-02-13 13:55:59,990 - httpx - INFO - HTTP Request: GET https://api.runpod.ai/v2/g09uegksn7h7ed/status/535157a3-043e-4dd5-94e9-45a37e217551-e1 "HTTP/1.1 200 OK"
+2026-02-13 13:56:02,352 - httpx - INFO - HTTP Request: GET https://api.runpod.ai/v2/g09uegksn7h7ed/status/535157a3-043e-4dd5-94e9-45a37e217551-e1 "HTTP/1.1 200 OK"
+2026-02-13 13:56:02,357 - src.sentiment_analysis - WARNING - LLM 재판정 실패: Expecting property name enclosed in double quotes: line 1 column 3 (char 2). 1차 분류 결과를 사용합니다.
+INFO:     127.0.0.1:56578 - "POST /api/v1/sentiment/analyze HTTP/1.1" 200 OK
+2026-02-13 13:56:02,507 - src.sentiment_analysis - INFO - 총 20개의 리뷰를 sentiment 모델로 분류합니다 (restaurant_id: 1).
+2026-02-13 13:56:02,618 - src.sentiment_analysis - INFO - 총 20개의 리뷰를 sentiment 모델로 분류합니다 (restaurant_id: 2).
+2026-02-13 13:56:02,731 - src.sentiment_analysis - INFO - 총 20개의 리뷰를 sentiment 모델로 분류합니다 (restaurant_id: 3).
+2026-02-13 13:56:02,846 - src.sentiment_analysis - INFO - 총 62개의 리뷰를 sentiment 모델로 분류합니다 (restaurant_id: 4).
+2026-02-13 13:56:02,961 - src.sentiment_analysis - INFO - 총 20개의 리뷰를 sentiment 모델로 분류합니다 (restaurant_id: 5).
+2026-02-13 13:56:05,761 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/run "HTTP/1.1 200 OK"
+2026-02-13 13:56:05,976 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/run "HTTP/1.1 200 OK"
+2026-02-13 13:56:06,025 - httpx - INFO - HTTP Request: GET https://api.runpod.ai/v2/g09uegksn7h7ed/status/7ed408ae-6b91-4b38-91cd-21bba46da1de-e1 "HTTP/1.1 200 OK"
+2026-02-13 13:56:06,277 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/run "HTTP/1.1 200 OK"
+2026-02-13 13:56:06,278 - httpx - INFO - HTTP Request: GET https://api.runpod.ai/v2/g09uegksn7h7ed/status/6afc6914-9b19-4d05-b957-5fcf50a09c98-e1 "HTTP/1.1 200 OK"
+2026-02-13 13:56:06,330 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/run "HTTP/1.1 200 OK"
+2026-02-13 13:56:06,551 - httpx - INFO - HTTP Request: GET https://api.runpod.ai/v2/g09uegksn7h7ed/status/97509995-3688-4e4d-91df-3cb240e4ff72-e2 "HTTP/1.1 200 OK"
+2026-02-13 13:56:06,594 - httpx - INFO - HTTP Request: GET https://api.runpod.ai/v2/g09uegksn7h7ed/status/0752dd56-203c-48ed-992d-b708a31ff824-e2 "HTTP/1.1 200 OK"
+2026-02-13 13:56:07,326 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/run "HTTP/1.1 200 OK"
+2026-02-13 13:56:07,601 - httpx - INFO - HTTP Request: GET https://api.runpod.ai/v2/g09uegksn7h7ed/status/0f65cb30-aa7e-4f6e-a826-30e9d21f3015-e1 "HTTP/1.1 200 OK"
+2026-02-13 13:56:08,376 - httpx - INFO - HTTP Request: GET https://api.runpod.ai/v2/g09uegksn7h7ed/status/7ed408ae-6b91-4b38-91cd-21bba46da1de-e1 "HTTP/1.1 200 OK"
+2026-02-13 13:56:08,378 - src.sentiment_analysis - WARNING - LLM 재판정 실패: Expecting property name enclosed in double quotes: line 1 column 3 (char 2). 1차 분류 결과를 사용합니다.
+2026-02-13 13:56:08,554 - httpx - INFO - HTTP Request: GET https://api.runpod.ai/v2/g09uegksn7h7ed/status/6afc6914-9b19-4d05-b957-5fcf50a09c98-e1 "HTTP/1.1 200 OK"
+2026-02-13 13:56:08,899 - httpx - INFO - HTTP Request: GET https://api.runpod.ai/v2/g09uegksn7h7ed/status/97509995-3688-4e4d-91df-3cb240e4ff72-e2 "HTTP/1.1 200 OK"
+2026-02-13 13:56:08,900 - httpx - INFO - HTTP Request: GET https://api.runpod.ai/v2/g09uegksn7h7ed/status/0752dd56-203c-48ed-992d-b708a31ff824-e2 "HTTP/1.1 200 OK"
+2026-02-13 13:56:09,948 - httpx - INFO - HTTP Request: GET https://api.runpod.ai/v2/g09uegksn7h7ed/status/0f65cb30-aa7e-4f6e-a826-30e9d21f3015-e1 "HTTP/1.1 200 OK"
+2026-02-13 13:56:09,950 - src.sentiment_analysis - WARNING - LLM 재판정 실패: Expecting property name enclosed in double quotes: line 1 column 3 (char 2). 1차 분류 결과를 사용합니다.
+2026-02-13 13:56:10,819 - httpx - INFO - HTTP Request: GET https://api.runpod.ai/v2/g09uegksn7h7ed/status/6afc6914-9b19-4d05-b957-5fcf50a09c98-e1 "HTTP/1.1 200 OK"
+2026-02-13 13:56:10,822 - src.sentiment_analysis - WARNING - LLM 재판정 실패: Expecting property name enclosed in double quotes: line 1 column 3 (char 2). 1차 분류 결과를 사용합니다.
+2026-02-13 13:56:11,162 - httpx - INFO - HTTP Request: GET https://api.runpod.ai/v2/g09uegksn7h7ed/status/97509995-3688-4e4d-91df-3cb240e4ff72-e2 "HTTP/1.1 200 OK"
+2026-02-13 13:56:11,162 - src.sentiment_analysis - WARNING - LLM 재판정 실패: Expecting property name enclosed in double quotes: line 1 column 3 (char 2). 1차 분류 결과를 사용합니다.
+2026-02-13 13:56:11,168 - httpx - INFO - HTTP Request: GET https://api.runpod.ai/v2/g09uegksn7h7ed/status/0752dd56-203c-48ed-992d-b708a31ff824-e2 "HTTP/1.1 200 OK"
+2026-02-13 13:56:11,171 - src.sentiment_analysis - WARNING - LLM 재판정 실패: Expecting property name enclosed in double quotes: line 1 column 3 (char 2). 1차 분류 결과를 사용합니다.
+INFO:     127.0.0.1:56583 - "POST /api/v1/sentiment/analyze/batch HTTP/1.1" 200 OK
+2026-02-13 13:56:11,176 - src.cache - WARNING - Redis가 없어 락을 건너뜁니다.
+2026-02-13 13:56:11,176 - src.api.routers.llm - INFO - 요약: 기본 시드만 사용
+2026-02-13 13:56:18,136 - src.summary_pipeline - ERROR - JSON 파싱 실패: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)
+INFO:     127.0.0.1:56606 - "POST /api/v1/llm/summarize HTTP/1.1" 200 OK
+2026-02-13 13:56:18,151 - src.api.routers.llm - INFO - 요약: 기본 시드만 사용
+2026-02-13 13:56:19,492 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/run "HTTP/1.1 200 OK"
+2026-02-13 13:56:19,769 - httpx - INFO - HTTP Request: GET https://api.runpod.ai/v2/g09uegksn7h7ed/status/9e150095-c79d-4b2c-b4ba-4c9f4ae0f50e-e2 "HTTP/1.1 200 OK"
+2026-02-13 13:56:19,936 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/run "HTTP/1.1 200 OK"
+2026-02-13 13:56:20,208 - httpx - INFO - HTTP Request: GET https://api.runpod.ai/v2/g09uegksn7h7ed/status/9ed45a0e-1a34-4f8d-ab96-56e243a31cc9-e1 "HTTP/1.1 200 OK"
+2026-02-13 13:56:22,047 - httpx - INFO - HTTP Request: GET https://api.runpod.ai/v2/g09uegksn7h7ed/status/9e150095-c79d-4b2c-b4ba-4c9f4ae0f50e-e2 "HTTP/1.1 200 OK"
+2026-02-13 13:56:22,541 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/run "HTTP/1.1 200 OK"
+2026-02-13 13:56:22,544 - httpx - INFO - HTTP Request: GET https://api.runpod.ai/v2/g09uegksn7h7ed/status/9ed45a0e-1a34-4f8d-ab96-56e243a31cc9-e1 "HTTP/1.1 200 OK"
+2026-02-13 13:56:22,822 - httpx - INFO - HTTP Request: GET https://api.runpod.ai/v2/g09uegksn7h7ed/status/7d2a1a7a-4694-41bc-a14a-0e41dd2e6802-e1 "HTTP/1.1 200 OK"
+2026-02-13 13:56:24,900 - httpx - INFO - HTTP Request: GET https://api.runpod.ai/v2/g09uegksn7h7ed/status/9ed45a0e-1a34-4f8d-ab96-56e243a31cc9-e1 "HTTP/1.1 200 OK"
+2026-02-13 13:56:25,157 - httpx - INFO - HTTP Request: GET https://api.runpod.ai/v2/g09uegksn7h7ed/status/7d2a1a7a-4694-41bc-a14a-0e41dd2e6802-e1 "HTTP/1.1 200 OK"
+2026-02-13 13:56:25,160 - src.summary_pipeline - ERROR - JSON 파싱 실패: Unterminated string starting at: line 1 column 193 (char 192)
+2026-02-13 13:56:25,336 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/run "HTTP/1.1 200 OK"
+2026-02-13 13:56:25,683 - httpx - INFO - HTTP Request: GET https://api.runpod.ai/v2/g09uegksn7h7ed/status/2431d5de-9148-4cb9-bc9f-055cc45e9b8d-e1 "HTTP/1.1 200 OK"
+2026-02-13 13:56:28,107 - httpx - INFO - HTTP Request: GET https://api.runpod.ai/v2/g09uegksn7h7ed/status/2431d5de-9148-4cb9-bc9f-055cc45e9b8d-e1 "HTTP/1.1 200 OK"
+2026-02-13 13:56:28,108 - src.summary_pipeline - ERROR - JSON 파싱 실패: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)
+INFO:     127.0.0.1:56629 - "POST /api/v1/llm/summarize/batch HTTP/1.1" 200 OK
+2026-02-13 13:56:28,118 - src.cache - WARNING - Redis가 없어 락을 건너뜁니다.
+2026-02-13 13:56:28,118 - src.comparison - INFO - comparison 진행: restaurant_id=4, restaurant_name=(이름없음)
+2026-02-13 13:56:28,187 - src.comparison - INFO - 전체 평균 ① 파일 시도 (Spark 직접 읽기): path=data/test_data_sample.json
+WARNING: Using incubator modules: jdk.incubator.vector
+/Users/js/miniconda3/envs/env_ai/lib/python3.11/site-packages/torch/cuda/__init__.py:63: FutureWarning: The pynvml package is deprecated. Please install nvidia-ml-py instead. If you did not install pynvml directly, please report this to the maintainers of the package that installed pynvml for you.
+  import pynvml  # type: ignore[import]
+Quantization is not supported for ArchType::neon. Fall back to non-quantized model.
+2026-02-13 13:56:44,150 - src.comparison - INFO - 전체 평균 ① 파일 사용 (Spark 직접 읽기): path=data/test_data_sample.json → service=0.6000, price=0.1818
+Quantization is not supported for ArchType::neon. Fall back to non-quantized model.
+2026-02-13 13:56:46,006 - src.comparison - INFO - 표본(단일 음식점) restaurant_id=4 service=0.6200, price=0.5000 | lift service=3%, price=175%
+2026-02-13 13:56:46,006 - src.comparison_pipeline - INFO - 표본 리뷰수 n=62 >= 50이므로 톤 '좋은 편' 사용
+2026-02-13 13:56:46,513 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/run "HTTP/1.1 200 OK"
+2026-02-13 13:56:46,515 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/run "HTTP/1.1 200 OK"
+2026-02-13 13:56:46,782 - httpx - INFO - HTTP Request: GET https://api.runpod.ai/v2/g09uegksn7h7ed/status/e051b0ca-3938-4464-a03a-7ad5e79a73de-e1 "HTTP/1.1 200 OK"
+2026-02-13 13:56:46,787 - httpx - INFO - HTTP Request: GET https://api.runpod.ai/v2/g09uegksn7h7ed/status/41b6fe14-1b85-4bb0-8bef-be7dcef20903-e2 "HTTP/1.1 200 OK"
+2026-02-13 13:56:49,058 - httpx - INFO - HTTP Request: GET https://api.runpod.ai/v2/g09uegksn7h7ed/status/e051b0ca-3938-4464-a03a-7ad5e79a73de-e1 "HTTP/1.1 200 OK"
+2026-02-13 13:56:49,064 - src.llm_utils - WARNING - 비교 해석 LLM 실패: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)
+2026-02-13 13:56:49,065 - httpx - INFO - HTTP Request: GET https://api.runpod.ai/v2/g09uegksn7h7ed/status/41b6fe14-1b85-4bb0-8bef-be7dcef20903-e2 "HTTP/1.1 200 OK"
+2026-02-13 13:56:49,066 - src.llm_utils - WARNING - 비교 해석 LLM 실패: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)
+INFO:     127.0.0.1:56649 - "POST /api/v1/llm/comparison HTTP/1.1" 200 OK
+2026-02-13 13:56:49,091 - src.comparison - INFO - comparison 진행: restaurant_id=4, restaurant_name=(이름없음)
+2026-02-13 13:56:49,091 - src.comparison - INFO - 전체 평균 ① 파일 시도 (Spark 직접 읽기): path=data/test_data_sample.json
+Quantization is not supported for ArchType::neon. Fall back to non-quantized model.
+2026-02-13 13:56:51,114 - src.comparison - INFO - 전체 평균 ① 파일 사용 (Spark 직접 읽기): path=data/test_data_sample.json → service=0.6000, price=0.1818
+Quantization is not supported for ArchType::neon. Fall back to non-quantized model.
+2026-02-13 13:56:52,889 - src.comparison - INFO - 표본(단일 음식점) restaurant_id=4 service=0.6200, price=0.5000 | lift service=3%, price=175%
+2026-02-13 13:56:52,889 - src.comparison_pipeline - INFO - 표본 리뷰수 n=62 >= 50이므로 톤 '좋은 편' 사용
+2026-02-13 13:56:52,889 - src.comparison - INFO - comparison 진행: restaurant_id=5, restaurant_name=(이름없음)
+2026-02-13 13:56:52,889 - src.comparison - INFO - 전체 평균 ① 파일 시도 (Spark 직접 읽기): path=data/test_data_sample.json
+Quantization is not supported for ArchType::neon. Fall back to non-quantized model.
+2026-02-13 13:56:54,919 - src.comparison - INFO - 전체 평균 ① 파일 사용 (Spark 직접 읽기): path=data/test_data_sample.json → service=0.6000, price=0.1818
+Quantization is not supported for ArchType::neon. Fall back to non-quantized model.
+2026-02-13 13:56:56,707 - src.comparison - INFO - 표본(단일 음식점) restaurant_id=5 service=0.6700, price=0.0700 | lift service=12%, price=-61%
+2026-02-13 13:56:56,707 - src.comparison_pipeline - INFO - 표본 리뷰수 20 <= n=20 < 50이므로 톤 '상대적으로 좋은 편' 사용
+2026-02-13 13:56:57,144 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/run "HTTP/1.1 200 OK"
+2026-02-13 13:56:57,148 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/run "HTTP/1.1 200 OK"
+2026-02-13 13:56:57,149 - httpx - INFO - HTTP Request: POST https://api.runpod.ai/v2/g09uegksn7h7ed/run "HTTP/1.1 200 OK"
+2026-02-13 13:56:57,424 - httpx - INFO - HTTP Request: GET https://api.runpod.ai/v2/g09uegksn7h7ed/status/e188775e-cc42-460f-8a3c-fb797ac0b9dd-e1 "HTTP/1.1 200 OK"
+2026-02-13 13:56:57,426 - httpx - INFO - HTTP Request: GET https://api.runpod.ai/v2/g09uegksn7h7ed/status/e2fd4663-283d-4754-8a65-553c31f5157b-e2 "HTTP/1.1 200 OK"
+2026-02-13 13:56:57,429 - httpx - INFO - HTTP Request: GET https://api.runpod.ai/v2/g09uegksn7h7ed/status/04677fdf-ab8f-4e00-a359-5062b5e9afa4-e2 "HTTP/1.1 200 OK"
+2026-02-13 13:56:59,698 - httpx - INFO - HTTP Request: GET https://api.runpod.ai/v2/g09uegksn7h7ed/status/e188775e-cc42-460f-8a3c-fb797ac0b9dd-e1 "HTTP/1.1 200 OK"
+2026-02-13 13:56:59,700 - src.llm_utils - WARNING - 비교 해석 LLM 실패: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)
+2026-02-13 13:56:59,723 - httpx - INFO - HTTP Request: GET https://api.runpod.ai/v2/g09uegksn7h7ed/status/04677fdf-ab8f-4e00-a359-5062b5e9afa4-e2 "HTTP/1.1 200 OK"
+2026-02-13 13:56:59,725 - src.llm_utils - WARNING - 비교 해석 LLM 실패: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)
+2026-02-13 13:56:59,774 - httpx - INFO - HTTP Request: GET https://api.runpod.ai/v2/g09uegksn7h7ed/status/e2fd4663-283d-4754-8a65-553c31f5157b-e2 "HTTP/1.1 200 OK"
+2026-02-13 13:56:59,775 - src.llm_utils - WARNING - 비교 해석 LLM 실패: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)
+INFO:     127.0.0.1:56697 - "POST /api/v1/llm/comparison/batch HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56726 - "POST /api/v1/vector/search/similar HTTP/1.1" 200 OK
+
+---
+
+RunPod 호출은 성공(200)하지만, RunPod에서 돌아온 **응답 본문을 JSON으로 파싱하는 단계에서** 에러가 나고 있습니다.
+
+
+[7 tools called]
+
+
+지금 터미널 로그 기준으로 보면, **RunPod 호출은 200으로 성공**하는데, 그 **응답 본문을 `json.loads()`로 파싱할 때** 실패하고 있습니다.
+
+---
+
+## 1. 어떤 에러가 나는지
+
+| 위치 | 로그 메시지 | 의미 |
+|------|-------------|------|
+| Sentiment (LLM 재판정) | `Expecting property name enclosed in double quotes: line 1 column 3 (char 2)` | 배열/객체 안에 **키가 큰따옴표로 감싸지 않음** (또는 작은따옴표만 사용) |
+| Summary | `Expecting property name enclosed in double quotes: line 1 column 2 (char 1)` | 위와 동일, **비표준 JSON** |
+| Summary | `Unterminated string starting at: line 1 column 193 (char 192)` | **문자열이 중간에 잘림** (보통 `max_tokens` 제한) |
+| Comparison (LLM 해석) | `Expecting property name enclosed in double quotes: line 1 column 2 (char 1)` | 마찬가지로 **키/문자열 따옴표 문제** |
+
+즉, **RunPod vLLM이 준 텍스트가 “표준 JSON”이 아니라서** `json.loads()`가 실패하는 상황입니다.
+
+---
+
+## 2. 원인 추정
+
+- **vLLM/채팅 모델이 흔히 하는 출력**
+  - 키를 작은따옴표로 출력: `{'interpretation': '...'}`  
+  - 키를 아예 따옴표 없이: `{interpretation: "..."}`  
+  - 이런 형태는 **JSON 표준이 아니라서** `json.loads()`가 에러를 냅니다.
+- **Unterminated string**
+  - 생성이 `max_tokens` 등으로 잘려서 문자열이 중간에 끊긴 경우입니다. Summary처럼 긴 JSON에서 자주 나옵니다.
+
+---
+
+## 3. 코드에서 파싱하는 위치
+
+- **Sentiment**: `sentiment_analysis.py` 271–272  
+  - `raw`에서 `[` ~ `]` 구간만 잘라서 `json.loads(raw)`.
+- **Summary**: `summary_pipeline.py` 132, 273  
+  - 정규식으로 `{ ... }` 블록 추출 후 `json.loads(text)`.
+- **Comparison**: `llm_utils.py` 840–842  
+  - `_extract_json_obj(raw)`로 `{` ~ `}` 구간 추출 후 `json.loads(json_text)`.
+
+여기서 “구간만 잘라낸 문자열”이 **여전히 표준 JSON이 아닐 때** 위 에러가 납니다.
+
+---
+
+## 4. 대응 방향 (구현은 Agent 모드에서)
+
+1. **파싱 전에 “유사 JSON” 정리**
+   - 추출한 문자열에서  
+     - 작은따옴표만 있는 키를 큰따옴표로 바꾸거나,  
+     - `ast.literal_eval()`(Python 리터럴용) 등으로 한 번 풀었다가 다시 직렬화하는 방식.  
+   - 또는 “JSON이 깨졌을 때만” 시도하는 fallback 파서를 한 겹 두는 방법.
+2. **프롬프트 명시**
+   - “반드시 유효한 JSON만 출력하고, 모든 키와 문자열은 **큰따옴표(double quote)** 로만 작성하라”고 강하게 명시.
+3. **Summary 끊김 방지**
+   - Summary용 `max_tokens`(또는 RunPod/vLLM 쪽 동등 설정)를 키워서, 긴 JSON이 중간에 잘리지 않게 하기.  
+   - “Unterminated string at column 193”은 이렇게 완화할 수 있습니다.
+
+정리하면, **지금 현상은 “RunPod 응답이 표준 JSON이 아니거나, 길어서 잘려서” `json.loads()`가 실패하는 것**이고, 위 세 가지(파싱 보정, 프롬프트, max_tokens)를 조합해서 수정하면 됩니다. 실제 코드 수정이 필요하면 Agent 모드에서 해당 파일들(`sentiment_analysis.py`, `summary_pipeline.py`, `llm_utils.py`)을 같이 보면서 적용할 수 있습니다.

@@ -13,13 +13,33 @@ import requests
 import torch
 import httpx
 from typing import Dict, List, Optional, Any, Union, Tuple
-from concurrent.futures import ThreadPoolExecutor
-
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from .config import Config
+from .json_parse_utils import parse_json_relaxed
 
 logger = logging.getLogger(__name__)
+
+# RunPod/vLLM: input + max_tokens <= model context. 보수적 추정(한글 많을수록 토큰 많음)
+VLLM_MAX_TOKENS_ABSOLUTE_CAP = 1024  # RunPod/vLLM 호출 시 max_tokens 절대 상한
+VLLM_CONTEXT_MARGIN = 256  # 출력 구간 여유
+
+
+def _estimate_input_tokens(messages: List[Dict[str, str]]) -> int:
+    """보수적 추정: 1토큰 ≈ 1.33자 (0647 948/540 재발 방지, 한글 많을수록 실제보다 많게)."""
+    total = sum(len(m.get("content", "") or "") for m in messages)
+    return max(0, (total * 3) // 4)
+
+
+def _cap_max_tokens_for_context(max_new_tokens: int, messages: List[Dict[str, str]]) -> int:
+    """RunPod/vLLM 컨텍스트 한도 내로 max_tokens 제한 (400 오류 방지). 보수적 추정·여유·절대상한 적용."""
+    estimated = _estimate_input_tokens(messages)
+    cap = Config.LLM_MAX_CONTEXT_LENGTH - estimated - VLLM_CONTEXT_MARGIN
+    if cap < 1:
+        # 입력이 이미 한도 근접 시 512 이하로 요청해 서버 400 방지
+        return max(1, min(max_new_tokens, 512))
+    capped = min(max_new_tokens, max(1, cap))
+    return min(capped, VLLM_MAX_TOKENS_ABSOLUTE_CAP)
 
 
 class LLMUtils:
@@ -38,7 +58,7 @@ class LLMUtils:
             model_name: 사용할 모델명 (기본값: Qwen/Qwen2.5-7B-Instruct)
             device: 사용할 디바이스 (vLLM 사용 시 무시)
             use_runpod: RunPod 서버리스 엔드포인트 사용 여부 (None이면 Config에서 가져옴)
-            use_pod_vllm: RunPod Pod에서 vLLM 직접 사용 여부 (None이면 Config에서 가져옴)
+            use_pod_vllm: RunPod Serverless vLLM 엔드포인트 사용 여부 (None이면 Config에서 가져옴)
             llm_provider: LLM 제공자 ('openai', 'runpod', 'local') (None이면 Config에서 가져옴)
         """
         self.model_name = model_name
@@ -56,9 +76,7 @@ class LLMUtils:
         self.openai_client = None
         self.openai_model = None
         self.use_openai_as_fallback = False
-        # OpenAI 429 시 vLLM 폴백용 (지연 초기화)
-        self._vllm_fallback_llm = None
-        # 429 폴백을 RunPod GPU(vLLM 엔드포인트)로 할 경우 사용
+        # 429 폴백을 RunPod GPU(vLLM 엔드포인트)로 할 경우 사용 (인프로세스 vLLM 제거됨)
         self._vllm_fallback_via_runpod = False
         self._vllm_fallback_endpoint_id: Optional[str] = None
         self._vllm_fallback_api_key: Optional[str] = None
@@ -131,29 +149,45 @@ class LLMUtils:
             self.device = None
             self.batch_size = Config.LLM_BATCH_SIZE  # 기본 배치 크기 설정
         elif self.use_pod_vllm:
-            # vLLM: RunPod GPU(Serverless) 사용 시 엔드포인트만 사용, 인프로세스 vLLM 미로드
-            if getattr(Config, "VLLM_USE_RUNPOD_GPU", False) and Config.RUNPOD_API_KEY:
+            # vLLM: RunPod Pod 직접 URL 우선, 없으면 Serverless 엔드포인트
+            pod_base = getattr(Config, "VLLM_POD_BASE_URL", None) and (Config.VLLM_POD_BASE_URL or "").strip()
+            if pod_base:
+                self.use_runpod = True
+                self.api_key = "dummy"  # Pod 직접 연결은 인증 없음
+                self.endpoint_id = ""
+                self._runpod_openai_base_url = pod_base.rstrip("/")
+                if not self._runpod_openai_base_url.endswith("/v1"):
+                    self._runpod_openai_base_url = f"{self._runpod_openai_base_url.rstrip('/')}/v1"
+                self._pod_direct_url = True
+                self.poll_interval = Config.RUNPOD_POLL_INTERVAL
+                self.max_wait_time = Config.RUNPOD_MAX_WAIT_TIME
+                logger.info("vLLM RunPod Pod 직접 연결: %s", self._runpod_openai_base_url)
+                self.model = None
+                self.tokenizer = None
+                self.device = None
+                self.batch_size = 1
+            else:
+                if not Config.RUNPOD_API_KEY:
+                    raise ValueError(
+                        "USE_POD_VLLM 사용 시 RUNPOD_API_KEY와 RunPod 엔드포인트가 필요합니다. "
+                        "RUNPOD_API_KEY, RUNPOD_VLLM_ENDPOINT_ID(또는 RUNPOD_ENDPOINT_ID)를 설정하세요."
+                    )
                 self.use_runpod = True
                 self.api_key = Config.RUNPOD_API_KEY
-                self.endpoint_id = (
-                    getattr(Config, "RUNPOD_VLLM_ENDPOINT_ID", None) or Config.RUNPOD_ENDPOINT_ID
-                )
+                raw_eid = getattr(Config, "RUNPOD_VLLM_ENDPOINT_ID", None) or Config.RUNPOD_ENDPOINT_ID
+                self.endpoint_id = (raw_eid or "").strip()
+                self._runpod_openai_base_url = f"https://api.runpod.ai/v2/{self.endpoint_id}/openai/v1"
+                self._pod_direct_url = False
                 self.poll_interval = Config.RUNPOD_POLL_INTERVAL
                 self.max_wait_time = Config.RUNPOD_MAX_WAIT_TIME
                 logger.info(
-                    "vLLM RunPod GPU 모드: 엔드포인트 %s (요청 시 GPU 기동, 유휴 시 스케일다운)",
+                    "vLLM RunPod Serverless: 엔드포인트 %s (OpenAI 호환 API, 요청 시 GPU 기동, 유휴 시 스케일다운)",
                     self.endpoint_id,
                 )
                 self.model = None
                 self.tokenizer = None
                 self.device = None
                 self.batch_size = 1
-            else:
-                # RunPod Pod에서 vLLM 직접 사용 (인프로세스)
-                logger.info(f"vLLM 직접 사용 모드: {model_name}")
-                self._init_vllm()
-                self.executor = ThreadPoolExecutor(max_workers=4)  # 비동기 실행용
-                self.use_runpod = False  # vLLM 사용 시 RunPod Serverless 비활성화
         elif self.use_runpod:
             # RunPod 서버리스 엔드포인트 사용
             if not Config.RUNPOD_API_KEY:
@@ -162,10 +196,12 @@ class LLMUtils:
                     "export RUNPOD_API_KEY='your_api_key' 또는 USE_RUNPOD=false로 설정하세요."
                 )
             self.api_key = Config.RUNPOD_API_KEY
-            self.endpoint_id = Config.RUNPOD_ENDPOINT_ID
+            raw_eid = Config.RUNPOD_ENDPOINT_ID or ""
+            self.endpoint_id = raw_eid.strip()
+            self._runpod_openai_base_url = f"https://api.runpod.ai/v2/{self.endpoint_id}/openai/v1"
             self.poll_interval = Config.RUNPOD_POLL_INTERVAL
             self.max_wait_time = Config.RUNPOD_MAX_WAIT_TIME
-            logger.info(f"RunPod 서버리스 엔드포인트 사용: {self.endpoint_id}")
+            logger.info(f"RunPod 서버리스 엔드포인트 사용: {self.endpoint_id} (OpenAI 호환 API)")
             self.model = None
             self.tokenizer = None
             self.device = None
@@ -219,52 +255,6 @@ class LLMUtils:
             self.model.eval()
             logger.info(f"✅ 로컬 Qwen 모델 로딩 완료: {model_name}")
     
-    def _init_vllm(self):
-        """vLLM 초기화"""
-        try:
-            from vllm import LLM, SamplingParams
-            
-            # vLLM 초기화 옵션
-            vllm_kwargs = {
-                "model": self.model_name,
-                "trust_remote_code": True,
-                "tensor_parallel_size": Config.VLLM_TENSOR_PARALLEL_SIZE,
-            }
-            
-            if Config.VLLM_MAX_MODEL_LEN:
-                vllm_kwargs["max_model_len"] = Config.VLLM_MAX_MODEL_LEN
-            
-            logger.info(f"vLLM 모델 로딩 중: {self.model_name}")
-            self.llm = LLM(**vllm_kwargs)
-            
-            # 기본 SamplingParams
-            self.sampling_params = SamplingParams(
-                temperature=0.1,
-                max_tokens=100,
-            )
-            
-            # 토크나이저는 vLLM이 내부적으로 사용하므로 별도 로드 불필요
-            # 하지만 프롬프트 생성용으로는 필요할 수 있음
-            try:
-                self.tokenizer = AutoTokenizer.from_pretrained(
-                    self.model_name, 
-                    trust_remote_code=True
-                )
-            except Exception as e:
-                logger.warning(f"토크나이저 로드 실패 (프롬프트 생성에 영향): {e}")
-                self.tokenizer = None
-            
-            logger.info("✅ vLLM 모델 로딩 완료")
-            
-            # vLLM 모드에서도 batch_size 설정
-            self.batch_size = Config.LLM_BATCH_SIZE
-            
-        except ImportError:
-            raise ImportError(
-                "vLLM이 설치되지 않았습니다. "
-                "pip install vllm>=0.3.3 또는 USE_POD_VLLM=false로 설정하세요."
-            )
-
     def _is_openai_rate_limit(self, e: Exception) -> bool:
         """OpenAI 429 Rate limit 예외 여부."""
         if e is None:
@@ -282,6 +272,39 @@ class LLMUtils:
             return True
         return "rate_limit" in str(e).lower() or "429" in str(e)
 
+    @staticmethod
+    def _extract_runpod_output(output: Any) -> str:
+        """
+        RunPod vLLM status 응답의 output에서 생성 텍스트만 추출.
+        output이 리스트면 [{"choices": [{"text": "..."}]}] 형식에서 텍스트 추출.
+        """
+        if output is None:
+            raise Exception("출력이 없습니다")
+        if isinstance(output, str):
+            return output.strip()
+        if isinstance(output, dict):
+            return str(output.get("text", output)).strip()
+        if isinstance(output, list) and len(output) > 0:
+            first = output[0]
+            if isinstance(first, str):
+                return first.strip()
+            if isinstance(first, dict):
+                if first.get("output") is not None:
+                    return str(first["output"]).strip()
+                choices = first.get("choices") or []
+                if choices and isinstance(choices[0], dict):
+                    c0 = choices[0]
+                    if c0.get("text") is not None:
+                        return str(c0["text"]).strip()
+                    msg = c0.get("message") or {}
+                    if isinstance(msg, dict) and msg.get("content") is not None:
+                        return str(msg["content"]).strip()
+                    tokens = c0.get("tokens")
+                    if isinstance(tokens, list):
+                        return " ".join(str(t) for t in tokens).strip()
+            return str(first).strip()
+        return str(output).strip()
+
     def _messages_to_prompt_for_vllm(self, messages: List[Dict[str, str]]) -> str:
         """OpenAI 형식 messages를 vLLM/RunPod용 단일 프롬프트 문자열로 변환."""
         prompt_parts = []
@@ -296,98 +319,103 @@ class LLMUtils:
                 prompt_parts.append(f"Assistant: {content}")
         return "\n\n".join(prompt_parts) + "\n\nAssistant:"
 
-    def _init_vllm_fallback(self) -> None:
-        """OpenAI 429 폴백용 vLLM 인스턴스 지연 초기화."""
-        if self._vllm_fallback_llm is not None:
-            return
-        if not Config.ENABLE_VLLM_FALLBACK_ON_RATE_LIMIT:
-            return
-        try:
-            from vllm import LLM, SamplingParams
-            model = Config.LLM_MODEL
-            vllm_kwargs: Dict[str, Any] = {
-                "model": model,
-                "trust_remote_code": True,
-                "tensor_parallel_size": Config.VLLM_TENSOR_PARALLEL_SIZE,
-            }
-            if Config.VLLM_MAX_MODEL_LEN:
-                vllm_kwargs["max_model_len"] = Config.VLLM_MAX_MODEL_LEN
-            logger.info("vLLM 폴백(429 시) 초기화 중: %s", model)
-            self._vllm_fallback_llm = LLM(**vllm_kwargs)
-            logger.info("vLLM 폴백 초기화 완료: %s", model)
-        except ImportError as e:
-            logger.warning("vLLM 폴백 초기화 실패 (vllm 미설치): %s", e)
-        except Exception as e:
-            logger.warning("vLLM 폴백 초기화 실패: %s", e)
+    def _runpod_openai_base_url_for(self, endpoint_id: Optional[str]) -> str:
+        """endpoint_id에 대해 RunPod OpenAI 호환 base URL 반환 (폴백 등). Pod 직접 URL 사용 시 인스턴스 URL 반환."""
+        if getattr(self, "_pod_direct_url", False):
+            return self._runpod_openai_base_url
+        eid = (endpoint_id or getattr(self, "endpoint_id", None) or "").strip()
+        if not eid:
+            raise ValueError("RunPod endpoint_id가 필요합니다.")
+        return f"https://api.runpod.ai/v2/{eid}/openai/v1"
 
-    def _generate_with_vllm_fallback_sync(
+    def _call_runpod_openai(
         self,
         messages: List[Dict[str, str]],
         temperature: float = 0.3,
-        max_new_tokens: int = 50,
+        max_new_tokens: int = 512,
+        endpoint_id: Optional[str] = None,
+        api_key: Optional[str] = None,
+        max_retries: int = None,
     ) -> str:
-        """vLLM 폴백으로 동기 1회 생성. _vllm_fallback_llm이 초기화된 상태에서만 호출."""
-        if self._vllm_fallback_llm is None:
-            raise RuntimeError("vLLM fallback not initialized")
-        from vllm import SamplingParams
-        prompt = self._messages_to_prompt_for_vllm(messages)
-        sampling_params = SamplingParams(
-            temperature=temperature,
-            max_tokens=max_new_tokens,
-        )
-        outputs = self._vllm_fallback_llm.generate([prompt], sampling_params)
-        text = outputs[0].outputs[0].text
-        return text.strip()
+        """
+        RunPod OpenAI 호환 API(/openai/v1)로 chat completions 호출 (동기).
+        채팅 템플릿이 적용되어 JSON 등 구조화 출력에 유리.
+        """
+        from openai import OpenAI
+        base_url = self._runpod_openai_base_url_for(endpoint_id)
+        key = api_key if api_key is not None else getattr(self, "api_key", None)
+        if not key:
+            raise ValueError("RunPod api_key가 필요합니다.")
+        retries = max_retries if max_retries is not None else Config.MAX_RETRIES
+        capped_max = _cap_max_tokens_for_context(max_new_tokens, messages)
+        client = OpenAI(api_key=key, base_url=base_url)
+        for attempt in range(retries):
+            try:
+                response = client.chat.completions.create(
+                    model=Config.LLM_MODEL,
+                    messages=messages,
+                    temperature=temperature,
+                    max_tokens=capped_max,
+                )
+                if getattr(response, "usage", None):
+                    self.last_tokens_used = response.usage.total_tokens
+                else:
+                    self.last_tokens_used = None
+                return (response.choices[0].message.content or "").strip()
+            except Exception as e:
+                logger.warning(
+                    "RunPod OpenAI API 실패 (시도 %s/%s): %s",
+                    attempt + 1, retries, e,
+                )
+                if attempt < retries - 1:
+                    time.sleep(2 ** attempt)
+                    continue
+                raise
+        raise Exception("RunPod OpenAI API 재시도 초과")
 
-    async def _generate_with_vllm_fallback_async(
+    async def _call_runpod_openai_async(
         self,
         messages: List[Dict[str, str]],
         temperature: float = 0.3,
-        max_new_tokens: int = 50,
+        max_new_tokens: int = 512,
+        endpoint_id: Optional[str] = None,
+        api_key: Optional[str] = None,
+        max_retries: int = None,
     ) -> str:
-        """vLLM 폴백 비동기: to_thread로 동기 생성 실행."""
-        self._init_vllm_fallback()
-        if self._vllm_fallback_llm is None:
-            raise RuntimeError("vLLM fallback not available (init failed or disabled)")
-        return await asyncio.to_thread(
-            self._generate_with_vllm_fallback_sync,
-            messages,
-            temperature,
-            max_new_tokens,
-        )
-
-    def _generate_with_vllm_primary_sync(
-        self,
-        messages: List[Dict[str, str]],
-        temperature: float = 0.3,
-        max_new_tokens: int = 50,
-    ) -> str:
-        """기동 시 1차 vLLM(self.llm)으로 동기 1회 생성. USE_POD_VLLM=True 시 사용."""
-        if self.llm is None:
-            raise RuntimeError("vLLM not initialized (USE_POD_VLLM=True and vllm installed?)")
-        from vllm import SamplingParams
-        prompt = self._messages_to_prompt_for_vllm(messages)
-        sampling_params = SamplingParams(
-            temperature=temperature,
-            max_tokens=max_new_tokens,
-        )
-        outputs = self.llm.generate([prompt], sampling_params)
-        text = outputs[0].outputs[0].text
-        return text.strip()
-
-    async def _generate_with_vllm_primary_async(
-        self,
-        messages: List[Dict[str, str]],
-        temperature: float = 0.3,
-        max_new_tokens: int = 50,
-    ) -> str:
-        """기동 시 1차 vLLM 비동기: to_thread로 동기 생성 실행. Summary/Comparison 배치용."""
-        return await asyncio.to_thread(
-            self._generate_with_vllm_primary_sync,
-            messages,
-            temperature,
-            max_new_tokens,
-        )
+        """
+        RunPod OpenAI 호환 API(/openai/v1)로 chat completions 호출 (비동기).
+        """
+        from openai import AsyncOpenAI
+        base_url = self._runpod_openai_base_url_for(endpoint_id)
+        key = api_key if api_key is not None else getattr(self, "api_key", None)
+        if not key:
+            raise ValueError("RunPod api_key가 필요합니다.")
+        retries = max_retries if max_retries is not None else Config.MAX_RETRIES
+        capped_max = _cap_max_tokens_for_context(max_new_tokens, messages)
+        client = AsyncOpenAI(api_key=key, base_url=base_url)
+        for attempt in range(retries):
+            try:
+                response = await client.chat.completions.create(
+                    model=Config.LLM_MODEL,
+                    messages=messages,
+                    temperature=temperature,
+                    max_tokens=capped_max,
+                )
+                if getattr(response, "usage", None):
+                    self.last_tokens_used = response.usage.total_tokens
+                else:
+                    self.last_tokens_used = None
+                return (response.choices[0].message.content or "").strip()
+            except Exception as e:
+                logger.warning(
+                    "RunPod OpenAI API 실패 (시도 %s/%s): %s",
+                    attempt + 1, retries, e,
+                )
+                if attempt < retries - 1:
+                    await asyncio.sleep(2 ** attempt)
+                    continue
+                raise
+        raise Exception("RunPod OpenAI API 재시도 초과")
 
     def _call_runpod(self, prompt: str, max_retries: int = Config.MAX_RETRIES) -> str:
         """
@@ -451,17 +479,7 @@ class LLMUtils:
                     
                     if status == "COMPLETED":
                         output = status_info.get("output")
-                        if output:
-                            # RunPod 엔드포인트에서 반환하는 형식에 따라 조정 필요
-                            if isinstance(output, str):
-                                return output
-                            elif isinstance(output, dict):
-                                # vLLM 엔드포인트의 경우 output.text 또는 output 형식일 수 있음
-                                return output.get("text", str(output))
-                            else:
-                                return str(output)
-                        else:
-                            raise Exception("출력이 없습니다")
+                        return self._extract_runpod_output(output)
                     elif status == "FAILED":
                         error = status_info.get("error", "알 수 없는 오류")
                         raise Exception(f"RunPod 작업 실패: {error}")
@@ -553,13 +571,7 @@ class LLMUtils:
 
                         if status == "COMPLETED":
                             output = status_info.get("output")
-                            if output:
-                                if isinstance(output, str):
-                                    return output.strip()
-                                if isinstance(output, dict):
-                                    return str(output.get("text", output)).strip()
-                                return str(output).strip()
-                            raise Exception("출력이 없습니다")
+                            return self._extract_runpod_output(output)
                         if status == "FAILED":
                             error = status_info.get("error", "알 수 없는 오류")
                             raise Exception(f"RunPod 작업 실패: {error}")
@@ -655,23 +667,9 @@ class LLMUtils:
         temperature: float = 0.3,
         max_new_tokens: int = 50,
     ) -> str:
-        """로컬 큐 비동기: RunPod(httpx), vLLM(to_thread), 로컬 미지원."""
-        if self.use_runpod:
-            prompt_parts = []
-            for msg in messages:
-                role = msg.get("role", "user")
-                content = msg.get("content", "")
-                if role == "system":
-                    prompt_parts.append(f"System: {content}")
-                elif role == "user":
-                    prompt_parts.append(f"User: {content}")
-                elif role == "assistant":
-                    prompt_parts.append(f"Assistant: {content}")
-            prompt = "\n\n".join(prompt_parts) + "\n\nAssistant:"
-            response = await self._call_runpod_async(prompt)
-            return response.strip()
-        elif self.use_pod_vllm:
-            return await self._generate_with_vllm_primary_async(
+        """로컬 큐 비동기: RunPod Serverless OpenAI 호환 API 사용."""
+        if self.use_runpod or self.use_pod_vllm:
+            return await self._call_runpod_openai_async(
                 messages, temperature, max_new_tokens
             )
         else:
@@ -710,21 +708,20 @@ class LLMUtils:
             except Exception as e:
                 self.last_tokens_used = None
                 if self._is_openai_rate_limit(e) and Config.ENABLE_VLLM_FALLBACK_ON_RATE_LIMIT:
-                    logger.warning("OpenAI rate limit (429), vLLM 폴백 시도: %s", e)
-                    try:
-                        if getattr(self, "_vllm_fallback_via_runpod", False):
-                            prompt = self._messages_to_prompt_for_vllm(messages)
-                            return await self._call_runpod_async(
-                                prompt,
+                    if getattr(self, "_vllm_fallback_via_runpod", False):
+                        logger.warning("OpenAI rate limit (429), RunPod vLLM 폴백 시도: %s", e)
+                        try:
+                            return await self._call_runpod_openai_async(
+                                messages,
+                                temperature=temperature,
+                                max_new_tokens=max_new_tokens,
                                 endpoint_id=self._vllm_fallback_endpoint_id,
                                 api_key=self._vllm_fallback_api_key,
                             )
-                        return await self._generate_with_vllm_fallback_async(
-                            messages, temperature, max_new_tokens
-                        )
-                    except Exception as fallback_e:
-                        logger.error("vLLM 폴백 실패: %s", fallback_e)
-                        raise e
+                        except Exception as fallback_e:
+                            logger.error("RunPod vLLM 폴백 실패: %s", fallback_e)
+                            raise e
+                    raise
                 raise
         else:
             try:
@@ -774,29 +771,11 @@ class LLMUtils:
         Returns:
             생성된 응답 텍스트
         """
-        if self.use_runpod:
-            # RunPod 서버리스 엔드포인트 사용
-            # Qwen chat template 형식으로 변환 (로컬 토크나이저 없이 직접 구성)
-            prompt_parts = []
-            for msg in messages:
-                role = msg.get("role", "user")
-                content = msg.get("content", "")
-                if role == "system":
-                    prompt_parts.append(f"System: {content}")
-                elif role == "user":
-                    prompt_parts.append(f"User: {content}")
-                elif role == "assistant":
-                    prompt_parts.append(f"Assistant: {content}")
-            
-            prompt = "\n\n".join(prompt_parts) + "\n\nAssistant:"
-            
-            # RunPod 호출
-            response = self._call_runpod(prompt)
-            return response.strip()
-        elif self.use_pod_vllm:
-            # vLLM 직접 사용 (비동기 처리 필요)
-            # 동기 메서드에서는 vLLM을 직접 사용할 수 없으므로 에러 발생
-            raise NotImplementedError("vLLM은 비동기 메서드를 사용해야 합니다.")
+        if self.use_runpod or self.use_pod_vllm:
+            # RunPod OpenAI 호환 API 사용 (채팅 템플릿 적용, JSON 출력 안정)
+            return self._call_runpod_openai(
+                messages, temperature=temperature, max_new_tokens=max_new_tokens
+            )
         else:
             # 로컬 모델 사용
             # Gemma 모델은 system role을 지원하지 않으므로 변환 필요
@@ -1018,7 +997,9 @@ class LLMUtils:
                 return None
 
             json_text = _extract_json_obj(raw) or raw
-            data = json.loads(json_text)
+            data = parse_json_relaxed(json_text)
+            if not isinstance(data, dict):
+                data = {}
             interp = data.get("interpretation")
             if isinstance(interp, str):
                 interp = _enforce_one_sentence(interp)

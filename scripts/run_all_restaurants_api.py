@@ -10,7 +10,7 @@
   1. POST /api/v1/vector/upload  (선택, 기본 수행: 입력 JSON으로 벡터 DB 업로드)
   2. 한 청크 내에서 3개 병렬:
      - POST /api/v1/llm/summarize/batch  (요약)
-     - POST /api/v1/sentiment/analyze/batch  (감성 분석, 리뷰 전달)
+     - POST /api/v1/sentiment/analyze/batch  (감성 분석, 리뷰는 벡터 DB에서 조회)
      - POST /api/v1/llm/comparison/batch  (비교)
 
 출력 JSON:
@@ -153,20 +153,14 @@ async def call_sentiment_batch_async(
     client: httpx.AsyncClient,
     base_url: str,
     restaurants_chunk: List[Dict],
-    reviews_by_rid: Dict[int, List[Dict]],
     timeout: float = 600.0,
 ) -> tuple[List[Dict], List[Optional[str]]]:
-    """감성 분석 배치 API 비동기 호출. (results, errors) 반환."""
+    """감성 분석 배치 API 비동기 호출. 리뷰는 벡터 DB에서 조회. (results, errors) 반환."""
     url = f"{base_url.rstrip('/')}{API_PREFIX}/sentiment/analyze/batch"
-    restaurants_payload = []
-    for r in restaurants_chunk:
-        rid = r["id"]
-        reviews = reviews_by_rid.get(rid) or []
-        restaurants_payload.append({
-            "restaurant_id": rid,
-            "restaurant_name": r.get("name"),
-            "reviews": reviews,
-        })
+    restaurants_payload = [
+        {"restaurant_id": r["id"], "restaurant_name": r.get("name")}
+        for r in restaurants_chunk
+    ]
     payload = {"restaurants": restaurants_payload}
     try:
         resp = await client.post(url, json=payload, timeout=timeout)
@@ -257,7 +251,6 @@ async def run_async(
     if limit_restaurants is not None:
         restaurants = restaurants[:limit_restaurants]
     total = len(restaurants)
-    reviews_by_rid = build_reviews_by_restaurant(reviews, max_per_restaurant=sentiment_reviews_limit)
     timeout_float = float(timeout)
 
     results: List[Dict[str, Any]] = []
@@ -275,7 +268,7 @@ async def run_async(
             tasks: List[Any] = [
                 call_summary_batch_async(client, base_url, chunk, limit=summary_limit, timeout=timeout_float)
                 if "summary" in apis else empty_result(chunk_size),
-                call_sentiment_batch_async(client, base_url, chunk, reviews_by_rid, timeout=timeout_float)
+                call_sentiment_batch_async(client, base_url, chunk, timeout=timeout_float)
                 if "sentiment" in apis else empty_result(chunk_size),
                 call_comparison_batch_async(client, base_url, chunk, all_average_data_path=input_path, timeout=timeout_float)
                 if "comparison" in apis else empty_result(chunk_size),
@@ -338,12 +331,32 @@ def main() -> None:
     parser.add_argument("--apis", type=str, nargs="+", default=["summary", "sentiment", "comparison"], help="호출할 API: summary sentiment comparison")
     parser.add_argument("--timeout", type=int, default=600, help="API 요청 타임아웃(초)")
     parser.add_argument("--no-upload", action="store_true", help="벡터 업로드 생략 (이미 업로드된 경우)")
+    parser.add_argument("--upload-only", action="store_true", help="벡터 업로드만 수행 후 종료 (ingestion 배치용)")
     parser.add_argument("--upload-timeout", type=int, default=DEFAULT_UPLOAD_TIMEOUT, help="벡터 업로드 요청 타임아웃(초)")
     args = parser.parse_args()
 
     if not args.input.is_file():
         print(f"오류: 입력 파일이 없습니다: {args.input}", file=sys.stderr)
         sys.exit(1)
+
+    if args.upload_only:
+        # ingestion 전용: 벡터 업로드만 수행
+        async def _upload_only():
+            reviews, restaurants = load_data(args.input)
+            if not reviews and not restaurants:
+                print("경고: reviews, restaurants 모두 비어 있습니다.", file=sys.stderr)
+                return
+            async with httpx.AsyncClient() as client:
+                upload_payload = {"reviews": reviews, "restaurants": restaurants or []}
+                print(f"벡터 업로드 중: 리뷰 {len(reviews)}개, 레스토랑 {len(restaurants or [])}개...")
+                ok, msg = await call_upload_async(client, args.base_url, upload_payload, timeout=float(args.upload_timeout))
+                if ok:
+                    print(msg)
+                else:
+                    print(f"실패: {msg}", file=sys.stderr)
+                    sys.exit(1)
+        asyncio.run(_upload_only())
+        return
 
     def _run_one_port(port: int) -> Tuple[int, Dict[str, Any]]:
         url = f"http://localhost:{port}"

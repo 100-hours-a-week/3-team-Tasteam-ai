@@ -1,0 +1,151 @@
+(env_ai) js@jinsoos-MacBook-Pro tasteam-new-async % python app.py
+/Users/js/miniconda3/envs/env_ai/lib/python3.11/site-packages/torch/cuda/__init__.py:63: FutureWarning: The pynvml package is deprecated. Please install nvidia-ml-py instead. If you did not install pynvml directly, please report this to the maintainers of the package that installed pynvml for you.
+  import pynvml  # type: ignore[import]
+Redis가 설치되지 않았습니다. 캐싱이 비활성화됩니다.
+2026-02-13 15:03:46,856 - src.api.main - WARNING - prometheus_fastapi_instrumentator 미설치: /metrics 비활성화. 설치: pip install prometheus-client prometheus-fastapi-instrumentator
+INFO:     Started server process [6708]
+INFO:     Waiting for application startup.
+2026-02-13 15:03:46,913 - src.api.main - INFO - FastAPI 애플리케이션 시작
+/Users/js/tasteam-new-async/src/api/dependencies.py:56: UserWarning: Local mode is not recommended for collections with more than 20,000 points. Collection <reviews_collection> contains 20622 points. Consider using Qdrant in Docker or Qdrant Cloud for better performance with large datasets.
+  client = QdrantClient(path=qdrant_path)
+/Users/js/tasteam-new-async/src/vector_search.py:69: UserWarning: The model sentence-transformers/paraphrase-multilingual-mpnet-base-v2 now uses mean pooling instead of CLS embedding. In order to preserve the previous behaviour, consider either pinning fastembed version to 0.5.1 or using `add_custom_model` functionality.
+  self._dense_model = TextEmbedding(Config.EMBEDDING_MODEL)
+2026-02-13 15:03:49,837 - src.vector_search - INFO - Dense 벡터 모델 로드 완료: sentence-transformers/paraphrase-multilingual-mpnet-base-v2
+2026-02-13 15:03:49,936 - src.vector_search - INFO - Sparse 벡터 모델 로드 완료: Qdrant/bm25
+2026-02-13 15:03:49,945 - src.api.main - INFO - VectorSearch(임베딩) warm-up 완료
+2026-02-13 15:03:49,945 - src.llm_utils - INFO - vLLM RunPod Serverless: 엔드포인트 2mpd5y6lvccfk1 (OpenAI 호환 API, 요청 시 GPU 기동, 유휴 시 스케일다운)
+2026-02-13 15:03:50,576 - httpx - INFO - HTTP Request: HEAD https://huggingface.co/Dilwolf/Kakao_app-kr_sentiment/resolve/main/config.json "HTTP/1.1 307 Temporary Redirect"
+2026-02-13 15:03:50,613 - httpx - INFO - HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/Dilwolf/Kakao_app-kr_sentiment/aaae4554e0c4b5cf45c6f27722b21717d027f5ff/config.json "HTTP/1.1 200 OK"
+2026-02-13 15:03:50,862 - httpx - INFO - HTTP Request: HEAD https://huggingface.co/Dilwolf/Kakao_app-kr_sentiment/resolve/main/config.json "HTTP/1.1 307 Temporary Redirect"
+2026-02-13 15:03:50,875 - httpx - INFO - HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/Dilwolf/Kakao_app-kr_sentiment/aaae4554e0c4b5cf45c6f27722b21717d027f5ff/config.json "HTTP/1.1 200 OK"
+Loading weights: 100%|█| 201/201 [00:00<00:00, 5191.55it/s, Materializing param=cl
+2026-02-13 15:03:51,314 - httpx - INFO - HTTP Request: GET https://huggingface.co/api/models/Dilwolf/Kakao_app-kr_sentiment/tree/main/additional_chat_templates?recursive=false&expand=false "HTTP/1.1 404 Not Found"
+2026-02-13 15:03:51,623 - httpx - INFO - HTTP Request: GET https://huggingface.co/api/models/Dilwolf/Kakao_app-kr_sentiment/tree/main?recursive=true&expand=false "HTTP/1.1 200 OK"
+2026-02-13 15:03:52,003 - httpx - INFO - HTTP Request: GET https://huggingface.co/api/models/Dilwolf/Kakao_app-kr_sentiment "HTTP/1.1 200 OK"
+2026-02-13 15:03:52,006 - src.sentiment_analysis - INFO - Sentiment 모델 로딩 완료: Dilwolf/Kakao_app-kr_sentiment (device=-1)
+2026-02-13 15:03:52,606 - src.api.main - INFO - Sentiment pipeline warm-up 완료
+2026-02-13 15:03:52,607 - src.api.main - INFO - 서비스 warm-up 완료, readiness=True
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8001 (Press CTRL+C to quit)
+INFO:     127.0.0.1:62646 - "GET /health HTTP/1.1" 200 OK
+2026-02-13 15:04:02,030 - src.api.routers.vector - INFO - 포인트 준비 시작: 리뷰 142개, 레스토랑 5개
+2026-02-13 15:04:02,032 - src.vector_search - INFO - 총 142개의 리뷰를 배치로 인코딩합니다 (배치 크기: 32, 하이브리드: Dense + Sparse)
+2026-02-13 15:04:21,773 - src.vector_search - INFO - 총 142개의 포인트를 생성했습니다.
+2026-02-13 15:04:21,774 - src.api.routers.vector - INFO - 포인트 준비 완료: 142개 포인트 생성됨
+2026-02-13 15:04:21,778 - src.vector_search - INFO - 142개의 포인트를 upload_collection으로 업로드 시작... (컬렉션 형식: named 벡터)
+/Users/js/tasteam-new-async/src/vector_search.py:450: UserWarning: Local mode is not recommended for collections with more than 20,000 points. Current collection contains 20622 points. Consider using Qdrant in Docker or Qdrant Cloud for better performance with large datasets.
+  self.client.upload_collection(
+2026-02-13 15:04:21,894 - src.vector_search - INFO - 142개의 포인트를 upload_collection으로 업로드 완료했습니다.
+2026-02-13 15:04:21,894 - src.api.routers.vector - INFO - 업로드 완료: 142개 포인트
+2026-02-13 15:04:22,152 - src.vector_search - INFO - 레스토랑 4의 대표 벡터를 업데이트했습니다.
+2026-02-13 15:04:22,267 - src.vector_search - INFO - 레스토랑 2의 대표 벡터를 업데이트했습니다.
+2026-02-13 15:04:22,380 - src.vector_search - INFO - 레스토랑 1의 대표 벡터를 업데이트했습니다.
+2026-02-13 15:04:22,498 - src.vector_search - INFO - 레스토랑 5의 대표 벡터를 업데이트했습니다.
+2026-02-13 15:04:22,611 - src.vector_search - INFO - 레스토랑 3의 대표 벡터를 업데이트했습니다.
+2026-02-13 15:04:22,611 - src.api.routers.vector - INFO - restaurant_vectors 컬렉션에 5개 레스토랑 대표 벡터 생성 완료
+INFO:     127.0.0.1:62648 - "POST /api/v1/vector/upload HTTP/1.1" 200 OK
+2026-02-13 15:04:22,625 - src.cache - WARNING - Redis가 설치되지 않아 캐싱이 비활성화됩니다.
+2026-02-13 15:04:22,625 - src.cache - WARNING - Redis가 없어 락을 건너뜁니다.
+2026-02-13 15:04:22,746 - src.sentiment_analysis - INFO - 총 20개의 리뷰를 sentiment 모델로 분류합니다 (restaurant_id: 1).
+2026-02-13 15:06:22,889 - src.sentiment_analysis - INFO - 총 20개의 리뷰를 sentiment 모델로 분류합니다 (restaurant_id: 1).
+2026-02-13 15:06:23,018 - src.sentiment_analysis - INFO - 총 20개의 리뷰를 sentiment 모델로 분류합니다 (restaurant_id: 2).
+2026-02-13 15:06:23,126 - src.sentiment_analysis - INFO - 총 20개의 리뷰를 sentiment 모델로 분류합니다 (restaurant_id: 3).
+2026-02-13 15:06:23,243 - src.sentiment_analysis - INFO - 총 62개의 리뷰를 sentiment 모델로 분류합니다 (restaurant_id: 4).
+2026-02-13 15:06:23,362 - src.sentiment_analysis - INFO - 총 20개의 리뷰를 sentiment 모델로 분류합니다 (restaurant_id: 5).
+2026-02-13 15:08:22,664 - src.cache - WARNING - Redis가 없어 락을 건너뜁니다.
+2026-02-13 15:08:22,664 - src.api.routers.llm - INFO - 요약: 기본 시드만 사용
+
+---
+
+96qgdufqhcemh6
+
+idle
+
+US
+
+US-MO-1
+
+A100 SXM
+16 vCPUs
+
+250 GB RAM
+
+-
+
+3
+
+Outdated
+eyau2qa7o3uzyk
+
+idle
+
+US
+
+US-WA-1
+
+A100 SXM
+32 vCPUs
+
+250 GB RAM
+
+-
+
+3
+
+Outdated
+mob7x8pykse7kn
+
+initializing
+
+CZ
+
+EU-CZ-1
+
+RTX 3090
+32 vCPUs
+
+117 GB RAM
+
+-
+
+2
+
+Outdated
+yzvcda1ejqc9hh
+
+
+initializing
+
+SE
+
+EU-SE-1
+
+RTX A5000
+9 vCPUs
+
+50 GB RAM
+
+-
+
+2
+
+Outdated
+ord4x9noyozhmo
+
+
+initializing
+
+US
+
+US-WA-1
+
+A100 SXM
+32 vCPUs
+
+250 GB RAM
+
+-
+
+6
+
+Latest

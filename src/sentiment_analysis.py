@@ -10,10 +10,32 @@ import threading
 from typing import Dict, List, Optional, Any, Tuple, Union
 
 from .config import Config
+from .json_parse_utils import parse_json_relaxed, extract_json_block
 from .review_utils import extract_content_list
 
 # 로깅 설정
 logger = logging.getLogger(__name__)
+
+
+def _parse_sentiment_json(raw: str):
+    """LLM 재판정 응답에서 JSON 배열 추출·파싱. 마크다운 제거 후 배열만 파싱. 성공 시 list, 실패 시 None."""
+    if not raw or not isinstance(raw, str):
+        return None
+    s = raw.strip()
+    if not s:
+        return None
+    # 배열 우선 추출 (마크다운/앞뒤 설명 제거)
+    extracted = extract_json_block(s, want_object=False)
+    if extracted:
+        s = extracted
+    else:
+        # fallback: 첫 [ ~ 마지막 ]
+        idx_l = s.find("[")
+        idx_r = s.rfind("]")
+        if idx_l >= 0 and idx_r > idx_l:
+            s = s[idx_l : idx_r + 1]
+    result = parse_json_relaxed(s)
+    return result if isinstance(result, list) else None
 
 
 class SentimentAnalyzer:
@@ -27,12 +49,15 @@ class SentimentAnalyzer:
     def __init__(
         self,
         vector_search: Optional[Any] = None,
+        llm_utils: Optional[Any] = None,
     ):
         """
         Args:
             vector_search: VectorSearch 인스턴스 (reviews 미제공 시 전체 리뷰 조회용)
+            llm_utils: LLMUtils 인스턴스 (LLM 재판정 시 Config/LLM_PROVIDER·RunPod 반영, None이면 API 의존성에서 주입)
         """
         self.vector_search = vector_search
+        self.llm_utils = llm_utils
 
     @classmethod
     def _get_sentiment_pipeline(cls):
@@ -138,34 +163,44 @@ class SentimentAnalyzer:
             for idx, out in zip(batch_indices, outputs):
                 # outputs는 리스트의 리스트: [[{"label": "...", "score": ...}, ...], ...]
                 if isinstance(out, list) and len(out) >= 2:
-                    # positive score (인덱스 1) 확인 (meta tensor 등은 _score_to_float로 안전 변환)
-                    raw_score = out[1].get("score", 0.0) if len(out) > 1 else 0.0
+                    # 레이블 문자열로 긍정 점수 조회 (모델 출력 순서는 점수/라벨에 따라 달라질 수 있음)
+                    raw_score = 0.0
+                    for item in out:
+                        if not isinstance(item, dict):
+                            continue
+                        lab = item.get("label", "")
+                        if self._map_label_to_binary(lab) == "positive":
+                            raw_score = item.get("score", 0.0)
+                            break
+                    if raw_score == 0.0 and len(out) > 1:
+                        raw_score = out[1].get("score", 0.0)  # fallback
                     positive_score = self._score_to_float(raw_score)
                     is_positive = positive_score > 0.8
-                    
+                    # 0.3 미만: 확정 negative(재판정 제외), 0.3~0.8: 애매 구간만 LLM 재판정
+                    need_llm_reclassify = 0.3 <= positive_score < 0.8
+
                     if is_positive:
                         sentiment_labels.append("positive")
                         positive_count += 1
                     else:
-                        # negative로 1차 분류, LLM 재판정 대상에 추가
-                        sentiment_labels.append("negative")  # 임시로 negative
-                        # ReviewModel (Pydantic)인 경우 딕셔너리로 변환
-                        review_obj = None
-                        if reviews and idx < len(reviews):
-                            review = reviews[idx]
-                            if hasattr(review, 'model_dump'):
-                                review_obj = review.model_dump()
-                            elif hasattr(review, 'dict'):
-                                review_obj = review.dict()
-                            elif isinstance(review, dict):
-                                review_obj = review
-                        
-                        negative_reviews_for_llm.append({
-                            "index": idx,
-                            "content": content_list[idx],
-                            "review": review_obj
-                        })
+                        sentiment_labels.append("negative")
                         negative_count += 1
+                        if need_llm_reclassify:
+                            # 애매 구간만 LLM 재판정 대상에 추가
+                            review_obj = None
+                            if reviews and idx < len(reviews):
+                                review = reviews[idx]
+                                if hasattr(review, 'model_dump'):
+                                    review_obj = review.model_dump()
+                                elif hasattr(review, 'dict'):
+                                    review_obj = review.dict()
+                                elif isinstance(review, dict):
+                                    review_obj = review
+                            negative_reviews_for_llm.append({
+                                "index": idx,
+                                "content": content_list[idx],
+                                "review": review_obj
+                            })
 
         return positive_count, negative_count, neutral_count, total_count, sentiment_labels, negative_reviews_for_llm
 
@@ -177,34 +212,52 @@ class SentimentAnalyzer:
         negative_count: int,
         neutral_count: int,
     ) -> Tuple[int, int, int, List[Optional[str]]]:
-        """LLM 재판정 (동기)."""
-        from openai import OpenAI
-        client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        """LLM 재판정 (동기). LLMUtils 사용 시 Config/LLM_PROVIDER·RunPod 반영."""
         llm_input = "\n".join([
             f'{item["review"].get("id") if item["review"] else item["index"]}\t{item["content"]}'
             for item in negative_reviews_for_llm
         ])
-        response = client.chat.completions.create(
-            model=Config.OPENAI_MODEL,
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are a sentiment classification engine.\n"
-                        "Each input line is formatted as: id<TAB>review.\n"
-                        "Classify sentiment as one of: positive, negative, neutral.\n"
-                        "Return ONLY a valid JSON array like:\n"
-                        '[{"id":105,"sentiment":"positive"}]'
-                    )
-                },
-                {"role": "user", "content": llm_input}
-            ],
-            temperature=0
-        )
-        raw = response.choices[0].message.content.strip()
-        raw = raw[raw.find("["): raw.rfind("]")+1]
-        results = json.loads(raw)
-        sentiment_map = {x["id"]: x["sentiment"] for x in results}
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You are a sentiment classification engine.\n"
+                    "Each input line is formatted as: id<TAB>review.\n"
+                    "Classify sentiment as one of: positive, negative, neutral.\n"
+                    "Return ONLY a valid JSON array like:\n"
+                    '[{"id":105,"sentiment":"positive"}]'
+                )
+            },
+            {"role": "user", "content": llm_input}
+        ]
+        if self.llm_utils:
+            raw = self.llm_utils._generate_response(
+                messages, temperature=0, max_new_tokens=2048
+            )
+        else:
+            from openai import OpenAI
+            client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+            response = client.chat.completions.create(
+                model=Config.OPENAI_MODEL,
+                messages=messages,
+                temperature=0
+            )
+            raw = response.choices[0].message.content.strip()
+        results = _parse_sentiment_json(raw)
+        if not results and self.llm_utils and raw and "[" in raw and "]" in raw:
+            try:
+                fix_raw = self.llm_utils._generate_response(
+                    [{"role": "user", "content": "Return only a valid JSON array. Each item: {\"id\": number, \"sentiment\": \"positive\"|\"negative\"|\"neutral\"}. No other text.\n\n" + raw[:2500]}],
+                    temperature=0,
+                    max_new_tokens=1024,
+                )
+                results = _parse_sentiment_json(fix_raw.strip() if fix_raw else "")
+            except Exception:
+                pass
+        if not results:
+            logger.warning("LLM 재판정 실패: JSON 파싱 불가(비표준 형식). 1차 분류 결과를 사용합니다.")
+            return positive_count, negative_count, neutral_count, sentiment_labels
+        sentiment_map = {x["id"]: x["sentiment"] for x in results if isinstance(x, dict) and "id" in x and "sentiment" in x}
         for item in negative_reviews_for_llm:
             idx = item["index"]
             review_id = item["review"].get("id") if item["review"] else idx
@@ -228,34 +281,52 @@ class SentimentAnalyzer:
         negative_count: int,
         neutral_count: int,
     ) -> Tuple[int, int, int, List[Optional[str]]]:
-        """LLM 재판정 (비동기)."""
-        from openai import AsyncOpenAI
-        client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        """LLM 재판정 (비동기). LLMUtils 사용 시 Config/LLM_PROVIDER·RunPod 반영."""
         llm_input = "\n".join([
             f'{item["review"].get("id") if item["review"] else item["index"]}\t{item["content"]}'
             for item in negative_reviews_for_llm
         ])
-        response = await client.chat.completions.create(
-            model=Config.OPENAI_MODEL,
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are a sentiment classification engine.\n"
-                        "Each input line is formatted as: id<TAB>review.\n"
-                        "Classify sentiment as one of: positive, negative, neutral.\n"
-                        "Return ONLY a valid JSON array like:\n"
-                        '[{"id":105,"sentiment":"positive"}]'
-                    )
-                },
-                {"role": "user", "content": llm_input}
-            ],
-            temperature=0
-        )
-        raw = response.choices[0].message.content.strip()
-        raw = raw[raw.find("["): raw.rfind("]")+1]
-        results = json.loads(raw)
-        sentiment_map = {x["id"]: x["sentiment"] for x in results}
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You are a sentiment classification engine.\n"
+                    "Each input line is formatted as: id<TAB>review.\n"
+                    "Classify sentiment as one of: positive, negative, neutral.\n"
+                    "Return ONLY a valid JSON array like:\n"
+                    '[{"id":105,"sentiment":"positive"}]'
+                )
+            },
+            {"role": "user", "content": llm_input}
+        ]
+        if self.llm_utils:
+            raw = await self.llm_utils._generate_response_async(
+                messages, temperature=0, max_new_tokens=2048
+            )
+        else:
+            from openai import AsyncOpenAI
+            client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+            response = await client.chat.completions.create(
+                model=Config.OPENAI_MODEL,
+                messages=messages,
+                temperature=0
+            )
+            raw = response.choices[0].message.content.strip()
+        results = _parse_sentiment_json(raw)
+        if not results and self.llm_utils and raw and "[" in raw and "]" in raw:
+            try:
+                fix_raw = await self.llm_utils._generate_response_async(
+                    [{"role": "user", "content": "Return only a valid JSON array. Each item: {\"id\": number, \"sentiment\": \"positive\"|\"negative\"|\"neutral\"}. No other text.\n\n" + raw[:2500]}],
+                    temperature=0,
+                    max_new_tokens=1024,
+                )
+                results = _parse_sentiment_json(fix_raw.strip() if fix_raw else "")
+            except Exception:
+                pass
+        if not results:
+            logger.warning("LLM 재판정 실패: JSON 파싱 불가(비표준 형식). 1차 분류 결과를 사용합니다.")
+            return positive_count, negative_count, neutral_count, sentiment_labels
+        sentiment_map = {x["id"]: x["sentiment"] for x in results if isinstance(x, dict) and "id" in x and "sentiment" in x}
         for item in negative_reviews_for_llm:
             idx = item["index"]
             review_id = item["review"].get("id") if item["review"] else idx

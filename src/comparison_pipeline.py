@@ -15,6 +15,8 @@ import re
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Tuple
 
+from .json_parse_utils import parse_json_relaxed
+
 logger = logging.getLogger(__name__)
 
 try:
@@ -46,6 +48,105 @@ def _spark_disabled() -> bool:
         return getattr(Config, "DISABLE_SPARK", False)
     except Exception:
         return False
+
+
+def _get_spark_service_url() -> Optional[str]:
+    """Spark 마이크로서비스 URL. 설정 시 로컬 Spark 대신 해당 서비스 호출."""
+    try:
+        from .config import Config
+        return getattr(Config, "SPARK_SERVICE_URL", None)
+    except Exception:
+        return None
+
+
+def _fetch_all_average_from_spark_service(
+    path: str,
+    project_root: Optional[str] = None,
+) -> Optional[Dict[str, float]]:
+    """Spark 서비스에 전체 평균 계산 요청. 실패 시 None."""
+    base = _get_spark_service_url()
+    if not base:
+        return None
+    url = f"{base.rstrip('/')}/all-average-from-file"
+    try:
+        import httpx
+        with httpx.Client(timeout=60.0) as client:
+            r = client.post(url, json={"path": path, "project_root": project_root})
+            r.raise_for_status()
+            data = r.json()
+            return {"service": float(data.get("service", 0)), "price": float(data.get("price", 0))}
+    except Exception as e:
+        logger.warning("Spark 서비스 all-average 호출 실패: %s", e)
+        return None
+
+
+def _fetch_all_average_from_spark_service_reviews(
+    texts: List[str],
+) -> Optional[Dict[str, float]]:
+    """Spark 서비스에 리뷰 텍스트 리스트로 전체 평균(service, price) 계산 요청. 실패 시 None."""
+    base = _get_spark_service_url()
+    if not base:
+        return None
+    url = f"{base.rstrip('/')}/all-average-from-reviews"
+    try:
+        import httpx
+        with httpx.Client(timeout=120.0) as client:
+            r = client.post(url, json={"texts": texts})
+            r.raise_for_status()
+            data = r.json()
+            return {"service": float(data.get("service", 0)), "price": float(data.get("price", 0))}
+    except Exception as e:
+        logger.warning("Spark 서비스 all-average-from-reviews 호출 실패: %s", e)
+        return None
+
+
+def _fetch_recall_seeds_from_spark_service(
+    path: str,
+    project_root: Optional[str] = None,
+) -> Optional[Dict[str, List[Tuple[str, int]]]]:
+    """Spark 서비스에 recall seeds 계산 요청. 실패 시 None. 반환값은 (phrase, count) 리스트로 복원."""
+    base = _get_spark_service_url()
+    if not base:
+        return None
+    url = f"{base.rstrip('/')}/recall-seeds-from-file"
+    try:
+        import httpx
+        with httpx.Client(timeout=120.0) as client:
+            r = client.post(url, json={"path": path, "project_root": project_root})
+            r.raise_for_status()
+            data = r.json()
+            return {
+                k: [tuple(x) for x in v]  # [["p", 1], ...] -> [("p", 1), ...]
+                for k, v in data.items()
+                if isinstance(v, list)
+            }
+    except Exception as e:
+        logger.warning("Spark 서비스 recall-seeds 호출 실패: %s", e)
+        return None
+
+
+def _fetch_recall_seeds_from_spark_service_reviews(
+    texts: List[str],
+) -> Optional[Dict[str, List[Tuple[str, int]]]]:
+    """Spark 서비스에 리뷰 텍스트 리스트로 recall seeds 계산 요청. 실패 시 None."""
+    base = _get_spark_service_url()
+    if not base:
+        return None
+    url = f"{base.rstrip('/')}/recall-seeds-from-reviews"
+    try:
+        import httpx
+        with httpx.Client(timeout=120.0) as client:
+            r = client.post(url, json={"texts": texts})
+            r.raise_for_status()
+            data = r.json()
+            return {
+                k: [tuple(x) for x in v]
+                for k, v in data.items()
+                if isinstance(v, list)
+            }
+    except Exception as e:
+        logger.warning("Spark 서비스 recall-seeds-from-reviews 호출 실패: %s", e)
+        return None
 
 
 _spark_session = None
@@ -350,6 +451,74 @@ def _dedup_reversed_bigrams_pairs(pairs: List[Tuple[str, int]]) -> List[Tuple[st
     return [(agg[k]["repr"], agg[k]["count"]) for k in order]
 
 
+def _python_recall_seeds(
+    texts: List[str],
+    stopwords: Optional[List[str]] = None,
+) -> Dict[str, List[Tuple[str, int]]]:
+    """
+    Spark 없이 Kiwi만으로 recall_seeds 계산 (소량 리뷰용).
+    _spark_recall_seeds와 동일: bigram → 4-way classify → quantile_split, pick_seeds_pairs, dedup.
+    """
+    from collections import Counter
+
+    stop = set(stopwords or [])
+    bigram_counts: Counter = Counter()
+    try:
+        from kiwipiepy import Kiwi
+        kiwi = Kiwi()
+    except ImportError:
+        return {"service": [], "price": [], "food": [], "other": []}
+    for text in texts:
+        if not text or not isinstance(text, str):
+            continue
+        text = re.sub(r"\s+", " ", text).strip()
+        if not text:
+            continue
+        try:
+            tokens = [
+                t.form for t in kiwi.tokenize(text)
+                if t.tag in ("NNG", "NNP") and len(t.form) >= 2 and t.form not in stop
+            ]
+        except Exception:
+            continue
+        for i in range(len(tokens) - 1):
+            a, b = tokens[i], tokens[i + 1]
+            if a == b or len(a) < 2 or len(b) < 2:
+                continue
+            bigram_counts[f"{a} {b}"] += 1
+    candidates = bigram_counts.most_common(2000)
+    candidates = [(p, c) for p, c in candidates if len(p.split()) == 2 and p.split()[0] != p.split()[1]]
+
+    def is_noise(phrase: str) -> bool:
+        sp = phrase.split()
+        return len(sp) != 2 or len(sp[0]) < 2 or len(sp[1]) < 2
+
+    candidates = [x for x in candidates if not is_noise(x[0])]
+
+    category_json: Dict[str, Dict[str, int]] = {"service": {}, "price": {}, "food": {}, "other": {}}
+    for phrase, count in candidates:
+        for lab in _classify_for_seeds(phrase):
+            if lab in category_json:
+                category_json[lab][phrase] = category_json[lab].get(phrase, 0) + count
+
+    pairs_list = [
+        list(category_json["service"].items()),
+        list(category_json["price"].items()),
+        list(category_json["food"].items()),
+        list(category_json["other"].items()),
+    ]
+    pairs_name = ["service", "price", "food", "other"]
+
+    all_seeds: Dict[str, List[Tuple[str, int]]] = {"service": [], "price": [], "food": [], "other": []}
+    for pairs, name in zip(pairs_list, pairs_name):
+        head, mid, tail = _quantile_split(pairs)
+        seeds = _pick_seeds_pairs(head, mid, tail, mid_k=5, tail_k=1)
+        cleaned = _dedup_reversed_bigrams_pairs(seeds)
+        all_seeds[name] = cleaned
+
+    return all_seeds
+
+
 def _spark_recall_seeds(texts_rdd, stopwords: Optional[List[str]] = None) -> Dict[str, List[Tuple[str, int]]]:
     """
     RDD of str → recall_seeds_for_summary.
@@ -437,6 +606,22 @@ def compute_recall_seeds_from_file(
         logger.debug("compute_recall_seeds_from_file: 파일 없음 %s", p)
         return None
     path = str(p)
+
+    # Spark 마이크로서비스 사용 (설정 시 로컬 Spark 미사용, API 실패 시 Python 폴백만)
+    if _get_spark_service_url():
+        result = _fetch_recall_seeds_from_spark_service(path, project_root)
+        if result is not None:
+            return result
+        try:
+            rows = load_reviews_from_aspect_data_file(path, project_root)
+            texts = [(r.get("content") or r.get("text") or "").strip() for r in rows if isinstance(r, dict)]
+            texts = [t for t in texts if t]
+            if texts:
+                return _python_recall_seeds(texts, stopwords)
+        except Exception as e:
+            logger.warning("Spark API 실패 후 recall_seeds Python 폴백 실패: %s", e)
+        return None
+
     if not SPARK_AVAILABLE:
         logger.warning("pyspark 미설치. compute_recall_seeds_from_file 불가.")
         return None
@@ -477,12 +662,40 @@ def compute_recall_seeds_from_file(
         return None
 
 
+def compute_recall_seeds_from_texts(
+    texts: List[str],
+    stopwords: Optional[List[str]] = None,
+) -> Optional[Dict[str, List[Tuple[str, int]]]]:
+    """
+    리뷰 텍스트 리스트로 recall seeds 계산. Spark 서비스 내부 또는 로컬 Spark에서 사용.
+    Spark 미사용/실패 시 None.
+    """
+    if not texts:
+        return None
+    if stopwords is None:
+        stopwords = _load_stopwords_for_recall(None)
+    if not SPARK_AVAILABLE:
+        return None
+    try:
+        spark = _get_spark()
+        rdd = spark.sparkContext.parallelize(
+            texts, numSlices=max(1, min(len(texts) // 100, 256))
+        )
+        return _spark_recall_seeds(rdd, stopwords)
+    except Exception as e:
+        logger.warning("compute_recall_seeds_from_texts 실패: %s", e)
+        return None
+
+
 def compute_recall_seeds_from_reviews(
     reviews: List[Any],
     stopwords: Optional[List[str]] = None,
 ) -> Optional[Dict[str, List[Tuple[str, int]]]]:
-    """전체 리뷰 리스트에서 recall_seeds_for_summary 계산 (파일 없을 때 Qdrant 등 폴백용)."""
-    if not reviews or not SPARK_AVAILABLE:
+    """
+    리뷰 리스트에서 recall_seeds_for_summary 계산 (파일 없을 때 Qdrant 등 폴백용).
+    리뷰 수가 RECALL_SEEDS_SPARK_THRESHOLD 미만이거나 Spark 비활성/미설치 시 Python(Kiwi)만 사용.
+    """
+    if not reviews:
         return None
     if stopwords is None:
         stopwords = _load_stopwords_for_recall(None)
@@ -493,11 +706,40 @@ def compute_recall_seeds_from_reviews(
     texts = [t for t in texts if t and isinstance(t, str)]
     if not texts:
         return None
-    spark = _get_spark()
-    rdd = spark.sparkContext.parallelize(
-        texts, numSlices=max(1, min(len(texts) // 100, 256))
+
+    try:
+        from .config import Config
+        threshold = getattr(Config, "RECALL_SEEDS_SPARK_THRESHOLD", 2000)
+    except Exception:
+        threshold = 2000
+
+    # SPARK_SERVICE_URL 설정 시 Spark API만 사용, API 실패 시 Python 폴백만 (로컬 Spark 미사용)
+    if _get_spark_service_url() and len(texts) >= threshold:
+        remote = _fetch_recall_seeds_from_spark_service_reviews(texts)
+        if remote is not None:
+            return remote
+        return _python_recall_seeds(texts, stopwords)
+
+    use_spark = (
+        SPARK_AVAILABLE
+        and not _spark_disabled()
+        and len(texts) >= threshold
     )
-    return _spark_recall_seeds(rdd, stopwords)
+    if use_spark:
+        try:
+            spark = _get_spark()
+            rdd = spark.sparkContext.parallelize(
+                texts, numSlices=max(1, min(len(texts) // 100, 256))
+            )
+            return _spark_recall_seeds(rdd, stopwords)
+        except Exception as e:
+            if _is_spark_or_jvm_error(e):
+                logger.warning("recall_seeds Spark 실패, Python 폴백: %s", e)
+                _reset_spark()
+            else:
+                raise
+
+    return _python_recall_seeds(texts, stopwords)
 
 
 def recall_seeds_to_seed_lists(
@@ -530,13 +772,17 @@ def calculate_single_restaurant_ratios(
     stopwords: Optional[List[str]] = None,
 ) -> Dict[str, float]:
     """
-    단일 음식점의 카테고리별 긍정 비율 계산 (Spark + Kiwi). Py4J 오류 시 Python 폴백.
+    단일 음식점의 카테고리별 긍정 비율 계산. SPARK_SERVICE_URL 설정 시 로컬 Spark 미사용(Python만).
     """
     if not reviews:
         return {"service": 0.0, "price": 0.0}
     texts = [s for s in reviews if s and isinstance(s, str)]
     if not texts:
         return {"service": 0.0, "price": 0.0}
+    # SPARK_SERVICE_URL 설정 시 메인 앱은 Spark API만 쓰므로 단일 음식점은 Python으로만 계산
+    if _get_spark_service_url():
+        out = _python_calculate_ratios(texts, stopwords)
+        return {"service": round(out["service"], 2), "price": round(out["price"], 2)}
     if SPARK_AVAILABLE and not _spark_disabled():
         try:
             spark = _get_spark()
@@ -615,6 +861,22 @@ def calculate_all_average_ratios_from_file(
         logger.debug(f"aspect_data 파일 없음: {p}")
         return None
     path = str(p)
+
+    # Spark 마이크로서비스 사용 (설정 시 로컬 Spark 미사용, API 실패 시 Python 폴백만)
+    if _get_spark_service_url():
+        result = _fetch_all_average_from_spark_service(path, project_root)
+        if result is not None:
+            return result
+        try:
+            rows = load_reviews_from_aspect_data_file(path, project_root)
+            texts = [(r.get("content") or r.get("text") or "").strip() for r in rows if isinstance(r, dict)]
+            texts = [t for t in texts if t]
+            if texts:
+                return _python_calculate_ratios(texts, stopwords)
+        except Exception as e:
+            logger.warning("Spark API 실패 후 Python 폴백 실패: %s", e)
+        return None
+
     if not SPARK_AVAILABLE:
         logger.warning("pyspark 미설치. calculate_all_average_ratios_from_file 불가.")
         return None
@@ -684,6 +946,29 @@ def calculate_all_average_ratios_from_file(
         return None
 
 
+def calculate_all_average_ratios_from_texts(
+    texts: List[str],
+    stopwords: Optional[List[str]] = None,
+) -> Optional[Dict[str, float]]:
+    """
+    리뷰 텍스트 리스트로 전체 평균(service, price) 비율 계산. Spark 서비스 내부 또는 로컬 Spark에서 사용.
+    Spark 미사용/실패 시 None.
+    """
+    if not texts:
+        return None
+    if not SPARK_AVAILABLE:
+        return None
+    try:
+        spark = _get_spark()
+        rdd = spark.sparkContext.parallelize(
+            texts, numSlices=max(1, min(len(texts) // 100, 256))
+        )
+        return _spark_calculate_ratios(rdd, stopwords)
+    except Exception as e:
+        logger.warning("calculate_all_average_ratios_from_texts 실패: %s", e)
+        return None
+
+
 def load_reviews_from_aspect_data_file(
     path: str,
     project_root: Optional[str] = None,
@@ -750,7 +1035,7 @@ def calculate_all_average_ratios_from_reviews(
     stopwords: Optional[List[str]] = None,
 ) -> Dict[str, float]:
     """
-    전체 리뷰에서 service/price 긍정 비율 계산 (Spark + Kiwi). Py4J 오류 시 Python 폴백.
+    전체 리뷰에서 service/price 긍정 비율 계산. SPARK_SERVICE_URL 설정 시 Spark API만 사용, API 실패/미설정 시 로컬 Spark 또는 Python.
     리뷰: [{"content":"..."} or {"text":"..."}, ...]
     """
     if not reviews:
@@ -762,6 +1047,14 @@ def calculate_all_average_ratios_from_reviews(
     texts = [t for t in texts if t and isinstance(t, str)]
     if not texts:
         return {"service": 0.0, "price": 0.0}
+
+    # SPARK_SERVICE_URL 설정 시 Spark API만 사용, API 실패 시 Python 폴백만 (로컬 Spark 미사용)
+    if _get_spark_service_url():
+        result = _fetch_all_average_from_spark_service_reviews(texts)
+        if result is not None:
+            return result
+        return _python_calculate_ratios(texts, stopwords)
+
     if SPARK_AVAILABLE and not _spark_disabled():
         try:
             spark = _get_spark()
@@ -903,7 +1196,9 @@ def generate_comparison_descriptions(
 
         raw = re.sub(r"^```(?:json)?\s*", "", raw.strip())
         raw = re.sub(r"\s*```\s*$", "", raw)
-        data = json.loads(raw)
+        data = parse_json_relaxed(raw)
+        if not isinstance(data, dict):
+            data = {}
         for k in ["service", "price"]:
             if k in data and isinstance(data[k], str) and data[k].strip():
                 descriptions[k] = data[k].strip()

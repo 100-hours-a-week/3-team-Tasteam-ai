@@ -20,12 +20,11 @@ DEFAULT_SENTIMENT_MODEL = "Dilwolf/Kakao_app-kr_sentiment"
 DEFAULT_EMBEDDING_MODEL = "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"
 DEFAULT_EMBEDDING_DIM = 768
 DEFAULT_SPARSE_EMBEDDING_MODEL = "Qdrant/bm25"
-DEFAULT_LLM_MODEL = "Qwen/Qwen2.5-7B-Instruct"
-DEFAULT_SCORE_THRESHOLD = 0.8
+# RunPod vLLM: GET /v1/models 의 id와 일치해야 함 (경로가 id로 노출됨)
+DEFAULT_LLM_MODEL = "/workspace/llm-models/Qwen/Qwen2.5-7B-Instruct"
 DEFAULT_MAX_RETRIES = 3
 DEFAULT_COLLECTION_NAME = "reviews_collection"
 DEFAULT_LLM_BATCH_SIZE = 10
-DEFAULT_LLM_KEYWORDS = ["는데", "지만"]
 
 
 # --- Server (환경별 URL, worker, rate limit, timeout) ---
@@ -46,7 +45,11 @@ class _InferenceConfig:
     EMBEDDING_DIM: int = int(os.getenv("EMBEDDING_DIM", str(DEFAULT_EMBEDDING_DIM)))
     SPARSE_EMBEDDING_MODEL: str = os.getenv("SPARSE_EMBEDDING_MODEL", DEFAULT_SPARSE_EMBEDDING_MODEL)
     LLM_MODEL: str = os.getenv("LLM_MODEL", DEFAULT_LLM_MODEL)
-    LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "openai").lower()
+    # RunPod/vLLM 컨텍스트 한도 (max_tokens + input <= 이 값). 4096 = Qwen2.5-7B 기본
+    LLM_MAX_CONTEXT_LENGTH: int = int(os.getenv("LLM_MAX_CONTEXT_LENGTH", "4096"))
+    # 결과 버전 관리: A/B 비교·재실행 안전용 (restaurant_id + analysis_type + model_version + prompt_version + created_at)
+    PROMPT_VERSION: str = os.getenv("PROMPT_VERSION", "v1")
+    LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "runpod").lower()
     OPENAI_MODEL: str = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
     # device, GPU, quantization
@@ -56,7 +59,6 @@ class _InferenceConfig:
 
     # retry, timeout
     MAX_RETRIES: int = int(os.getenv("MAX_RETRIES", str(DEFAULT_MAX_RETRIES)))
-    LLM_POLISH_TIMEOUT_SECONDS: float = float(os.getenv("LLM_POLISH_TIMEOUT_SECONDS", "2.0"))
 
     # batch, concurrency (성능 튜닝)
     LLM_BATCH_SIZE: int = int(os.getenv("LLM_BATCH_SIZE", str(DEFAULT_LLM_BATCH_SIZE)))
@@ -66,7 +68,6 @@ class _InferenceConfig:
     VLLM_MIN_BATCH_SIZE: int = int(os.getenv("VLLM_MIN_BATCH_SIZE", "10"))
     VLLM_MAX_BATCH_SIZE: int = int(os.getenv("VLLM_MAX_BATCH_SIZE", "100"))
     VLLM_DEFAULT_BATCH_SIZE: int = int(os.getenv("VLLM_DEFAULT_BATCH_SIZE", "50"))
-    VLLM_MAX_CONCURRENT_BATCHES: int = int(os.getenv("VLLM_MAX_CONCURRENT_BATCHES", "20"))
 
     # credentials (비밀은 .env)
     OPENAI_API_KEY: Optional[str] = os.getenv("OPENAI_API_KEY")
@@ -76,17 +77,16 @@ class _InferenceConfig:
     # vLLM(폴백·1차) 사용 시 RunPod Serverless GPU 사용. true면 요청 시 GPU 기동·유휴 시 스케일다운(비용 절감). 대상: RunPod.
     VLLM_USE_RUNPOD_GPU: bool = os.getenv("VLLM_USE_RUNPOD_GPU", "false").lower() == "true"
     # RunPod vLLM 전용 엔드포인트 ID. 미설정 시 RUNPOD_ENDPOINT_ID 사용.
-    RUNPOD_VLLM_ENDPOINT_ID: Optional[str] = os.getenv("RUNPOD_VLLM_ENDPOINT_ID")
+    RUNPOD_VLLM_ENDPOINT_ID: Optional[str] = (os.getenv("RUNPOD_VLLM_ENDPOINT_ID", "2mpd5y6lvccfk1") or "").strip() or None
     RUNPOD_API_KEY: Optional[str] = os.getenv("RUNPOD_API_KEY")
-    RUNPOD_ENDPOINT_ID: str = os.getenv("RUNPOD_ENDPOINT_ID", "g09uegksn7h7ed")
+    RUNPOD_ENDPOINT_ID: str = (os.getenv("RUNPOD_ENDPOINT_ID", "2mpd5y6lvccfk1") or "").strip() or "2mpd5y6lvccfk1"
     USE_RUNPOD: bool = os.getenv("USE_RUNPOD", "true").lower() == "true"
     RUNPOD_POLL_INTERVAL: int = int(os.getenv("RUNPOD_POLL_INTERVAL", "2"))
     RUNPOD_MAX_WAIT_TIME: int = int(os.getenv("RUNPOD_MAX_WAIT_TIME", "300"))
-    USE_POD_VLLM: bool = os.getenv("USE_POD_VLLM", "false").lower() == "true"
-    VLLM_TENSOR_PARALLEL_SIZE: int = int(os.getenv("VLLM_TENSOR_PARALLEL_SIZE", "1"))
-    VLLM_MAX_MODEL_LEN: Optional[int] = int(os.getenv("VLLM_MAX_MODEL_LEN")) if os.getenv("VLLM_MAX_MODEL_LEN") else None
-    VLLM_USE_PRIORITY_QUEUE: bool = os.getenv("VLLM_USE_PRIORITY_QUEUE", "true").lower() == "true"
-    VLLM_PRIORITY_BY_PREFILL_COST: bool = os.getenv("VLLM_PRIORITY_BY_PREFILL_COST", "true").lower() == "true"
+    # RunPod Serverless vLLM 엔드포인트 사용 (앱 내 인프로세스 vLLM 제거됨)
+    USE_POD_VLLM: bool = os.getenv("USE_POD_VLLM", "true").lower() == "true"
+    # RunPod Pod 직접 URL (vLLM OpenAI 호환 /v1). 설정 시 Serverless 대신 이 URL로 추론. 기본값: 213.173.108.29:16366 (test_all_task 연동)
+    VLLM_POD_BASE_URL: Optional[str] = (os.getenv("VLLM_POD_BASE_URL", "http://213.173.108.70:17517/v1") or "").strip() or None
 
     # 실행 모드: sync vs async, sync vs thread isolation (실험 플래그)
     
@@ -124,8 +124,6 @@ class _RetrievalConfig:
     COLLECTION_NAME: str = os.getenv("COLLECTION_NAME", DEFAULT_COLLECTION_NAME)
     # 임베딩/HF 캐시: None이면 라이브러리 기본(/tmp 등). 설정 시 공유 볼륨 권장 (재시작·동시성 안정)
     EMBEDDING_CACHE_DIR: Optional[str] = os.getenv("EMBEDDING_CACHE_DIR", os.getenv("FASTEMBED_CACHE_PATH"))
-    SCORE_THRESHOLD: float = float(os.getenv("SCORE_THRESHOLD", str(DEFAULT_SCORE_THRESHOLD)))
-    LLM_KEYWORDS: list = DEFAULT_LLM_KEYWORDS
 
     # 하이브리드 검색 (Summary·Vector API 공통. Summary는 이 값을 전달, Vector API는 요청 생략 시 이 값을 기본으로 사용)
     DENSE_PREFETCH_LIMIT: int = int(os.getenv("DENSE_PREFETCH_LIMIT", "200"))
@@ -134,7 +132,6 @@ class _RetrievalConfig:
 
     ENABLE_SENTIMENT_SAMPLING: bool = os.getenv("ENABLE_SENTIMENT_SAMPLING", "false").lower() == "true"
     SENTIMENT_RECENT_TOP_K: int = int(os.getenv("SENTIMENT_RECENT_TOP_K", "100"))
-    ASPECT_SEEDS_FILE: Optional[str] = os.getenv("ASPECT_SEEDS_FILE")
 
 
 # --- Cache (TTL, skip 간격 등) ---
@@ -143,13 +140,32 @@ class _CacheConfig:
     SKIP_MIN_INTERVAL_SECONDS: int = int(os.getenv("SKIP_MIN_INTERVAL_SECONDS", "3600"))
 
 
+# --- Batch / Queue (배치 분리, 작업 큐, DLQ) ---
+class _BatchConfig:
+    """배치: 큐 사용 여부, RQ, 재시도"""
+    # 배치 API 호출 시 큐에 넣고 job_id 반환 (true) vs 동기 실행 (false)
+    BATCH_USE_QUEUE: bool = os.getenv("BATCH_USE_QUEUE", "false").lower() == "true"
+    RQ_QUEUE_NAME: str = os.getenv("RQ_QUEUE_NAME", "batch")
+    # Redis URL (미설정 시 REDIS_HOST:REDIS_PORT/REDIS_DB 조합)
+    REDIS_HOST: str = os.getenv("REDIS_HOST", "localhost")
+    REDIS_PORT: int = int(os.getenv("REDIS_PORT", "6379"))
+    REDIS_DB: int = int(os.getenv("REDIS_DB", "0"))
+    REDIS_PASSWORD: Optional[str] = os.getenv("REDIS_PASSWORD")
+    # 배치 작업 단위 재시도 (RQ 기본 + 실패 시 FailedJobRegistry = DLQ)
+    BATCH_JOB_MAX_RETRIES: int = int(os.getenv("BATCH_JOB_MAX_RETRIES", "3"))
+
+
 # --- Spark (Comparison 전체 평균 데이터 등) ---
 class _SparkConfig:
     """Spark/배치: 전체 평균 데이터 경로, 비율. DISABLE_SPARK=true 시 JVM 없이 Kiwi만 사용 (Docker 등)."""
     DISABLE_SPARK: bool = os.getenv("DISABLE_SPARK", "false").lower() == "true"
+    # Spark 마이크로서비스 URL. 설정 시 메인 앱/워커는 로컬 Spark 미사용, 해당 서비스로 HTTP 호출.
+    SPARK_SERVICE_URL: Optional[str] = os.getenv("SPARK_SERVICE_URL", "").strip() or None
     ALL_AVERAGE_ASPECT_DATA_PATH: Optional[str] = os.getenv("ALL_AVERAGE_ASPECT_DATA_PATH", "data/test_data_sample.json")
     ALL_AVERAGE_SERVICE_RATIO: float = float(os.getenv("ALL_AVERAGE_SERVICE_RATIO", "0.60"))
     ALL_AVERAGE_PRICE_RATIO: float = float(os.getenv("ALL_AVERAGE_PRICE_RATIO", "0.55"))
+    # 리뷰 수가 이 값 미만이면 recall_seeds 계산 시 Spark 대신 Python(Kiwi) 사용. 약 2000건 이하는 단일 프로세스가 유리.
+    RECALL_SEEDS_SPARK_THRESHOLD: int = int(os.getenv("RECALL_SEEDS_SPARK_THRESHOLD", "2000"))
 
 
 # --- Observability (로깅, 메트릭, 모니터링, watchdog) ---
@@ -164,15 +180,9 @@ class _ObservabilityConfig:
     CPU_MONITOR_ENABLE: bool = os.getenv("CPU_MONITOR_ENABLE", "false").lower() == "true"
     CPU_MONITOR_INTERVAL: float = float(os.getenv("CPU_MONITOR_INTERVAL", "1.0"))
 
-    RUNPOD_POD_ID: Optional[str] = os.getenv("RUNPOD_POD_ID")
-    IDLE_THRESHOLD: int = int(os.getenv("IDLE_THRESHOLD", "5"))
-    CHECK_INTERVAL: int = int(os.getenv("CHECK_INTERVAL", "60"))
-    IDLE_LIMIT: int = int(os.getenv("IDLE_LIMIT", "5"))
-    MIN_RUNTIME: int = int(os.getenv("MIN_RUNTIME", "600"))
-
 
 # --- Config: 도메인별로 나누되, 기존 Config.XXX 호환 ---
-class Config(_ServerConfig, _InferenceConfig, _RetrievalConfig, _CacheConfig, _SparkConfig, _ObservabilityConfig):
+class Config(_ServerConfig, _InferenceConfig, _RetrievalConfig, _CacheConfig, _BatchConfig, _SparkConfig, _ObservabilityConfig):
     """
     통합 설정. 도메인: Server, Inference, Retrieval, Cache, Spark, Observability.
     기존 Config.USE_GPU, Config.QDRANT_URL 등 그대로 사용 가능.
@@ -182,6 +192,7 @@ class Config(_ServerConfig, _InferenceConfig, _RetrievalConfig, _CacheConfig, _S
     Inference = _InferenceConfig
     Retrieval = _RetrievalConfig
     Cache = _CacheConfig
+    Batch = _BatchConfig
     Spark = _SparkConfig
     Observability = _ObservabilityConfig
 

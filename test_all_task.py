@@ -6,10 +6,9 @@ HTTP API 호출만으로 테스트를 수행합니다. hybrid_search/final_pipel
 
 테스트 대상 API:
     - 감성 분석: /api/v1/sentiment/analyze, /api/v1/sentiment/analyze/batch
-    - 요약: /api/v1/llm/summarize, /api/v1/llm/summarize/batch
-    - 비교: /api/v1/llm/comparison, api/v1/llm/comparison/batch
- (Kiwi+lift)
-    - 벡터: /api/v1/vector/upload, /api/v1/vector/search/similar
+    - 요약: /api/v1/llm/summarize, /api/v1/llm/summarize/batch (서버 SPARK_SERVICE_URL 설정 시 recall seeds·전체 평균은 Spark MSA HTTP 호출)
+    - 비교: /api/v1/llm/comparison, /api/v1/llm/comparison/batch (Kiwi+lift. 서버 SPARK_SERVICE_URL 설정 시 Spark MSA 사용)
+    - 벡터: /api/v1/vector/upload (업로드만. vector/search/similar API는 제거됨)
 
 --benchmark 시 (메트릭 + CPU + GPU 모두 활성화, 기존 동작):
     - 서버 요청 메트릭: X-Benchmark → logs/debug.log, metrics.db
@@ -22,6 +21,7 @@ HTTP API 호출만으로 테스트를 수행합니다. hybrid_search/final_pipel
 
 사용 예:
     # 기본 테스트 (BASE_URL 환경 변수 또는 스크립트 내 BASE_URL 확인)
+    # LLM 추론: API 서버가 USE_POD_VLLM 시 기본으로 213.173.108.29:16366 (VLLM_POD_BASE_URL)로 요청
     python test_all_task.py
 
     # 성능 측정 모드 (메트릭·CPU 모니터링 활성화)
@@ -50,7 +50,7 @@ HTTP API 호출만으로 테스트를 수행합니다. hybrid_search/final_pipel
     --benchmark-cpu     서버 CPU 모니터만 (X-Enable-CPU-Monitor)
     --benchmark-gpu     서버 GPU 모니터만 (logs/gpu_usage.log)
     --iterations N      벤치마크 반복 횟수 (기본 5)
-    --tests T1 [T2...]  실행할 테스트: all|sentiment|sentiment_batch|summarize|summarize_batch|comparison|comparison_batch|vector
+    --tests T1 [T2...]  실행할 테스트: all|sentiment|sentiment_batch|summarize|summarize_batch|comparison|comparison_batch|vector (vector=업로드만)
     --save-results PATH 결과 JSON 저장 경로
     --provider P        LLM 제공자: openai|local|runpod
     --model M           테스트할 LLM 모델명
@@ -149,7 +149,8 @@ def print_header(msg: str):
 # jinsoo1218/runpod_vllm:latest
 # runpod_env
 # 테스트 설정
-# RunPod Pod 서버 URL (환경 변수로 오버라이드 가능)
+# BASE_URL: 테스트가 요청을 보내는 API 서버 주소 (FastAPI 앱).
+# LLM 추론은 API 서버가 수행하며, RunPod Pod 사용 시 API 서버가 VLLM_POD_BASE_URL(기본 http://213.173.108.29:16366/v1)로 요청함.
 #BASE_URL = "http://213.192.2.74:40162"  # RunPod Pod IP:포트로 변경 (예: http://213.192.2.68:40183)
 BASE_URL = "http://localhost:8001"
 # 스레드별 base_url (compare_models 병렬 실행 시 포트별로 구분)
@@ -2522,10 +2523,44 @@ def test_comparison_batch(enable_benchmark: bool = False, num_iterations: int = 
         return False
 
 
+def test_vector_upload(enable_benchmark: bool = False, num_iterations: int = 5):
+    """벡터 업로드 테스트 (vector/search/similar API는 제거되어 업로드만 테스트)"""
+    print_header("6. 벡터 업로드 테스트")
+    url = f"{get_base_url()}{API_PREFIX}/vector/upload"
+    payload = {
+        "reviews": [
+            {"restaurant_id": SAMPLE_RESTAURANT_ID, "content": "테스트 리뷰입니다.", "id": "upload-test-1"}
+        ],
+        "restaurants": [
+            {"id": SAMPLE_RESTAURANT_ID, "name": "Test Restaurant", "full_address": None, "location": None, "created_at": None}
+        ],
+    }
+    try:
+        if enable_benchmark:
+            print_info(f"성능 측정 모드: {num_iterations}회 반복 실행 중...")
+            success, stats = measure_performance(url, payload, num_iterations=num_iterations, warmup_iterations=1, timeout=60)
+            if success and stats:
+                print_success(f"벡터 업로드 성공 (평균: {stats.get('avg_latency_sec', 0):.2f}초)")
+                test_metrics["벡터 업로드"] = {"performance": stats, "sqlite_metrics": None, "accuracy": None}
+                return True
+            return False
+        response = requests.post(url, json=payload, timeout=60, headers=get_request_headers())
+        if response.status_code == 200:
+            data = response.json()
+            points = data.get("points_count", 0)
+            print_success(f"벡터 업로드 성공 (points_count={points})")
+            test_metrics["벡터 업로드"] = {"performance": {"elapsed_sec": response.elapsed.total_seconds()}, "sqlite_metrics": None, "accuracy": None}
+            return True
+        print_error(f"벡터 업로드 실패: {response.status_code} — {response.text[:200]}")
+        return False
+    except Exception as e:
+        print_error(f"벡터 업로드 중 오류: {str(e)}")
+        return False
+
+
 def test_vector_search(enable_benchmark: bool = False, num_iterations: int = 5):
-    """벡터 검색 테스트"""
-    print_header("6. 벡터 검색 테스트")
-    
+    """벡터 유사 검색 테스트 (API 제거됨. 레거시 서버용. 기본 테스트에서는 vector=업로드만 사용)"""
+    print_header("6. 벡터 검색 테스트 (레거시: search/similar)")
     url = f"{get_base_url()}{API_PREFIX}/vector/search/similar"
     payload = {
         "query_text": "맛있다 좋다 만족",
@@ -2752,7 +2787,7 @@ def run_tests_for_model(
             "summarize_batch": ("배치 리뷰 요약", lambda: test_summarize_batch(enable_benchmark=enable_benchmark, num_iterations=iterations)),
             "comparison": ("비교", lambda: test_comparison(enable_benchmark=enable_benchmark, num_iterations=iterations)),
             "comparison_batch": ("배치 비교", lambda: test_comparison_batch(enable_benchmark=enable_benchmark, num_iterations=iterations)),
-            "vector": ("벡터 검색", lambda: test_vector_search(enable_benchmark=enable_benchmark, num_iterations=iterations)),
+            "vector": ("벡터 업로드", lambda: test_vector_upload(enable_benchmark=enable_benchmark, num_iterations=iterations)),
         }
 
         results = []
@@ -3779,7 +3814,7 @@ def main():
         "summarize_batch": ("배치 리뷰 요약", lambda: test_summarize_batch(enable_benchmark=enable_benchmark_mode, num_iterations=args.iterations)),
         "comparison": ("비교", lambda: test_comparison(enable_benchmark=enable_benchmark_mode, num_iterations=args.iterations)),
         "comparison_batch": ("배치 비교", lambda: test_comparison_batch(enable_benchmark=enable_benchmark_mode, num_iterations=args.iterations)),
-        "vector": ("벡터 검색", lambda: test_vector_search(enable_benchmark=enable_benchmark_mode, num_iterations=args.iterations)),
+        "vector": ("벡터 업로드", lambda: test_vector_upload(enable_benchmark=enable_benchmark_mode, num_iterations=args.iterations)),
     }
 
     for key in selected_tests:
