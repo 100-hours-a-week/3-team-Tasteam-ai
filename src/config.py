@@ -49,7 +49,7 @@ class _InferenceConfig:
     LLM_MAX_CONTEXT_LENGTH: int = int(os.getenv("LLM_MAX_CONTEXT_LENGTH", "4096"))
     # 결과 버전 관리: A/B 비교·재실행 안전용 (restaurant_id + analysis_type + model_version + prompt_version + created_at)
     PROMPT_VERSION: str = os.getenv("PROMPT_VERSION", "v1")
-    LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "runpod").lower()
+    LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "openai").lower()
     OPENAI_MODEL: str = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
     # device, GPU, quantization
