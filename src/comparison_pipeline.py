@@ -577,14 +577,12 @@ def _spark_recall_seeds(texts_rdd, stopwords: Optional[List[str]] = None) -> Dic
 
 
 def _load_stopwords_for_recall(project_root: Optional[str] = None) -> List[str]:
-    """recall_seeds 계산용 불용어 (data/ 또는 hybrid_search/...)."""
-    if project_root is None:
-        project_root = str(Path(__file__).resolve().parents[1])
-    for rel in ["data/stopwords-ko.txt", "hybrid_search/data_preprocessing/stopwords-ko.txt"]:
-        p = Path(project_root) / rel
-        if p.exists():
-            with open(p, encoding="utf-8") as f:
-                return [w.strip() for w in f if w.strip()]
+    """recall_seeds 계산용 불용어 (src/data/stopwords-ko.txt)."""
+    _src_dir = Path(__file__).resolve().parent
+    p = _src_dir / "data" / "stopwords-ko.txt"
+    if p.exists():
+        with open(p, encoding="utf-8") as f:
+            return [w.strip() for w in f if w.strip()]
     return []
 
 
