@@ -4,7 +4,6 @@
 
 import asyncio
 import logging
-import os
 import time
 from pathlib import Path
 from typing import Dict, List, Optional, Any
@@ -28,23 +27,19 @@ def _get_stopwords() -> Optional[List[str]]:
     if _stopwords_cache is not None:
         return _stopwords_cache
 
-    # 불용어 파일: data/ 우선 (프로덕션), hybrid_search/data_preprocessing fallback
+    # 불용어 파일: src/data/ (패키지 기준 경로)
     try:
-        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        stopwords_path = os.path.join(project_root, "data", "stopwords-ko.txt")
-        if not os.path.exists(stopwords_path):
-            stopwords_path = os.path.join(project_root, "hybrid_search", "data_preprocessing", "stopwords-ko.txt")
-
-        if os.path.exists(stopwords_path):
+        _src_dir = Path(__file__).resolve().parent
+        stopwords_path = _src_dir / "data" / "stopwords-ko.txt"
+        if stopwords_path.exists():
             with open(stopwords_path, encoding="utf-8") as f:
                 _stopwords_cache = [w.strip() for w in f if w.strip()]
-                _stopwords_path = stopwords_path
+                _stopwords_path = str(stopwords_path)
                 logger.debug(f"불용어 파일 로드 완료: {stopwords_path} ({len(_stopwords_cache)}개)")
                 return _stopwords_cache
-        else:
-            logger.debug(f"불용어 파일을 찾을 수 없습니다: {stopwords_path}")
-            _stopwords_cache = []
-            return _stopwords_cache
+        logger.debug(f"불용어 파일을 찾을 수 없습니다: {stopwords_path}")
+        _stopwords_cache = []
+        return _stopwords_cache
     except Exception as e:
         logger.warning(f"불용어 로드 실패: {e}")
         _stopwords_cache = []
