@@ -1,0 +1,27 @@
+# DeepFM training pipeline (Prefect + PyTorch)
+# Build: docker build -f Dockerfile.deepfm -t deepfm-training .
+# Run:   docker run --rm deepfm-training
+# Run (Prefect): docker run --rm -e PREFECT_API_URL=http://... deepfm-training
+
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install system deps if needed (e.g. for torch on CPU)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    && rm -rf /var/lib/apt/lists/*
+
+# DeepFM 의존성만 설치
+COPY deepfm_training/deepfm.txt /app/deepfm.txt
+RUN pip install --no-cache-dir -r /app/deepfm.txt
+
+# 소스 복사 (실행 시 data/raw, data/ 출력은 볼륨 마운트 권장)
+COPY deepfm_training /app/deepfm_training
+
+WORKDIR /app
+ENV PYTHONPATH=/app
+
+# 기본 실행: Prefect 파이프라인 (전처리 + 학습)
+# data/raw 에 Criteo train.txt, test.txt 마운트 필요
+CMD ["python", "deepfm_training/training_flow.py"]
