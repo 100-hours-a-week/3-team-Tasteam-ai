@@ -1,0 +1,27 @@
+# 학습 전용 이미지 (scripts/train_qlora.py)
+# GPU 필수. QLoRA SFT, wandb.
+#
+# 빌드: docker build -f Dockerfile.train-llm -t tasteam-train-llm .
+# 실행: docker run --gpus all \
+#   -v $(pwd)/distill_pipeline_output:/app/distill_pipeline_output \
+#   --env-file .env tasteam-train-llm --labeled-path /app/distill_pipeline_output/labeled/xxx/train_labeled.json --output-dir /app/distill_pipeline_output
+#
+# 환경변수: WANDB_API_KEY, HF_HOME 등
+
+FROM pytorch/pytorch:2.1.0-cuda12.1-cudnn8-runtime
+
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+
+WORKDIR /app
+
+COPY requirements.train-llm.txt /app/
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.train-llm.txt
+
+COPY scripts/train_qlora.py /app/scripts/
+
+ENV PYTHONPATH=/app
+
+ENTRYPOINT ["python", "scripts/train_qlora.py"]
+CMD ["--help"]

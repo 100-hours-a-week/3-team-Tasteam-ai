@@ -1,0 +1,20 @@
+# vLLM OpenAI 호환 서버 (Teacher 모델 서빙)
+# 네트워크 볼륨에 모델이 있으면 해당 경로 마운트 후 실행.
+#
+# 빌드: docker build -f Dockerfile.vllm -t tasteam-vllm .
+# 실행: docker run --gpus all -p 8000:8000 --ipc=host \
+#   -v /path/to/network/volume:/workspace \
+#   tasteam-vllm
+#
+# 모델 경로 변경: docker run ... tasteam-vllm --model /workspace/other/model
+
+FROM vllm/vllm-openai:v0.11.0
+
+EXPOSE 8000
+
+# 기본 모델 경로 (RunPod 네트워크 볼륨 /workspace 마운트 전제)
+ENV MODEL_PATH=/workspace/llm-models/Qwen/Qwen2.5-7B-Instruct
+
+# vLLM OpenAI API 서버: --host 0.0.0.0(외부 접근), --gpu-memory-utilization(메모리)
+# 실행 시 --model /other/path 로 오버라이드 가능
+CMD ["--model", "/workspace/llm-models/Qwen/Qwen2.5-7B-Instruct", "--host", "0.0.0.0", "--port", "8000", "--gpu-memory-utilization", "0.9"]

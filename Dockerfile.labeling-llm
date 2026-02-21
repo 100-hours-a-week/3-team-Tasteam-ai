@@ -1,0 +1,33 @@
+# 라벨링 전용 이미지 (label_for_distill.py)
+# CPU 환경. LLM은 OpenAI API 또는 RunPod vLLM(VLLM_POD_BASE_URL) HTTP 호출.
+#
+# 빌드: docker build -f Dockerfile.labeling-llm -t tasteam-labeling-llm .
+# 실행: docker run -v $(pwd)/distill_pipeline_output:/app/distill_pipeline_output \
+#   -v $(pwd)/tasteam_app_all_review_data.json:/app/tasteam_app_all_review_data.json \
+#   --env-file .env tasteam-labeling-llm
+#
+# 환경변수: OPENAI_API_KEY, VLLM_POD_BASE_URL(teacher), LLM_PROVIDER 등
+
+FROM python:3.11-slim
+
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+
+WORKDIR /app
+
+# PyTorch CPU (LLMUtils import용, 실제 추론은 HTTP)
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
+
+COPY requirements.labeling-llm.txt /app/
+RUN pip install --no-cache-dir -r requirements.labeling-llm.txt
+
+COPY src /app/src
+COPY scripts/label_for_distill.py scripts/data_augmentation.py /app/scripts/
+
+ENV PYTHONPATH=/app
+
+# 실행: --train-path, --output-dir 등 인자 전달 필요
+# 예: docker run ... tasteam-labeling-llm --train-path /app/datasets/xxx/train.json --output-dir /app/labeled/xxx --openai-cap 500
+ENTRYPOINT ["python", "scripts/label_for_distill.py"]
+CMD ["--help"]
