@@ -1,38 +1,29 @@
-# 라벨링 전용 이미지 (label_for_distill.py)
-# CPU 환경. LLM은 OpenAI API 또는 RunPod vLLM(VLLM_POD_BASE_URL) HTTP 호출.
+# RunPod Pod 전용 vLLM 이미지 (네트워크 볼륨 /workspace, OpenAI 호환 API)
+# - 이미지 내 /opt/llm-models 에 Qwen/Qwen2.5-7B-Instruct 포함.
+# - 엔트리포인트: /workspace에 모델 있으면 바로 vLLM / 없으면 이미지→/workspace 복사 후 vLLM / 복사 실패 시 다운로드(재시도).
 #
-# 빌드: docker build -f Dockerfile.labeling-llm -t tasteam-labeling-llm .
-# 실행: docker run -v $(pwd)/distill_pipeline_output:/app/distill_pipeline_output \
-#   -v $(pwd)/tasteam_app_all_review_data.json:/app/tasteam_app_all_review_data.json \
-#   --env-file .env tasteam-labeling-llm
+# 빌드: docker build -f Dockerfile.runpod-pod-vllm -t tasteam-runpod-pod-vllm:latest .
+# (빌드 시 HuggingFace에서 모델 다운로드하므로 시간·용량 큼. HF_TOKEN 있으면 private 허용)
 #
-# 환경변수: OPENAI_API_KEY, VLLM_POD_BASE_URL(teacher), LLM_PROVIDER 등
+# 실행 예 (로컬 테스트):
+#   docker run --gpus all -p 8000:8000 --ipc=host \
+#     -e HF_TOKEN=$HF_TOKEN -v /path/to/volume:/workspace \
+#     tasteam-runpod-pod-vllm:latest
+#
+FROM vllm/vllm-openai:v0.11.0
 
-FROM python:3.11-slim
+ENV MODEL_NAME=/workspace/llm-models/Qwen/Qwen2.5-7B-Instruct
+ENV HF_MODEL_ID=Qwen/Qwen2.5-7B-Instruct
+# 이미지 내 모델 경로 (빌드 시 채워짐. 기동 시 /workspace 없으면 여기서 복사)
+ENV MODEL_IMAGE_PATH=/opt/llm-models/Qwen/Qwen2.5-7B-Instruct
 
-ENV PYTHONUNBUFFERED=1
-ENV PYTHONDONTWRITEBYTECODE=1
+RUN pip install -q huggingface_hub && \
+    python3 -c "from huggingface_hub import snapshot_download; snapshot_download('Qwen/Qwen2.5-7B-Instruct', local_dir='/opt/llm-models/Qwen/Qwen2.5-7B-Instruct', local_dir_use_symlinks=False)"
 
-WORKDIR /app
+COPY scripts/runpod_pod_entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
-# PyTorch CPU (LLMUtils import용, 실제 추론은 HTTP)
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["--model", "/workspace/llm-models/Qwen/Qwen2.5-7B-Instruct", "--max-model-len", "4096", "--tensor-parallel-size", "1", "--gpu-memory-utilization", "0.90"]
 
-COPY requirements.labeling-llm.txt /app/
-RUN pip install --no-cache-dir -r requirements.labeling-llm.txt
-
-COPY src /app/src
-COPY scripts/label_for_distill.py scripts/data_augmentation.py /app/scripts/
-
-ENV PYTHONPATH=/app
-
-# 실행: --train-path, --output-dir 등 인자 전달 필요
-# 예: docker run ... tasteam-labeling-llm --train-path /app/datasets/xxx/train.json --output-dir /app/labeled/xxx --openai-cap 500
-ENTRYPOINT ["python", "scripts/label_for_distill.py"]
-CMD ["--help"]
-
-# docker build -f Dockerfile.labeling-llm -t tasteam-labeling-llm .
-# docker run -v $(pwd)/distill_pipeline_output:/app/distill_pipeline_output --env-file .env tasteam-labeling-llm \
-# --train-path /app/distill_pipeline_output/datasets/xxx/train.json \
-# --output-dir /app/distill_pipeline_output/labeled/xxx --openai-cap 500
+EXPOSE 8000

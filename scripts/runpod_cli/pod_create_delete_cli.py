@@ -84,7 +84,7 @@ class RunPodClient:
             "dataCenterPriority": "availability",
             "dockerEntrypoint": [],
             "dockerStartCmd": [],
-            "env": {"ENV_VAR": "value"},
+            "env": {"ENV_VAR": "value",**({"WANDB_API_KEY": os.environ["WANDB_API_KEY"]} if os.environ.get("WANDB_API_KEY") else {}),},
             "globalNetworking": False,
             "gpuCount": 1,
             "gpuTypeIds": ["NVIDIA GeForce RTX 4090"],

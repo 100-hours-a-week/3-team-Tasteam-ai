@@ -74,21 +74,21 @@ class _InferenceConfig:
     ENABLE_OPENAI_FALLBACK: bool = os.getenv("ENABLE_OPENAI_FALLBACK", "false").lower() == "true"
     # 벤더 API 페일오버 (failover_router_strategy.md): OpenAI 429/5xx 시 Gemini 등 다른 벤더로 전환
     GEMINI_API_KEY: Optional[str] = os.getenv("GEMINI_API_KEY")
-    GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+    GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
     LLM_FAILOVER_ENABLED: bool = bool(os.getenv("GEMINI_API_KEY", "").strip())
     # [Deprecated] OpenAI 429 시 self-hosted vLLM 폴백 → 현재는 벤더 API(LLMFailoverRouter) 페일오버로 대체됨
     ENABLE_VLLM_FALLBACK_ON_RATE_LIMIT: bool = os.getenv("ENABLE_VLLM_FALLBACK_ON_RATE_LIMIT", "false").lower() == "true"
     # [Deprecated] vLLM 폴백 시 RunPod Serverless 사용 → 벤더 API 페일오버(GEMINI_API_KEY)로 대체됨
     VLLM_USE_RUNPOD_GPU: bool = os.getenv("VLLM_USE_RUNPOD_GPU", "false").lower() == "true"
     # RunPod vLLM 전용 엔드포인트 ID. 미설정 시 RUNPOD_ENDPOINT_ID 사용.
-    RUNPOD_VLLM_ENDPOINT_ID: Optional[str] = (os.getenv("RUNPOD_VLLM_ENDPOINT_ID", "2mpd5y6lvccfk1") or "").strip() or None
+    #RUNPOD_VLLM_ENDPOINT_ID: Optional[str] = (os.getenv("RUNPOD_VLLM_ENDPOINT_ID", "2mpd5y6lvccfk1") or "").strip() or None
     RUNPOD_API_KEY: Optional[str] = os.getenv("RUNPOD_API_KEY")
-    RUNPOD_ENDPOINT_ID: str = (os.getenv("RUNPOD_ENDPOINT_ID", "2mpd5y6lvccfk1") or "").strip() or "2mpd5y6lvccfk1"
+    #RUNPOD_ENDPOINT_ID: str = (os.getenv("RUNPOD_ENDPOINT_ID", "2mpd5y6lvccfk1") or "").strip() or "2mpd5y6lvccfk1"
     USE_RUNPOD: bool = os.getenv("USE_RUNPOD", "true").lower() == "true"
     RUNPOD_POLL_INTERVAL: int = int(os.getenv("RUNPOD_POLL_INTERVAL", "2"))
     RUNPOD_MAX_WAIT_TIME: int = int(os.getenv("RUNPOD_MAX_WAIT_TIME", "300"))
     # RunPod Serverless vLLM 엔드포인트 사용 (앱 내 인프로세스 vLLM 제거됨)
-    USE_POD_VLLM: bool = os.getenv("USE_POD_VLLM", "true").lower() == "true"
+    #USE_POD_VLLM: bool = os.getenv("USE_POD_VLLM", "true").lower() == "true"
     # RunPod Pod 직접 URL (vLLM OpenAI 호환 /v1). 설정 시 Serverless 대신 이 URL로 추론. 기본값: 213.173.108.29:16366 (test_all_task 연동)
     VLLM_POD_BASE_URL: Optional[str] = (os.getenv("VLLM_POD_BASE_URL", "http://213.173.108.70:17517/v1") or "").strip() or None
 

@@ -1,14 +1,38 @@
 # 학습 전용 이미지 (scripts/train_qlora.py)
 # GPU 필수. QLoRA SFT, wandb.
+# 모델: 빌드 시 /opt에 다운로드, 기동 시 /workspace 없으면 복사 후 train_qlora 실행.
 #
 # 빌드: docker build -f Dockerfile.train-llm -t tasteam-train-llm .
-# 실행: docker run --gpus all \
-#   -v $(pwd)/distill_pipeline_output:/app/distill_pipeline_output \
-#   --env-file .env tasteam-train-llm --labeled-path /app/distill_pipeline_output/labeled/xxx/train_labeled.json --output-dir /app/distill_pipeline_output
 #
-# 환경변수: WANDB_API_KEY, HF_HOME 등
+# 로컬 실행:
+#   docker run --gpus all \
+#     -v $(pwd)/distill_pipeline_output:/app/distill_pipeline_output \
+#     --env-file .env tasteam-train-llm \
+#     --labeled-path /app/distill_pipeline_output/labeled/YYYYMMDD_HHMMSS/train_labeled.json \
+#     --output-dir /app/distill_pipeline_output
+#
+# RunPod Pod (Network Volume, 학습 결과 저장):
+#   -v /path/to/network/volume:/workspace \
+#   -e HF_HOME=/workspace/hf-cache -e HF_HUB_CACHE=/workspace/hf-cache \
+#   tasteam-train-llm \
+#   --labeled-path /workspace/distill_pipeline_output/labeled/YYYYMMDD_HHMMSS/train_labeled.json \
+#   --output-dir /workspace/distill_pipeline_output
+#   (adapter → /workspace/distill_pipeline_output/runs/YYYYMMDD_HHMMSS/adapter)
+#
+# 환경변수: WANDB_API_KEY, HF_HOME(선택), HF_HUB_CACHE(선택)
 
-FROM pytorch/pytorch:2.1.0-cuda12.1-cudnn8-runtime
+FROM runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04
+
+ENV MODEL_NAME=/workspace/llm-models/Qwen/Qwen2.5-0.5B-Instruct
+ENV HF_MODEL_ID=Qwen/Qwen2.5-0.5B-Instruct
+# 이미지 내 모델 경로 (빌드 시 채워짐. 기동 시 /workspace 없으면 여기서 복사)
+ENV MODEL_IMAGE_PATH=/opt/llm-models/Qwen/Qwen2.5-0.5B-Instruct
+
+RUN pip install -q huggingface_hub && \
+    python3 -c "from huggingface_hub import snapshot_download; snapshot_download('Qwen/Qwen2.5-0.5B-Instruct', local_dir='/opt/llm-models/Qwen/Qwen2.5-0.5B-Instruct', local_dir_use_symlinks=False)"
+
+COPY scripts/runpod_pod_entrypoint_05b.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
@@ -19,14 +43,11 @@ COPY requirements.train-llm.txt /app/
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.train-llm.txt
 
+# train_qlora.py 단독 사용. src/ import 시 COPY 추가 필요.
 COPY scripts/train_qlora.py /app/scripts/
 
 ENV PYTHONPATH=/app
 
-ENTRYPOINT ["python", "scripts/train_qlora.py"]
-CMD ["--help"]
-
-# docker build -f Dockerfile.train-llm -t tasteam-train-llm .
-# docker run --gpus all -v $(pwd)/distill_pipeline_output:/app/distill_pipeline_output --env-file .env tasteam-train-llm \
-# --labeled-path /app/distill_pipeline_output/labeled/xxx/train_labeled.json \
-# --output-dir /app/distill_pipeline_output
+ENTRYPOINT ["/entrypoint.sh"]
+# 기본: /workspace (RunPod 네트워크 볼륨). 로컬 실행 시 --output-dir /app/distill_pipeline_output 오버라이드.
+CMD ["--output-dir", "/workspace/distill_pipeline_output"]
