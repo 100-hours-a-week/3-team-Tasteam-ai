@@ -1,4 +1,6 @@
 **프로덕션에서 레이트리밋/장애 시 자동 페일오버**가 목적.
+
+> **변경 이력**: 이전에는 OpenAI 429 발생 시 self-hosted(RunPod Serverless vLLM) fallback을 사용했으나, 현재는 벤더 API(OpenAI + Gemini) failover로 변경하였다.
 이 경우 OpenRouter를 쓸지/직접 벤더를 붙일지보다 더 중요한 건 **정책(Policy)** 과 **일관성(quality/format)** 이야.
 
 ## 먼저 결론

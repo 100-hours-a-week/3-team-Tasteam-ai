@@ -77,7 +77,7 @@
 |--------|------|------------------|
 | **Qdrant** | 벡터 저장·하이브리드 검색, 리뷰 조회. 로컬 경로 또는 원격 URL. | `QDRANT_URL`, `COLLECTION_NAME`, `QDRANT_VECTORS_ON_DISK` |
 | **Redis** | 캐시(LLM·감성·임베딩 결과), 분산 락, **RQ 작업 큐**(`BATCH_USE_QUEUE=true` 시). 미연결 시 캐시·락·큐 비활성. | `REDIS_HOST`, `REDIS_PORT`, `REDIS_DB`, `REDIS_PASSWORD` |
-| **OpenAI** | 요약·감성 재판정·비교 해석용 LLM (gpt-4o-mini 등). 429 시 RunPod vLLM 폴백 가능(`ENABLE_VLLM_FALLBACK_ON_RATE_LIMIT`). | `OPENAI_API_KEY`, `OPENAI_MODEL` |
+| **OpenAI** | 요약·감성 재판정·비교 해석용 LLM (gpt-4o-mini 등). 429/5xx 시 벤더 API 페일오버(Gemini) 가능(`GEMINI_API_KEY`). | `OPENAI_API_KEY`, `OPENAI_MODEL`, `GEMINI_API_KEY` |
 | **RunPod Pod vLLM** | LLM 1차 백엔드. `VLLM_POD_BASE_URL`로 직접 호출 (OpenAI 호환 /v1). 기본: `http://213.173.108.29:16366/v1`. **Pod만 사용** (Serverless 미사용). | `VLLM_POD_BASE_URL` |
 
 **RunPod Serverless 미사용 이유** (`docs/runpod/why_dont_use_runpod_serverless.md`): Serverless는 요청 없을 때 워커가 종료되어 Ephemeral이며, Prometheus pull 기반 스크래핑 대상이 불안정함. Pod는 항상 떠 있어 고정 IP·지속적 메트릭 수집에 적합.
