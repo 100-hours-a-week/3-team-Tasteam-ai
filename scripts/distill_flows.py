@@ -20,6 +20,19 @@ Flow (docs/easydistill/distill_by_prefect.md):
   python scripts/distill_flows.py labeling --train-path datasets/xxx/train.json
   python scripts/distill_flows.py labeling_with_pod --train-path datasets/xxx/train.json  # Pod 생성→라벨링→삭제
   python scripts/distill_flows.py all
+  
+예시:
+데이터셋 생성(아직 없다면)
+  python scripts/distill_flows.py build_dataset --input tasteam_app_all_review_data.json --out-dir distill_pipeline_output
+라벨링 실행
+  python scripts/distill_flows.py labeling --train-path distill_pipeline_output/datasets/YYYYMMDD_HHMMSS/train.json --out-dir distill_pipeline_output --openai-cap 500
+학습 실행
+  python scripts/distill_flows.py train_student --labeled-path distill_pipeline_output/labeled/YYYYMMDD_HHMMSS/train_labeled.json --output-dir distill_pipeline_output
+평가 실행
+  python scripts/distill_flows.py evaluate --adapter-path distill_pipeline_output/adapters/YYYYMMDD_HHMMSS/adapter.safetensors --output-dir distill_pipeline_output --val-labeled-path distill_pipeline_output/labeled/YYYYMMDD_HHMMSS/val_labeled.json --test-labeled-path distill_pipeline_output/labeled/YYYYMMDD_HHMMSS/test_labeled.json
+  
+전체 파이프라인 한번에 실행
+  python scripts/distill_flows.py all --out-dir distill_pipeline_output --openai-cap 500
 """
 
 # distill_strategy.md 권장 수치
