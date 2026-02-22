@@ -1,4 +1,3 @@
-응, **가능해.**
 RunPod Network Volume이 **S3-compatible API**를 제공해서, `aws s3` CLI로 **업로드/다운로드/삭제/목록 보기** 같은 기본 파일 작업을 할 수 있어. ([Runpod Documentation][1])
 
 네가 쓴 `aws s3 ls ...`는 “목록 보기”고, 업로드는 `cp` 또는 `sync`를 쓰면 돼.
@@ -56,7 +55,5 @@ aws s3 cp \
 ### 한 줄 결론
 
 네가 보여준 `aws s3 ls ...` 방식 그대로, **`aws s3 cp` / `aws s3 sync`로 RunPod 네트워크 볼륨에 파일 올릴 수 있어.** ([Runpod Documentation][1])
-
-원하면, 네 볼륨 ID / 리전(eu-ro-1) 기준으로 **“로컬 → 볼륨 업로드 → Pod에서 `/workspace`로 확인”**까지 딱 맞는 커맨드 세트로 정리해줄게.
 
 [1]: https://docs.runpod.io/storage/s3-api?utm_source=chatgpt.com "S3-compatible API"
