@@ -33,6 +33,11 @@
   - 결과물을 받아온 뒤 Pod 삭제
 - 구조가 더 복잡하지만, 개념적으로는 가능
 
+방법	내용	비고
+Network Volume	훈련 결과를 Pod 내부 → Network Volume에 저장 → 볼륨을 유지한 채 Pod 삭제 → RunPod S3 호환 API/runpodctl로 다운로드	볼륨 비용 계속 발생, 다운로드 절차 필요
+scp/rsync	Pod에 SSH(예: 22/tcp)로 접속해 scp/rsync로 로컬로 복사	Pod publicIp + SSH 키 설정 필요
+HTTP 업로드	Pod 내부에서 학습 완료 시 S3/Artifact Store 등으로 업로드	추가 서비스/설정 필요
+
 ---
 
 ### 3. OpenAI 429 Fallback — ❌ 비적합
