@@ -54,12 +54,3 @@ pyspark>=3.5.0  # 대용량 데이터 처리 (Aspect 추출)
 # Evaluation: Ground Truth 평가 스크립트용 (선택적)
 #rouge-score>=0.1.2  # ROUGE 점수 계산 (리뷰 요약 평가)
 #nltk>=3.8.0  # BLEU 점수 계산 (리뷰 요약 평가)
-
-# Distill 파이프라인 (scripts/distill_flows.py, label_for_distill, train_qlora, eval_distill)
-prefect>=2.0.0
-trl>=0.12.0
-peft>=0.10.0
-bitsandbytes>=0.43.0
-datasets>=2.18.0
-rouge-score>=0.1.2
-bert-score>=0.3.13

@@ -515,3 +515,104 @@ python scripts/distill_flows.py all --out-dir distill_pipeline_output
 ```
 
 자세한 파라미터는 `scripts/distill_flows.py --help` 및 각 flow docstring 참고.
+
+---
+
+
+`scripts/distill_flows.py`는 **요약 KD(Knowledge Distillation) 파이프라인을 Prefect로 돌리는 오케스트레이션 스크립트**입니다.
+
+---
+
+## 역할 요약
+
+**`docs/easydistill/distill_by_prefect.md`와 `distill_strategy.md`에 정의된 4단계 파이프라인을 Prefect flow/task로 실행**합니다.
+
+---
+
+## 4개 Flow 구성
+
+| Flow | 역할 | 구현 상태 |
+|------|------|-----------|
+| **build_dataset_flow** | 식당 단위 split, 슬라이딩 윈도우 샘플 생성, train/val/test 저장 + 버전 태깅 | ✅ **구현됨** — `scripts/data_augmentation.py`를 subprocess로 호출 |
+| **labeling_flow** | OpenAI 골드 + self-hosted teacher 라벨링, 품질 필터/dedup | ⚠️ **스텁** — placeholder `train_labeled.json`만 생성 |
+| **train_student_flow** | QLoRA SFT로 student 학습, adapter 저장, 메타 기록 | ⚠️ **스텁** — placeholder `training_meta.json`만 생성 |
+| **evaluate_flow** | val/test 평가(ROUGE/BERTScore/GPT-judge), 휴먼 평가 샘플 생성 | ⚠️ **스텁** — placeholder `report.json`, `human_eval_samples.json`만 생성 |
+
+---
+
+## 실행 가능한 동작
+
+- **`build_dataset`**: `data_augmentation.py`를 호출해 실제 데이터 증강과 train/val/test 분할 수행.
+- **`all`**: 4개 flow를 순서대로 실행하지만, labeling/train/evaluate는 스텁이라 placeholder 파일만 생김.
+
+---
+
+## 정리
+
+- **오케스트레이션**: Prefect flow/task로 4단계 순서, 입출력 경로, 버전 태깅 관리.
+- **전략 반영**: `distill_strategy.md`, `distill_by_prefect.md`에 맞춘 상수·주석 포함.
+- **현재 실제 동작**: `build_dataset_flow`만 완전 구현되어 있고, 나머지 3개는 구조와 인터페이스만 정의된 스텁입니다.
+
+---
+
+
+각 스텁을 구현하는 기본 방향만 정리해볼게요.
+
+---
+
+## 1. labeling_flow / labeling_task
+
+**역할**: Train 샘플에 대해 OpenAI 골드 + self-hosted teacher 라벨링, 품질 필터, `labeled_path` 생성.
+
+**진행 순서**:
+1. `train_path` JSON 로드 (samples)
+2. Train에서 `openai_cap`개만 샘플링 → OpenAI API로 요약 생성 (현재 `summary_pipeline` 프롬프트/형식 유지)
+3. 나머지 샘플은 self-hosted teacher(예: vLLM Qwen2.5-7B)로 요약 생성
+4. 품질 필터 적용: JSON 구조 검증, 길이 필터, 근거 재사용 비율, 반복/붕괴 감지 등
+5. `labeled_path`에 EasyDistill 형식(instruction + output)으로 저장
+
+**참고**: EasyDistill `kd/infer.py`가 teacher 라벨 생성 패턴을 보여주고, `summary_pipeline`의 instruction/출력 형식을 재사용하면 됨.
+
+---
+
+## 2. train_student_flow / train_student_task
+
+**역할**: 라벨된 데이터로 QLoRA SFT 실행, adapter 저장.
+
+**진행 순서**:
+1. `labeled_path`를 EasyDistill/트레이너용 포맷으로 로드
+2. 골드 샘플 oversample (예: 20~30% 비중)
+3. `bitsandbytes` 4bit + `peft` LoRA로 student 모델 로드
+4. `SFTTrainer` 또는 `Trainer`로 SFT (config에 `report_to="wandb"` 가능)
+5. adapter를 `output_dir/runs/{run_id}/`에 저장
+6. 학습 메타를 `training_meta.json`에 기록
+
+**참고**: `easydistill/kd/train.py`의 데이터 로딩/템플릿 패턴을 따르되, 모델 로딩만 `BitsAndBytesConfig` + `get_peft_model(LoraConfig(...))`로 교체. 별도 `scripts/train_qlora.py`를 만들고, `train_student_task`에서 subprocess로 호출하는 방식이 관리하기 쉬움.
+
+---
+
+## 3. evaluate_flow / evaluate_task
+
+**역할**: val/test에서 Student 출력 vs OpenAI 레퍼런스 비교, 자동 지표·휴먼 평가 샘플 생성.
+
+**진행 순서**:
+1. val/test에 대해 OpenAI로 레퍼런스 요약 생성 (또는 미리 생성해둔 labeled val/test 사용)
+2. `adapter_path`에서 학습된 student 로드 → val/test 샘플에 대해 추론
+3. ROUGE, BERTScore, (선택) GPT-as-judge 계산
+4. 리포트를 `report.json`에 저장
+5. 휴먼 평가용 50~100개 샘플 ID를 뽑아 `human_eval_samples.json`에 저장 (입력/모델 출력/레퍼런스 포함하면 휴먼 평가에 편함)
+
+**참고**: `scripts/evaluate_summary.py`가 있으면 평가 로직을 재사용 가능. ROUGE/BERTScore는 `rouge-score`, `bert-score` 패키지로 계산.
+
+---
+
+## 구현 전략 요약
+
+| 스텁 | 구현 방식 |
+|------|-----------|
+| **labeling** | 별도 스크립트(예: `scripts/label_for_distill.py`) + task에서 subprocess 호출, 또는 task 내부에 라벨링 로직 직접 작성 |
+| **train_student** | 별도 `scripts/train_qlora.py` 작성 후 subprocess 호출 권장 (의존성·환경 분리, 디버깅 용이) |
+| **evaluate** | 기존 `evaluate_summary.py` 활용 또는 `scripts/eval_distill.py` 신규 작성 후 subprocess 호출 |
+
+**실행 순서**  
+labeling → train_student → evaluate 순으로 의존성이 있으므로, 각각 단독 실행·테스트가 가능하도록 하고, `distill_flows.py`에서는 subprocess나 함수 호출로 묶어서 사용하는 방식이 관리에 유리합니다.

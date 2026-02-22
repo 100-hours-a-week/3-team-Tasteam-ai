@@ -31,3 +31,8 @@ ENV PYTHONPATH=/app
 # 예: docker run ... tasteam-labeling-llm --train-path /app/datasets/xxx/train.json --output-dir /app/labeled/xxx --openai-cap 500
 ENTRYPOINT ["python", "scripts/label_for_distill.py"]
 CMD ["--help"]
+
+# docker build -f Dockerfile.labeling-llm -t tasteam-labeling-llm .
+# docker run -v $(pwd)/distill_pipeline_output:/app/distill_pipeline_output --env-file .env tasteam-labeling-llm \
+# --train-path /app/distill_pipeline_output/datasets/xxx/train.json \
+# --output-dir /app/distill_pipeline_output/labeled/xxx --openai-cap 500

@@ -25,3 +25,8 @@ ENV PYTHONPATH=/app
 
 ENTRYPOINT ["python", "scripts/train_qlora.py"]
 CMD ["--help"]
+
+# docker build -f Dockerfile.train-llm -t tasteam-train-llm .
+# docker run --gpus all -v $(pwd)/distill_pipeline_output:/app/distill_pipeline_output --env-file .env tasteam-train-llm \
+# --labeled-path /app/distill_pipeline_output/labeled/xxx/train_labeled.json \
+# --output-dir /app/distill_pipeline_output
