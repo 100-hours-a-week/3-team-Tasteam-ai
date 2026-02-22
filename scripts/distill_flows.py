@@ -17,6 +17,8 @@ Flow (docs/easydistill/distill_by_prefect.md):
 
 실행:
   python scripts/distill_flows.py build_dataset [--input path] [--out-dir dir]
+  python scripts/distill_flows.py labeling --train-path datasets/xxx/train.json
+  python scripts/distill_flows.py labeling_with_pod --train-path datasets/xxx/train.json  # Pod 생성→라벨링→삭제
   python scripts/distill_flows.py all
 """
 
@@ -33,8 +35,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
+import os
 import subprocess
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -47,6 +52,16 @@ except ImportError:
 # 프로젝트 루트 (스크립트 기준)
 _SCRIPT_DIR = Path(__file__).resolve().parent
 _PROJECT_ROOT = _SCRIPT_DIR.parent
+
+# RunPodClient import (scripts/runpod_cli)
+if str(_SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPT_DIR))
+try:
+    from runpod_cli.pod_create_delete_cli import RunPodClient
+except ImportError:
+    RunPodClient = None
+
+logger = logging.getLogger(__name__)
 
 
 @task(name="build-dataset-task", log_prints=True)
@@ -182,6 +197,123 @@ def labeling_flow(
         test_path=test_path,
         openai_cap=openai_cap,
         output_labeled_dir=str(output_labeled_dir) if output_labeled_dir else None,
+    )
+
+
+def _wait_for_vllm_ready(base_url: str, timeout_sec: int = 180, poll_interval: int = 10) -> None:
+    """vLLM /v1/models 가 응답할 때까지 대기."""
+    import requests
+    url = base_url.rstrip("/") + "/v1/models"
+    deadline = time.time() + timeout_sec
+    while time.time() < deadline:
+        try:
+            r = requests.get(url, timeout=10)
+            if r.status_code == 200:
+                logger.info("vLLM ready: %s", url)
+                return
+        except Exception as e:
+            logger.debug("vLLM not ready yet: %s", e)
+        time.sleep(poll_interval)
+    raise TimeoutError(f"vLLM at {base_url} did not become ready within {timeout_sec}s")
+
+
+@task(name="labeling-with-pod-task", log_prints=True)
+def labeling_with_pod_task(
+    train_path: str,
+    val_path: str | None = None,
+    test_path: str | None = None,
+    openai_cap: int = 500,
+    output_labeled_dir: str | None = None,
+    pod_wait_timeout_sec: int = 600,
+    vllm_ready_timeout_sec: int = 180,
+) -> dict:
+    """
+    Pod 생성 → vLLM 준비 대기 → 라벨링 → Pod 삭제.
+    RUNPOD_API_KEY 필요. self-hosted teacher용 vLLM Pod를 생성 후 label_for_distill 실행.
+    """
+    if RunPodClient is None:
+        raise RuntimeError("RunPodClient not available. Check runpod_cli import.")
+    token = os.environ.get("RUNPOD_API_KEY")
+    if not token:
+        raise ValueError("RUNPOD_API_KEY environment variable is required for labeling_with_pod")
+
+    client = RunPodClient(token=token)
+    payload = RunPodClient.get_default_pod_payload()
+    pod = client.create_pod(payload)
+    pod_id = pod["id"]
+    print("Pod created:", pod_id)
+
+    try:
+        ready = client.wait_until_running(pod_id, timeout_sec=pod_wait_timeout_sec)
+        public_ip = ready.get("publicIp")
+        if not public_ip:
+            raise RuntimeError(f"Pod {pod_id} has no publicIp. Response: {ready}")
+
+        base_url = f"http://{public_ip}:8000/v1"
+        print("Pod ready:", pod_id, "base_url:", base_url)
+
+        _wait_for_vllm_ready(base_url, timeout_sec=vllm_ready_timeout_sec)
+
+        env = os.environ.copy()
+        env["VLLM_POD_BASE_URL"] = base_url
+        env["USE_POD_VLLM"] = "true"
+        env["LLM_PROVIDER"] = "runpod"
+
+        out_dir = Path(output_labeled_dir or _PROJECT_ROOT / "distill_pipeline_output")
+        version = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        labeled_dir = out_dir / "labeled" / version
+        labeled_dir.mkdir(parents=True, exist_ok=True)
+
+        cmd = [
+            sys.executable,
+            str(_SCRIPT_DIR / "label_for_distill.py"),
+            "--train-path", str(train_path),
+            "--openai-cap", str(openai_cap),
+            "--output-dir", str(labeled_dir),
+        ]
+        if val_path and Path(val_path).exists():
+            cmd.extend(["--val-path", str(val_path)])
+        if test_path and Path(test_path).exists():
+            cmd.extend(["--test-path", str(test_path)])
+
+        result = subprocess.run(cmd, cwd=str(_PROJECT_ROOT), env=env, capture_output=False)
+        if result.returncode != 0:
+            raise RuntimeError(f"label_for_distill.py exited with {result.returncode}")
+
+        labeled_path = labeled_dir / "train_labeled.json"
+        out = {"labeled_version": version, "labeled_path": str(labeled_path)}
+        for name, fn in [("val_labeled_path", "val_labeled.json"), ("test_labeled_path", "test_labeled.json")]:
+            p = labeled_dir / fn
+            if p.exists():
+                out[name] = str(p)
+        return out
+    finally:
+        print("Cleaning up pod:", pod_id)
+        client.delete_pod(pod_id)
+
+
+@flow(name="labeling_with_pod_flow", log_prints=True)
+def labeling_with_pod_flow(
+    train_path: str,
+    val_path: str | None = None,
+    test_path: str | None = None,
+    openai_cap: int = 500,
+    output_labeled_dir: str | Path | None = None,
+    pod_wait_timeout_sec: int = 600,
+    vllm_ready_timeout_sec: int = 180,
+) -> dict:
+    """
+    Pod 생성 → 라벨링(OpenAI 골드 + vLLM teacher) → Pod 삭제.
+    docs/runpod_cli/cli_strategy.md: "Pod 생성 → 대기 → VLLM_POD_BASE_URL 설정 후 label_for_distill 실행 → 작업 완료 후 Pod 삭제"
+    """
+    return labeling_with_pod_task(
+        train_path=train_path,
+        val_path=val_path,
+        test_path=test_path,
+        openai_cap=openai_cap,
+        output_labeled_dir=str(output_labeled_dir) if output_labeled_dir else None,
+        pod_wait_timeout_sec=pod_wait_timeout_sec,
+        vllm_ready_timeout_sec=vllm_ready_timeout_sec,
     )
 
 
@@ -354,8 +486,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Prefect flows for summary KD pipeline (distill_by_prefect.md)")
     parser.add_argument(
         "flow",
-        choices=["build_dataset", "labeling", "train_student", "evaluate", "all"],
-        help="Flow to run",
+        choices=["build_dataset", "labeling", "labeling_with_pod", "train_student", "evaluate", "all"],
+        help="Flow to run (labeling_with_pod: Pod 생성→라벨링→삭제)",
     )
     parser.add_argument("--input", type=Path, default=None, help="Input reviews JSON (default: tasteam_app_all_review_data.json)")
     parser.add_argument("--out-dir", type=Path, default=None, help="Output root (default: distill_pipeline_output)")
@@ -397,6 +529,35 @@ def main() -> None:
                     test_p = str(t)
                     break
         result = labeling_flow(
+            train_path=str(args.train_path),
+            val_path=val_p,
+            test_path=test_p,
+            openai_cap=args.openai_cap,
+            output_labeled_dir=out_dir,
+        )
+        print("Result:", result)
+    elif args.flow == "labeling_with_pod":
+        if not args.train_path:
+            parser.error("labeling_with_pod requires --train-path")
+        ds_dir = out_dir / "datasets"
+        val_p, test_p = None, None
+        if args.val_path:
+            val_p = str(args.val_path)
+        elif ds_dir.exists():
+            for d in sorted(ds_dir.iterdir(), reverse=True):
+                v = d / "val.json"
+                if v.exists():
+                    val_p = str(v)
+                    break
+        if args.test_path:
+            test_p = str(args.test_path)
+        elif ds_dir.exists():
+            for d in sorted(ds_dir.iterdir(), reverse=True):
+                t = d / "test.json"
+                if t.exists():
+                    test_p = str(t)
+                    break
+        result = labeling_with_pod_flow(
             train_path=str(args.train_path),
             val_path=val_p,
             test_path=test_p,
