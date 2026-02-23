@@ -78,7 +78,8 @@
 | **Qdrant** | 벡터 저장·하이브리드 검색, 리뷰 조회. 로컬 경로 또는 원격 URL. | `QDRANT_URL`, `COLLECTION_NAME`, `QDRANT_VECTORS_ON_DISK` |
 | **Redis** | 캐시(LLM·감성·임베딩 결과), 분산 락, **RQ 작업 큐**(`BATCH_USE_QUEUE=true` 시). 미연결 시 캐시·락·큐 비활성. | `REDIS_HOST`, `REDIS_PORT`, `REDIS_DB`, `REDIS_PASSWORD` |
 | **OpenAI** | 요약·감성 재판정·비교 해석용 LLM (gpt-4o-mini 등). 429/5xx 시 벤더 API 페일오버(Gemini) 가능(`GEMINI_API_KEY`). | `OPENAI_API_KEY`, `OPENAI_MODEL`, `GEMINI_API_KEY` |
-| **RunPod Pod vLLM** | LLM 1차 백엔드. `VLLM_POD_BASE_URL`로 직접 호출 (OpenAI 호환 /v1). 기본: `http://213.173.108.29:16366/v1`. **Pod만 사용** (Serverless 미사용). | `VLLM_POD_BASE_URL` |
+| **LLM 제공자** | `LLM_PROVIDER`: `openai`(API 전용), `runpod`(Pod vLLM), `local`(로컬 모델). 미설정 시 기본 `openai`. RunPod 사용 시 `VLLM_POD_BASE_URL`로 직접 호출. | `LLM_PROVIDER`, `VLLM_POD_BASE_URL` |
+| **RunPod Pod vLLM** | LLM 1차 백엔드(Provider=runpod 시). `VLLM_POD_BASE_URL`로 직접 호출 (OpenAI 호환 /v1). 기본 예: `http://213.173.108.70:17517/v1`. **Pod만 사용** (Serverless 미사용). | `VLLM_POD_BASE_URL` |
 
 **RunPod Serverless 미사용 이유** (`docs/runpod/why_dont_use_runpod_serverless.md`): Serverless는 요청 없을 때 워커가 종료되어 Ephemeral이며, Prometheus pull 기반 스크래핑 대상이 불안정함. Pod는 항상 떠 있어 고정 IP·지속적 메트릭 수집에 적합.
 
@@ -624,6 +625,17 @@ GET /api/v1/batch/status/{job_id} → 결과 조회
 - **Vector** 업로드 결과는 Summary의 카테고리별 검색·Comparison의 레스토랑 리뷰 조회에서 사용됩니다.
 - **Summary**는 긍정/부정 비율을 세지 않고 **요약만** 생성하며, **Sentiment**가 비율을 담당합니다.
 - **Comparison**은 Vector에 적재된 리뷰를 조회한 뒤 Kiwi(+Spark)로 service/price 긍정 비율을 구하고, 전체 평균과 비교해 lift와 LLM 설명을 만듭니다.
+
+### 6.1 디스틸·학습 파이프라인 (RunPod, API 외부)
+
+요약 KD·QLoRA 학습은 **Prefect flows**와 **RunPod Pod**로 실행되며, 메인 FastAPI API와는 별도 스크립트입니다.
+
+| 항목 | 내용 |
+|------|------|
+| **오케스트레이션** | Prefect (`scripts/distill_flows.py`): build_dataset → labeling → train_student → evaluate. `docs/easydistill/distill_with_prefect.md` |
+| **학습 실행** | RunPod Pod에서 Docker 이미지(`Dockerfile.train-llm`, `jinsoo1218/train-llm`)로 `train_qlora.py` 실행. Network Volume `/workspace`에 데이터·어댑터 저장. |
+| **스토리지** | RunPod Network Volume. Pod 없이 파일 접근은 **S3 호환 API**(`aws s3 --endpoint-url https://s3api-eu-ro-1.runpod.io`) 사용. 학습용 볼륨 ID 예: `4rlm64f9lv`, vLLM용: `2kn4qj6rql`. |
+| **관련 문서** | `docs/runpod_cli/runpod_net_vol_s3_api.md`, `docs/runpod_cli/distill_train_net_vol.md`, `docs/runpod_cli/vllm_net_vol.md`, `docs/easydistill/distill_strategy.md` |
 
 ---
 

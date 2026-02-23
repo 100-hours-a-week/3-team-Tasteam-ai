@@ -318,12 +318,12 @@
 **`POST /api/v1/batch/enqueue`**
 
 - **조건**: `BATCH_USE_QUEUE=true`, Redis 연결 필요. 미충족 시 503.
-- **역할**: 배치 작업을 RQ 큐에 넣고 `job_id` 반환. batch-worker가 작업 소비(재시도·DLQ).
+- **역할**: 배치 작업을 RQ 큐에 넣고 `job_id` 반환. batch-worker가 작업 소비(재시도·DLQ). `job_type`: `sentiment` | `summary` | `comparison` | `all` (all = sentiment→summary→comparison 순차).
 
 ```json
 // 요청 (BatchEnqueueRequest)
 {
-  "job_type": "sentiment",   // sentiment | summary | comparison
+  "job_type": "all",        // sentiment | summary | comparison | all (all = sentiment→summary→comparison 순차)
   "restaurants": [
     {"restaurant_id": 1, "restaurant_name": "테스트"},
     {"restaurant_id": 2}
@@ -454,7 +454,7 @@ API별 요청/응답에 사용되는 Pydantic 모델(DTO)과 필드를 정리합
 
 | DTO | 필드 | 타입 | 설명 |
 |-----|------|------|------|
-| **BatchEnqueueRequest** | job_type | str | `sentiment` \| `summary` \| `comparison` |
+| **BatchEnqueueRequest** | job_type | str | `sentiment` \| `summary` \| `comparison` \| `all` (all = sentiment→summary→comparison 순차) |
 | | restaurants | List[Dict] | 레스토랑 리스트. 각 항목 `restaurant_id` 필수, `restaurant_name` 선택 |
 | | limit | int? | summary용 카테고리당 검색 리뷰 수. 선택, 기본 10 |
 | **BatchEnqueueResponse** | job_id | str | RQ job ID |
