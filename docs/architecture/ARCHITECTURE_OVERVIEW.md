@@ -637,6 +637,19 @@ GET /api/v1/batch/status/{job_id} → 결과 조회
 | **스토리지** | RunPod Network Volume. Pod 없이 파일 접근은 **S3 호환 API**(`aws s3 --endpoint-url https://s3api-eu-ro-1.runpod.io`) 사용. 학습용 볼륨 ID 예: `4rlm64f9lv`, vLLM용: `2kn4qj6rql`. |
 | **관련 문서** | `docs/runpod_cli/runpod_net_vol_s3_api.md`, `docs/runpod_cli/distill_train_net_vol.md`, `docs/runpod_cli/vllm_net_vol.md`, `docs/easydistill/distill_strategy.md` |
 
+### 6.2 DeepFM 파이프라인 (추천/CTR, API 외부)
+
+**CTR 예측·개인화 랭킹**용 DeepFM 학습은 메인 FastAPI API·디스틸 파이프라인과 **독립**적으로 동작합니다. 생성형 LLM이 아니며 EasyDistill KD와는 부적합합니다.
+
+| 항목 | 내용 |
+|------|------|
+| **역할** | 사용자·아이템·컨텍스트 피처 → **스칼라 점수(클릭률 등)** 예측. 주변 맛집 후보를 **개인화 랭킹**하는 스코어러로 사용. |
+| **오케스트레이션** | Prefect (`deepfm_training/training_flow.py`): `deepfm_training_flow` — 전처리 → 학습 → 모델 저장. |
+| **모델** | PyTorch DeepFM (FM + DNN). Criteo 형식 데이터. `deepfm_training/model/DeepFM.py`. |
+| **데이터** | `deepfm_training/data/raw/` (train.txt, test.txt). 전처리 결과는 `data/`에 생성. 학습 결과는 `output/<run_id>/model.pt`. |
+| **실행** | 로컬: `python deepfm_training/training_flow.py`. Docker: `Dockerfile.deepfm` → `deepfm-training` 이미지. |
+| **관련 문서** | `docs/prefect/deepfm_training_pipeline.md`, `docs/prefect/prefect_designe.md`, `deepfm_training/deepfm_tasteam.md`(tasteam 서비스 관점·피처 설계·랭킹 역할), `docs/easydistill/learning_method_fit.md`(DeepFM은 LLM 증류 부적합 명시). |
+
 ---
 
 ## 14. 설정(Config) 전체 요약
@@ -687,6 +700,7 @@ GET /api/v1/batch/status/{job_id} → 결과 조회
 | **Summary** | api/routers/llm.py | _get_seed_list_for_restaurant(음식점별 recall seed), _retrieve_category_hits_accuracy_first, _process_one_restaurant_async, _batch_summarize_async | summary_pipeline.py(summarize_aspects_new, _async), comparison_pipeline(compute_recall_seeds_from_reviews, recall_seeds_to_seed_lists), vector_search, config, models |
 | **Comparison** | api/routers/llm.py | ComparisonPipeline.compare, compare_batch | comparison.py, comparison_pipeline.py(calculate_single_restaurant_ratios, calculate_comparison_lift, calculate_all_average_ratios_from_file/from_reviews, format_comparison_display, _spark_calculate_ratios, _python_calculate_ratios), vector_search, llm_utils, config, models |
 | **Batch (큐)** | api/routers/batch.py | POST /batch/enqueue, GET /batch/status/{job_id} | queue_tasks.py(run_*_batch_job, run_all_batch_job), scripts/rq_worker.py, scripts/trigger_offline_batch.py |
+| **DeepFM (API 외부)** | — | Prefect flow. `deepfm_training/training_flow.py`(deepfm_training_flow), `main.py` | model/DeepFM.py, data/raw, output. §6.2 참고. |
 
 **공통**: api/main.py, api/dependencies.py, config.py, models.py, cache.py(acquire_lock), metrics_collector.py, metrics_db.py.
 
@@ -783,3 +797,4 @@ GET /api/v1/batch/status/{job_id} → 결과 조회
 - **RunPod Pod vs Serverless**: [why_dont_use_runpod_serverless.md](../runpod/why_dont_use_runpod_serverless.md) — Serverless 미사용 이유 (Ephemeral, Prometheus 스크래핑 불안정 등). Pod만 사용.
 - **오프라인 배치 전략**: [offline_batch_strategy.md](../batch/offline_batch_strategy.md) — RQ 워커, 작업 큐·재시도·DLQ, 버전별 SKIP.
 - **오프라인 배치 사용법**: [offline_batch_processing.md](../batch/offline_batch_processing.md) — 트리거, ingestion, 단일 레스토랑, enqueue 예시.
+- **DeepFM 학습 파이프라인**: [deepfm_training_pipeline.md](../prefect/deepfm_training_pipeline.md) — Prefect flow, 실행·배포. [deepfm_tasteam.md](../../deepfm_training/deepfm_tasteam.md) — tasteam 서비스 관점·랭킹·피처 설계.
