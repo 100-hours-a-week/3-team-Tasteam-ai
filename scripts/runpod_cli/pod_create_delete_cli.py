@@ -1,7 +1,7 @@
 import os
 import time
 import requests
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Literal, Optional
 
 
 class RunPodClient:
@@ -67,8 +67,14 @@ class RunPodClient:
         raise TimeoutError(f"Pod {pod_id} did not reach RUNNING within {timeout_sec}s. Last: {last}")
 
     @staticmethod
-    def get_default_pod_payload() -> Dict[str, Any]:
-        """vLLM Pod 생성용 기본 payload (distill 라벨링 등에서 재사용)."""
+    def get_default_pod_payload(use: Literal["labeling", "train"] = "labeling") -> Dict[str, Any]:
+        """vLLM Pod 생성용 기본 payload (distill 라벨링 등에서 재사용).
+        use: "labeling" → RUNPOD_POD_IMAGE_NAME_LABELING / "train" → RUNPOD_POD_IMAGE_NAME_TRAIN
+        """
+        if use == "train":
+            image_name = os.environ.get("RUNPOD_POD_IMAGE_NAME_TRAIN", "jinsoo1218/train-llm:latest")
+        else:
+            image_name = os.environ.get("RUNPOD_POD_IMAGE_NAME_LABELING", "jinsoo1218/runpod-pod-vllm:latest")
         return {
             "allowedCudaVersions": ["13.0"],
             "cloudType": "SECURE",
@@ -89,7 +95,7 @@ class RunPodClient:
             "gpuCount": 1,
             "gpuTypeIds": ["NVIDIA GeForce RTX 4090"],
             "gpuTypePriority": "availability",
-            "imageName": "jinsoo1218/vllm-pod:latest",
+            "imageName": image_name,
             "interruptible": False,
             "locked": False,
             "minDiskBandwidthMBps": 123,

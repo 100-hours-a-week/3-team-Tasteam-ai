@@ -254,7 +254,7 @@ def labeling_with_pod_task(
         raise ValueError("RUNPOD_API_KEY environment variable is required for labeling_with_pod")
 
     client = RunPodClient(token=token)
-    payload = RunPodClient.get_default_pod_payload()
+    payload = RunPodClient.get_default_pod_payload(use="labeling")
     pod = client.create_pod(payload)
     pod_id = pod["id"]
     print("Pod created:", pod_id)
