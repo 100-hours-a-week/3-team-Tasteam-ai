@@ -20,8 +20,11 @@ Flow (docs/easydistill/distill_by_prefect.md):
   python scripts/distill_flows.py labeling_with_pod --train-path datasets/xxx/train.json
   python scripts/distill_flows.py train_student_with_pod --labeled-path .../train_labeled.json --output-dir ...
   python scripts/distill_flows.py run_sweep [--sweep-id <sweep_id>] --labeled-path .../train_labeled.json [--out-dir ...]
-  python scripts/distill_flows.py all        # build_dataset → labeling(Pod) → train(Pod) → evaluate
+  python scripts/distill_flows.py all        # build_dataset → labeling(Pod) → train(Pod) → evaluate → merge for serving
   python scripts/distill_flows.py all_sweep [--sweep-id <sweep_id>]  # sweep-id 없으면 flow 내부에서 sweep 등록 후 실행
+  python scripts/distill_flows.py merge_for_serving --adapter-path .../adapter [--out-dir ...]  # adapter만 merge하여 서빙 경로 생성
+  python scripts/distill_flows.py merge_for_serving_with_pod --adapter-path .../adapter  # 로컬 adapter 업로드 후 Pod merge
+  python scripts/distill_flows.py merge_for_serving_with_pod --run-id RUN_ID  # 볼륨의 runs/RUN_ID/adapter로 merge
 
 예시:
   python scripts/distill_flows.py build_dataset --input tasteam_app_all_review_data.json --out-dir distill_pipeline_output
@@ -48,6 +51,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
@@ -74,12 +78,20 @@ try:
         upload_labeled_dir_to_runpod,
         list_run_ids_with_adapter,
         download_directory_from_runpod,
+        upload_file_to_volume,
+        upload_directory,
+        get_runpod_s3_client,
+        object_exists,
         DEFAULT_VOLUME_ID,
     )
 except ImportError:
     upload_labeled_dir_to_runpod = None
     list_run_ids_with_adapter = None
     download_directory_from_runpod = None
+    upload_file_to_volume = None
+    upload_directory = None
+    get_runpod_s3_client = None
+    object_exists = None
     DEFAULT_VOLUME_ID = "4rlm64f9lv"
 
 logger = logging.getLogger(__name__)
@@ -617,6 +629,192 @@ def evaluate_flow(
     )
 
 
+@task(name="merge-adapter-for-serving-task", log_prints=True)
+def merge_adapter_for_serving_task(
+    adapter_path: str,
+    base_model: str,
+    output_dir: str | Path,
+    merge_subdir: str = "merged_for_serving",
+) -> dict:
+    """Adapter + base를 merge하여 서빙용 단일 디렉터리로 저장. merge_adapter_for_serving.py subprocess."""
+    out_dir = Path(output_dir)
+    version = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    merged_dir = out_dir / merge_subdir / version
+    merged_dir.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        sys.executable,
+        str(_SCRIPT_DIR / "merge_adapter_for_serving.py"),
+        "--adapter-path", str(adapter_path),
+        "--base-model", base_model,
+        "--output-dir", str(merged_dir),
+    ]
+    logger.info("Merge adapter for serving: %s", " ".join(cmd))
+    result = subprocess.run(cmd, cwd=str(_PROJECT_ROOT), capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"merge_adapter_for_serving.py exited with {result.returncode}\n{result.stderr or ''}")
+    merged_path = merged_dir.resolve()
+    pointer_dir = out_dir / merge_subdir
+    pointer_dir.mkdir(parents=True, exist_ok=True)
+    pointer = {
+        "merged_model_path": str(merged_path),
+        "merged_at": version,
+        "adapter_path": str(adapter_path),
+        "base_model": base_model,
+    }
+    pointer_path = pointer_dir / "latest_merged_path.json"
+    with open(pointer_path, "w", encoding="utf-8") as f:
+        json.dump(pointer, f, ensure_ascii=False, indent=2)
+    logger.info("Wrote serving pointer: %s -> %s", pointer_path, merged_path)
+    return {"merged_model_path": str(merged_path), "pointer_path": str(pointer_path), "pointer": pointer}
+
+
+@flow(name="merge_for_serving_flow", log_prints=True)
+def merge_for_serving_flow(
+    adapter_path: str,
+    base_model: str = "Qwen/Qwen2.5-0.5B-Instruct",
+    output_dir: str | Path | None = None,
+    merge_subdir: str = "merged_for_serving",
+) -> dict:
+    """Adapter를 base와 merge하여 서빙용 경로로 저장하고, latest_merged_path.json 포인터 기록. API는 LLM_MODEL=<merged_model_path> 사용."""
+    out_dir = Path(output_dir or _PROJECT_ROOT / "distill_pipeline_output")
+    return merge_adapter_for_serving_task(
+        adapter_path=adapter_path,
+        base_model=base_model,
+        output_dir=out_dir,
+        merge_subdir=merge_subdir,
+    )
+
+
+@task(name="merge-adapter-with-pod-task", log_prints=True)
+def merge_adapter_with_pod_task(
+    base_model: str = "Qwen/Qwen2.5-0.5B-Instruct",
+    adapter_path: str | None = None,
+    run_id: str | None = None,
+    volume_id: str | None = None,
+    merge_poll_interval_sec: int = 30,
+    merge_timeout_sec: int = 1800,
+    pod_wait_timeout_sec: int = 600,
+) -> dict:
+    """
+    볼륨이 마운트된 Pod에서 merge 스크립트 실행 → 결과를 볼륨에 직접 저장.
+    - run_id 지정 시: 볼륨에 이미 있는 runs/<run_id>/adapter 사용 (로컬 업로드 없음).
+    - adapter_path 지정 시: 로컬 adapter 디렉터리를 볼륨에 업로드 후 Pod에서 merge 실행.
+    완료 시 볼륨에 merged_for_serving/<version>/ 및 latest_merged_path.json 기록.
+    추론 Pod는 같은 볼륨 마운트 후 LLM_MODEL=.../merged_for_serving/<version> 또는 latest_merged_path.json 사용.
+    """
+    if RunPodClient is None:
+        raise RuntimeError("RunPodClient not available.")
+    if not upload_file_to_volume or not upload_directory or not get_runpod_s3_client or not object_exists:
+        raise RuntimeError("runpod_s3_upload (upload_file_to_volume, upload_directory, object_exists) required.")
+    token = os.environ.get("RUNPOD_API_KEY")
+    if not token:
+        raise ValueError("RUNPOD_API_KEY required for merge_adapter_with_pod")
+    if not os.environ.get("RUNPOD_S3_ACCESS_KEY") or not os.environ.get("RUNPOD_S3_SECRET_ACCESS_KEY"):
+        raise ValueError("RUNPOD_S3_ACCESS_KEY and RUNPOD_S3_SECRET_ACCESS_KEY required.")
+
+    vol_id = volume_id or _get_train_volume_id()
+    version = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+
+    if run_id and adapter_path:
+        raise ValueError("Provide either run_id or adapter_path, not both.")
+    if not run_id and not adapter_path:
+        raise ValueError("Provide run_id (adapter on volume) or adapter_path (local dir).")
+
+    client = get_runpod_s3_client()
+
+    if run_id:
+        # 볼륨에 이미 있는 runs/<run_id>/adapter 사용
+        adapter_on_volume = f"/workspace/distill_pipeline_output/runs/{run_id}/adapter"
+        logger.info("Using adapter on volume: %s", adapter_on_volume)
+    else:
+        # 로컬 adapter를 볼륨에 업로드
+        adapter_dir = Path(adapter_path).resolve()
+        if not adapter_dir.is_dir():
+            raise FileNotFoundError(f"adapter path not a directory: {adapter_dir}")
+        adapter_prefix = f"distill_pipeline_output/merge_input/{version}/adapter"
+        logger.info("Uploading adapter to volume prefix %s", adapter_prefix)
+        upload_directory(client, vol_id, adapter_dir, adapter_prefix)
+        adapter_on_volume = f"/workspace/distill_pipeline_output/merge_input/{version}/adapter"
+
+    # Merge 스크립트를 볼륨에 업로드
+    merge_script = _SCRIPT_DIR / "merge_adapter_for_serving.py"
+    if not merge_script.is_file():
+        raise FileNotFoundError(f"merge script not found: {merge_script}")
+    upload_file_to_volume(merge_script, volume_id=vol_id, object_key="distill_pipeline_output/merge_scripts/merge_adapter_for_serving.py")
+
+    # Pod에서 merge 실행 (볼륨 경로: /workspace)
+    adapter_on_volume = f"/workspace/distill_pipeline_output/merge_input/{version}/adapter"
+    output_on_volume = f"/workspace/distill_pipeline_output/merged_for_serving/{version}"
+    docker_start_cmd = [
+        "/workspace/distill_pipeline_output/merge_scripts/merge_adapter_for_serving.py",
+        "--adapter-path", adapter_on_volume,
+        "--base-model", base_model,
+        "--output-dir", output_on_volume,
+    ]
+    payload = RunPodClient.get_default_pod_payload(use="merge", docker_start_cmd=docker_start_cmd)
+    runpod_client = RunPodClient(token=token)
+    pod = runpod_client.create_pod(payload)
+    pod_id = pod["id"]
+    logger.info("Merge Pod created: %s", pod_id)
+
+    try:
+        runpod_client.wait_until_running(pod_id, timeout_sec=pod_wait_timeout_sec)
+        meta_key = f"distill_pipeline_output/merged_for_serving/{version}/merge_meta.json"
+        deadline = time.time() + merge_timeout_sec
+        while time.time() < deadline:
+            if object_exists(client, vol_id, meta_key):
+                logger.info("Merge completed: %s", meta_key)
+                break
+            time.sleep(merge_poll_interval_sec)
+        else:
+            raise TimeoutError(f"Merge did not produce merge_meta.json within {merge_timeout_sec}s. Check Pod logs.")
+
+        # 볼륨에 latest_merged_path.json 기록 (추론 Pod가 읽을 수 있도록)
+        pointer = {
+            "merged_model_path": output_on_volume,
+            "merged_at": version,
+            "adapter_path": adapter_on_volume,
+            "base_model": base_model,
+        }
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, encoding="utf-8") as f:
+            json.dump(pointer, f, ensure_ascii=False, indent=2)
+            tmp_path = f.name
+        try:
+            upload_file_to_volume(tmp_path, volume_id=vol_id, object_key="distill_pipeline_output/merged_for_serving/latest_merged_path.json")
+        finally:
+            Path(tmp_path).unlink(missing_ok=True)
+
+        return {
+            "merged_model_path_on_volume": output_on_volume,
+            "pointer_path_on_volume": "/workspace/distill_pipeline_output/merged_for_serving/latest_merged_path.json",
+            "version": version,
+            "pointer": pointer,
+        }
+    finally:
+        logger.info("Cleaning up merge pod: %s", pod_id)
+        runpod_client.delete_pod(pod_id)
+
+
+@flow(name="merge_for_serving_with_pod_flow", log_prints=True)
+def merge_for_serving_with_pod_flow(
+    base_model: str = "Qwen/Qwen2.5-0.5B-Instruct",
+    adapter_path: str | None = None,
+    run_id: str | None = None,
+    volume_id: str | None = None,
+    merge_timeout_sec: int = 1800,
+) -> dict:
+    """볼륨이 마운트된 Pod에서 adapter+base merge 실행 후 결과를 볼륨에 저장.
+    run_id: 볼륨에 이미 있는 학습 run (runs/<run_id>/adapter 사용). adapter_path와 둘 중 하나만 지정.
+    adapter_path: 로컬 adapter 디렉터리 (볼륨에 업로드 후 merge)."""
+    return merge_adapter_with_pod_task(
+        base_model=base_model,
+        adapter_path=adapter_path,
+        run_id=run_id,
+        volume_id=volume_id,
+        merge_timeout_sec=merge_timeout_sec,
+    )
+
+
 @flow(name="distill_pipeline_all", log_prints=True)
 def distill_pipeline_all(
     input_path: str | Path | None = None,
@@ -647,7 +845,12 @@ def distill_pipeline_all(
         test_labeled_path=lb.get("test_labeled_path"),
         output_dir=out_dir,
     )
-    return {"build_dataset": ds, "labeling": lb, "train_student": tr, "evaluate": ev}
+    merge_result = merge_for_serving_flow(
+        adapter_path=tr["adapter_path"],
+        base_model=student_model,
+        output_dir=out_dir,
+    )
+    return {"build_dataset": ds, "labeling": lb, "train_student": tr, "evaluate": ev, "merge_for_serving": merge_result}
 
 
 @flow(name="distill_pipeline_all_sweep", log_prints=True)
@@ -680,15 +883,22 @@ def distill_pipeline_all_sweep(
         test_labeled_path=lb.get("test_labeled_path"),
         base_model=student_model,
     )
-    return {"build_dataset": ds, "labeling": lb, "run_sweep_and_evaluate": sweep_ev}
+    merge_result = None
+    if sweep_ev.get("best_adapter_path"):
+        merge_result = merge_for_serving_flow(
+            adapter_path=sweep_ev["best_adapter_path"],
+            base_model=student_model,
+            output_dir=out_dir,
+        )
+    return {"build_dataset": ds, "labeling": lb, "run_sweep_and_evaluate": sweep_ev, "merge_for_serving": merge_result}
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Prefect flows for summary KD pipeline (distill_by_prefect.md)")
     parser.add_argument(
         "flow",
-        choices=["build_dataset", "labeling_with_pod", "train_student_with_pod", "run_sweep", "evaluate", "all", "all_sweep"],
-        help="Flow to run. all/all_sweep: 라벨링·학습 Pod 기준.",
+        choices=["build_dataset", "labeling_with_pod", "train_student_with_pod", "run_sweep", "evaluate", "merge_for_serving", "merge_for_serving_with_pod", "all", "all_sweep"],
+        help="Flow to run. all/all_sweep: 라벨링·학습 Pod 기준. merge_for_serving_with_pod: Pod에서 merge 후 볼륨에 저장.",
     )
     parser.add_argument("--sweep-id", type=str, default=None, help="wandb sweep id (optional; 없으면 --sweep-yaml으로 flow 내부에서 등록)")
     parser.add_argument("--sweep-yaml", type=Path, default=None, help="sweep 설정 yaml (sweep-id 없을 때 사용, 기본: scripts/wandb_sweep_qlora.yaml)")
@@ -698,7 +908,8 @@ def main() -> None:
     parser.add_argument("--val-path", type=Path, default=None, help="val.json (for labeling_with_pod)")
     parser.add_argument("--test-path", type=Path, default=None, help="test.json (for labeling_with_pod)")
     parser.add_argument("--labeled-path", type=Path, default=None, help="train_labeled.json (for train_student_with_pod, run_sweep)")
-    parser.add_argument("--adapter-path", type=Path, default=None, help="adapter path (for evaluate)")
+    parser.add_argument("--adapter-path", type=Path, default=None, help="adapter path (for evaluate, merge_for_serving; merge_for_serving_with_pod 시 로컬 adapter)")
+    parser.add_argument("--run-id", type=str, default=None, help="볼륨 상의 학습 run id (merge_for_serving_with_pod 시 --adapter-path 대신 사용)")
     parser.add_argument("--val-labeled-path", type=Path, default=None, help="val_labeled.json (for evaluate)")
     parser.add_argument("--test-labeled-path", type=Path, default=None, help="test_labeled.json (for evaluate)")
     parser.add_argument("--openai-cap", type=int, default=500, help="OpenAI labeling cap (for labeling_with_pod/all)")
@@ -770,6 +981,29 @@ def main() -> None:
             base_model=args.student_model,
         )
         print("Result:", result)
+    elif args.flow == "merge_for_serving":
+        if not args.adapter_path:
+            parser.error("merge_for_serving requires --adapter-path")
+        result = merge_for_serving_flow(
+            adapter_path=str(args.adapter_path),
+            base_model=args.student_model,
+            output_dir=out_dir,
+        )
+        print("Result:", result)
+        print("API 사용: LLM_MODEL=" + result["merged_model_path"])
+    elif args.flow == "merge_for_serving_with_pod":
+        if not args.run_id and not args.adapter_path:
+            parser.error("merge_for_serving_with_pod requires --run-id (adapter on volume) or --adapter-path (local)")
+        if args.run_id and args.adapter_path:
+            parser.error("merge_for_serving_with_pod: use either --run-id or --adapter-path, not both")
+        result = merge_for_serving_with_pod_flow(
+            base_model=args.student_model,
+            adapter_path=str(args.adapter_path) if args.adapter_path else None,
+            run_id=args.run_id,
+        )
+        print("Result:", result)
+        print("추론 Pod에서: LLM_MODEL=" + result["merged_model_path_on_volume"])
+        print("또는 볼륨의", result["pointer_path_on_volume"], "에서 merged_model_path 읽기")
     elif args.flow == "all":
         result = distill_pipeline_all(
             input_path=args.input,

@@ -68,17 +68,21 @@ class RunPodClient:
 
     @staticmethod
     def get_default_pod_payload(
-        use: Literal["labeling", "train"] = "labeling",
+        use: Literal["labeling", "train", "merge"] = "labeling",
         docker_start_cmd: list[str] | None = None,
     ) -> Dict[str, Any]:
         """Pod 생성용 기본 payload.
-        use: "labeling" → vLLM 이미지/볼륨, "train" → 학습 이미지/볼륨.
-        docker_start_cmd: 지정 시 컨테이너 CMD 오버라이드 (train 시 --labeled-path 등 전달용).
+        use: "labeling" → vLLM 이미지/볼륨, "train" → 학습 이미지/볼륨, "merge" → 학습 이미지/볼륨에서 merge 스크립트 실행.
+        docker_start_cmd: 지정 시 컨테이너 CMD 오버라이드 (train 시 --labeled-path 등 전달용, merge 시 merge 스크립트 경로+인자).
         """
         if use == "train":
             image_name = os.environ.get("RUNPOD_POD_IMAGE_NAME_TRAIN", "jinsoo1218/train-llm:latest")
             network_volume_id = os.environ.get("RUNPOD_NETWORK_VOLUME_ID_TRAIN", "4rlm64f9lv")
             name = "train-pod"
+        elif use == "merge":
+            image_name = os.environ.get("RUNPOD_POD_IMAGE_NAME_TRAIN", "jinsoo1218/train-llm:latest")
+            network_volume_id = os.environ.get("RUNPOD_NETWORK_VOLUME_ID_TRAIN", "4rlm64f9lv")
+            name = "merge-pod"
         else:
             image_name = os.environ.get("RUNPOD_POD_IMAGE_NAME_LABELING", "jinsoo1218/runpod-pod-vllm:latest")
             network_volume_id = os.environ.get("RUNPOD_NETWORK_VOLUME_ID_LABELING", "2kn4qj6rql")
@@ -119,6 +123,8 @@ class RunPodClient:
             "volumeInGb": 20,
             "volumeMountPath": "/workspace",
         }
+        if use == "merge":
+            payload["dockerEntrypoint"] = ["python"]
         return payload
 
     def _handle_json_response(self, resp: requests.Response) -> Dict[str, Any]:

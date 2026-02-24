@@ -72,6 +72,35 @@ def upload_file(
     s3_client.upload_file(str(local_path), bucket, object_key)
 
 
+def object_exists(s3_client: Any, bucket: str, key: str) -> bool:
+    """볼륨(S3)에 해당 키가 존재하는지 확인. merge 완료 폴링용."""
+    try:
+        s3_client.head_object(Bucket=bucket, Key=key)
+        return True
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") == "404":
+            return False
+        raise
+
+
+def upload_file_to_volume(
+    local_path: str | Path,
+    volume_id: str | None = None,
+    object_key: str | None = None,
+) -> None:
+    """
+    단일 파일을 RunPod 네트워크 볼륨에 업로드.
+    object_key 미지정 시 파일명만 사용 (볼륨 루트에 업로드).
+    """
+    if not os.environ.get("RUNPOD_S3_ACCESS_KEY") or not os.environ.get("RUNPOD_S3_SECRET_ACCESS_KEY"):
+        raise ValueError("RUNPOD_S3_ACCESS_KEY and RUNPOD_S3_SECRET_ACCESS_KEY are required.")
+    local_path = Path(local_path)
+    bucket = volume_id or os.environ.get("RUNPOD_NETWORK_VOLUME_ID", DEFAULT_VOLUME_ID)
+    key = object_key if object_key else local_path.name
+    client = get_runpod_s3_client()
+    upload_file(client, bucket, local_path, key)
+
+
 def upload_directory(
     s3_client: Any,
     bucket: str,

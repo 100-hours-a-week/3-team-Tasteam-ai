@@ -68,3 +68,56 @@
   **환경변수** 또는 **설정 파일**로 `base_model` + `adapter_path`만 넘겨 주는 방식이 구현·운영 모두 가볍습니다.
 - **vLLM 등 merge된 모델만 쓸 예정**이면:  
   “학습 → (선택) best 선정 → merge → merge 경로를 환경변수/설정 파일에 넣기”처럼 **merge 후 경로**를 기준으로 두고, 그 경로를 환경변수나 설정 파일로 넘기는 식으로 쓰는 게 자연합니다.
+
+---
+
+## 구현: Merge 후 경로 (3번)
+
+파이프라인에서 **학습된 adapter를 base와 merge해 서빙용 단일 디렉터리**로 저장하고, API는 해당 경로만 `LLM_MODEL`로 지정해 사용한다.
+
+### 자동 실행
+
+- **all**: `build_dataset` → `labeling_with_pod` → `train_student_with_pod` → `evaluate` → **merge_for_serving**
+- **all_sweep**: `build_dataset` → `labeling_with_pod` → `run_sweep_and_evaluate` → best adapter 있으면 **merge_for_serving**
+
+Merge 결과는 `out_dir/merged_for_serving/YYYYMMDD_HHMMSS/` 에 저장되고, `out_dir/merged_for_serving/latest_merged_path.json` 에 현재 서빙에 쓸 경로가 기록된다.
+
+### 수동 실행 (adapter만 merge)
+
+```bash
+python scripts/distill_flows.py merge_for_serving --adapter-path .../runs/xxx/adapter [--out-dir distill_pipeline_output] [--student-model Qwen/Qwen2.5-0.5B-Instruct]
+```
+
+또는 스크립트만:
+
+```bash
+python scripts/merge_adapter_for_serving.py --adapter-path .../adapter --base-model Qwen/Qwen2.5-0.5B-Instruct --output-dir merged_models/20250101_120000
+```
+
+### API에서 사용
+
+- **환경변수**: merge 후 출력된 경로를 그대로 사용  
+  `export LLM_MODEL=/path/to/distill_pipeline_output/merged_for_serving/YYYYMMDD_HHMMSS`
+- **포인터 파일**: 매번 최신 merge 경로를 쓰려면  
+  `latest_merged_path.json` 의 `merged_model_path` 값을 읽어서 `LLM_MODEL`로 설정하거나, 스크립트/배포에서 해당 경로를 주입.
+
+### 의존성
+
+Merge 스크립트/flow는 `transformers`, `peft` 가 필요하다. 학습용 `requirements.train-llm.txt` 를 쓰는 환경에서 실행하면 된다.
+
+---
+
+## Merge on Pod (볼륨에 직접 저장)
+
+API/추론을 **RunPod Pod**에서 돌릴 경우, merge도 **같은 네트워크 볼륨이 마운트된 Pod**에서 실행해 결과를 볼륨에 두면, 추론 Pod는 그 경로만 쓰면 된다.
+
+### flow: merge_for_serving_with_pod
+
+- **동작 (둘 중 하나)**: **--adapter-path** 로컬 adapter를 볼륨에 업로드 후 Pod에서 merge. **--run-id** 볼륨에 이미 있는 runs/RUN_ID/adapter 사용(업로드 없음) 후 Pod에서 merge. 결과는 볼륨의 merged_for_serving/YYYYMMDD_HHMMSS/ 및 latest_merged_path.json.
+- **실행**: `--adapter-path .../adapter` 또는 `--run-id RUN_ID`
+- **필요 환경변수**: `RUNPOD_API_KEY`, `RUNPOD_S3_ACCESS_KEY`, `RUNPOD_S3_SECRET_ACCESS_KEY`, (선택) `RUNPOD_NETWORK_VOLUME_ID_TRAIN`.
+
+### 추론 Pod에서 사용
+
+- 같은 네트워크 볼륨을 마운트한 추론 Pod를 띄운다.
+- `LLM_MODEL`을 볼륨 안 merge 경로로 설정. 최신 경로는 볼륨의 `distill_pipeline_output/merged_for_serving/latest_merged_path.json` 에서 `merged_model_path` 를 읽어 사용하면 된다.
