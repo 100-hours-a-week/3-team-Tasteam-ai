@@ -19,9 +19,9 @@ Flow (docs/easydistill/distill_by_prefect.md):
   python scripts/distill_flows.py build_dataset [--input path] [--out-dir dir]
   python scripts/distill_flows.py labeling_with_pod --train-path datasets/xxx/train.json
   python scripts/distill_flows.py train_student_with_pod --labeled-path .../train_labeled.json --output-dir ...
-  python scripts/distill_flows.py run_sweep --sweep-id <sweep_id> --labeled-path .../train_labeled.json [--out-dir ...]
+  python scripts/distill_flows.py run_sweep [--sweep-id <sweep_id>] --labeled-path .../train_labeled.json [--out-dir ...]
   python scripts/distill_flows.py all        # build_dataset → labeling(Pod) → train(Pod) → evaluate
-  python scripts/distill_flows.py all_sweep --sweep-id <sweep_id>  # build_dataset → labeling(Pod) → sweep → best run으로 evaluate
+  python scripts/distill_flows.py all_sweep [--sweep-id <sweep_id>]  # sweep-id 없으면 flow 내부에서 sweep 등록 후 실행
 
 예시:
   python scripts/distill_flows.py build_dataset --input tasteam_app_all_review_data.json --out-dir distill_pipeline_output
@@ -45,6 +45,7 @@ import argparse
 import json
 import logging
 import os
+import re
 import subprocess
 import sys
 import time
@@ -413,6 +414,37 @@ def train_student_with_pod_flow(
     )
 
 
+@task(name="register-sweep-task", log_prints=True)
+def register_sweep_task(sweep_yaml_path: str | Path) -> str:
+    """wandb sweep <yaml> 를 subprocess로 실행하고 stdout에서 sweep id를 파싱해 반환."""
+    path = Path(sweep_yaml_path)
+    if not path.is_absolute():
+        path = _PROJECT_ROOT / path
+    if not path.exists():
+        raise FileNotFoundError(f"sweep yaml not found: {path}")
+    cmd = ["wandb", "sweep", str(path)]
+    logger.info("Registering sweep: %s", " ".join(cmd))
+    result = subprocess.run(
+        cmd,
+        cwd=str(_PROJECT_ROOT),
+        env=os.environ.copy(),
+        capture_output=True,
+        text=True,
+    )
+    out = (result.stdout or "") + (result.stderr or "")
+    if result.returncode != 0:
+        raise RuntimeError(f"wandb sweep failed (code={result.returncode}): {out}")
+    # wandb 출력 예: "Create sweep with ID: entity/project/xxxx" 또는 "Sweep ID: entity/project/xxxx"
+    match = re.search(r"(?:sweep with )?ID:\s*(\S+/\S+/\S+)", out, re.IGNORECASE)
+    if not match:
+        match = re.search(r"(\w+/\w+/[a-zA-Z0-9]+)", out)
+    if not match:
+        raise RuntimeError(f"Could not parse sweep id from wandb output: {out}")
+    sweep_id = match.group(1).strip()
+    logger.info("Parsed sweep_id: %s", sweep_id)
+    return sweep_id
+
+
 @task(name="run-sweep-agent-task", log_prints=True)
 def run_sweep_agent_task(
     sweep_id: str,
@@ -435,13 +467,20 @@ def run_sweep_agent_task(
     return {"sweep_id": sweep_id, "labeled_path": labeled_path, "output_dir": output_dir}
 
 
+DEFAULT_SWEEP_YAML = _SCRIPT_DIR / "wandb_sweep_qlora.yaml"
+
+
 @flow(name="run_sweep_flow", log_prints=True)
 def run_sweep_flow(
-    sweep_id: str,
     labeled_path: str,
+    sweep_id: str | None = None,
+    sweep_yaml: str | Path | None = None,
     output_dir: str | Path | None = None,
 ) -> dict:
-    """wandb sweep 에이전트를 subprocess로 실행 (프로세스 격리, docs/wandb/wandb_subprocess_oneprocess.md)."""
+    """wandb sweep 에이전트를 subprocess로 실행. sweep_id가 없으면 sweep_yaml으로 먼저 등록 후 실행."""
+    if sweep_id is None:
+        yaml_path = sweep_yaml if sweep_yaml is not None else DEFAULT_SWEEP_YAML
+        sweep_id = register_sweep_task(yaml_path)
     out_dir = str(output_dir) if output_dir else str(_PROJECT_ROOT / "distill_pipeline_output")
     return run_sweep_agent_task(sweep_id=sweep_id, labeled_path=labeled_path, output_dir=out_dir)
 
@@ -480,14 +519,18 @@ def get_best_adapter_path_from_sweep_task(
 
 @flow(name="run_sweep_and_evaluate_flow", log_prints=True)
 def run_sweep_and_evaluate_flow(
-    sweep_id: str,
     labeled_path: str,
+    sweep_id: str | None = None,
+    sweep_yaml: str | Path | None = None,
     output_dir: str | Path | None = None,
     val_labeled_path: str | None = None,
     test_labeled_path: str | None = None,
     base_model: str = "Qwen/Qwen2.5-0.5B-Instruct",
 ) -> dict:
-    """sweep subprocess 실행 → best run adapter 경로 조회 → evaluate 실행."""
+    """sweep subprocess 실행 → best run adapter 경로 조회 → evaluate 실행. sweep_id 없으면 sweep_yaml으로 등록 후 실행."""
+    if sweep_id is None:
+        yaml_path = sweep_yaml if sweep_yaml is not None else DEFAULT_SWEEP_YAML
+        sweep_id = register_sweep_task(yaml_path)
     out_dir = str(output_dir) if output_dir else str(_PROJECT_ROOT / "distill_pipeline_output")
     run_sweep_agent_task(sweep_id=sweep_id, labeled_path=labeled_path, output_dir=out_dir)
     best_adapter = get_best_adapter_path_from_sweep_task(
@@ -609,13 +652,14 @@ def distill_pipeline_all(
 
 @flow(name="distill_pipeline_all_sweep", log_prints=True)
 def distill_pipeline_all_sweep(
-    sweep_id: str,
+    sweep_id: str | None = None,
+    sweep_yaml: str | Path | None = None,
     input_path: str | Path | None = None,
     out_dir: str | Path | None = None,
     openai_cap: int = 500,
     student_model: str = "Qwen/Qwen2.5-0.5B-Instruct",
 ) -> dict:
-    """build_dataset → labeling(Pod) → run_sweep → best run adapter로 evaluate."""
+    """build_dataset → labeling(Pod) → run_sweep → best run adapter로 evaluate. sweep_id 없으면 sweep_yaml으로 등록 후 실행."""
     out_dir = Path(out_dir or _PROJECT_ROOT / "distill_pipeline_output")
     input_path = Path(input_path or _PROJECT_ROOT / "tasteam_app_all_review_data.json")
 
@@ -629,6 +673,7 @@ def distill_pipeline_all_sweep(
     )
     sweep_ev = run_sweep_and_evaluate_flow(
         sweep_id=sweep_id,
+        sweep_yaml=sweep_yaml,
         labeled_path=lb["labeled_path"],
         output_dir=out_dir,
         val_labeled_path=lb.get("val_labeled_path"),
@@ -645,7 +690,8 @@ def main() -> None:
         choices=["build_dataset", "labeling_with_pod", "train_student_with_pod", "run_sweep", "evaluate", "all", "all_sweep"],
         help="Flow to run. all/all_sweep: 라벨링·학습 Pod 기준.",
     )
-    parser.add_argument("--sweep-id", type=str, default=None, help="wandb sweep id (for run_sweep)")
+    parser.add_argument("--sweep-id", type=str, default=None, help="wandb sweep id (optional; 없으면 --sweep-yaml으로 flow 내부에서 등록)")
+    parser.add_argument("--sweep-yaml", type=Path, default=None, help="sweep 설정 yaml (sweep-id 없을 때 사용, 기본: scripts/wandb_sweep_qlora.yaml)")
     parser.add_argument("--input", type=Path, default=None, help="Input reviews JSON (default: tasteam_app_all_review_data.json)")
     parser.add_argument("--out-dir", type=Path, default=None, help="Output root (default: distill_pipeline_output)")
     parser.add_argument("--train-path", type=Path, default=None, help="train.json (for labeling_with_pod)")
@@ -703,12 +749,12 @@ def main() -> None:
         )
         print("Result:", result)
     elif args.flow == "run_sweep":
-        if not args.sweep_id:
-            parser.error("run_sweep requires --sweep-id")
         if not args.labeled_path:
             parser.error("run_sweep requires --labeled-path")
+        sweep_yaml = args.sweep_yaml if args.sweep_yaml is not None else DEFAULT_SWEEP_YAML
         result = run_sweep_flow(
             sweep_id=args.sweep_id,
+            sweep_yaml=sweep_yaml,
             labeled_path=str(args.labeled_path),
             output_dir=out_dir,
         )
@@ -733,10 +779,10 @@ def main() -> None:
         )
         print("Result keys:", list(result.keys()))
     elif args.flow == "all_sweep":
-        if not args.sweep_id:
-            parser.error("all_sweep requires --sweep-id")
+        sweep_yaml = args.sweep_yaml if args.sweep_yaml is not None else DEFAULT_SWEEP_YAML
         result = distill_pipeline_all_sweep(
             sweep_id=args.sweep_id,
+            sweep_yaml=sweep_yaml,
             input_path=args.input,
             out_dir=out_dir,
             openai_cap=args.openai_cap,
