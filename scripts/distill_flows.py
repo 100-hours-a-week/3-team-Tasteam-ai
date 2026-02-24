@@ -11,30 +11,22 @@
 
 Flow (docs/easydistill/distill_by_prefect.md):
   1. build_dataset_flow — 식당 단위 split, 윈도우/샘플 생성, train/val/test 저장 + 버전 태깅
-  2. labeling_flow      — OpenAI 골드(학습용) + self-hosted teacher(학습용) + 품질 필터 (JSON/길이/근거/반복/dedup)
-  3. train_student_flow — QLoRA SFT (cross-entropy only, ROUGE/BERTScore 학습에 미사용)
-  4. evaluate_flow      — val/test: OpenAI 평가 라벨로 ROUGE/BERTScore/GPT-judge + 휴먼 평가 50~100개 (human_labels 스키마)
+  2. labeling_with_pod_flow — OpenAI 골드 후 Pod에서 teacher 라벨링 + 품질 필터
+  3. train_student_with_pod_flow — 학습용 Pod에서 QLoRA SFT
+  4. evaluate_flow      — val/test: OpenAI 평가 라벨로 ROUGE/BERTScore/GPT-judge + 휴먼 평가
 
 실행:
   python scripts/distill_flows.py build_dataset [--input path] [--out-dir dir]
-  python scripts/distill_flows.py labeling --train-path datasets/xxx/train.json
-  python scripts/distill_flows.py labeling_with_pod --train-path datasets/xxx/train.json  # Pod 생성→라벨링→삭제
-  python scripts/distill_flows.py train_student --labeled-path .../train_labeled.json --output-dir ...
-  python scripts/distill_flows.py run_sweep --sweep-id <sweep_id> --labeled-path .../train_labeled.json [--out-dir ...]  # wandb sweep (subprocess)
-  python scripts/distill_flows.py all        # build_dataset → labeling → 단일 train_student → evaluate
-  python scripts/distill_flows.py all_sweep --sweep-id <sweep_id>  # build_dataset → labeling → sweep → best run으로 evaluate
+  python scripts/distill_flows.py labeling_with_pod --train-path datasets/xxx/train.json
+  python scripts/distill_flows.py train_student_with_pod --labeled-path .../train_labeled.json --output-dir ...
+  python scripts/distill_flows.py run_sweep --sweep-id <sweep_id> --labeled-path .../train_labeled.json [--out-dir ...]
+  python scripts/distill_flows.py all        # build_dataset → labeling(Pod) → train(Pod) → evaluate
+  python scripts/distill_flows.py all_sweep --sweep-id <sweep_id>  # build_dataset → labeling(Pod) → sweep → best run으로 evaluate
 
 예시:
-데이터셋 생성(아직 없다면)
   python scripts/distill_flows.py build_dataset --input tasteam_app_all_review_data.json --out-dir distill_pipeline_output
-라벨링 실행
-  python scripts/distill_flows.py labeling --train-path distill_pipeline_output/datasets/YYYYMMDD_HHMMSS/train.json --out-dir distill_pipeline_output --openai-cap 500
-학습 실행
-  python scripts/distill_flows.py train_student --labeled-path distill_pipeline_output/labeled/YYYYMMDD_HHMMSS/train_labeled.json --output-dir distill_pipeline_output
-평가 실행
-  python scripts/distill_flows.py evaluate --adapter-path distill_pipeline_output/adapters/YYYYMMDD_HHMMSS/adapter.safetensors --output-dir distill_pipeline_output --val-labeled-path distill_pipeline_output/labeled/YYYYMMDD_HHMMSS/val_labeled.json --test-labeled-path distill_pipeline_output/labeled/YYYYMMDD_HHMMSS/test_labeled.json
-  
-전체 파이프라인 한번에 실행
+  python scripts/distill_flows.py labeling_with_pod --train-path distill_pipeline_output/datasets/YYYYMMDD_HHMMSS/train.json --out-dir distill_pipeline_output --openai-cap 500
+  python scripts/distill_flows.py train_student_with_pod --labeled-path distill_pipeline_output/labeled/YYYYMMDD_HHMMSS/train_labeled.json --output-dir distill_pipeline_output
   python scripts/distill_flows.py all --out-dir distill_pipeline_output --openai-cap 500
 """
 
@@ -77,9 +69,17 @@ try:
 except ImportError:
     RunPodClient = None
 try:
-    from runpod_cli.runpod_s3_upload import upload_labeled_dir_to_runpod
+    from runpod_cli.runpod_s3_upload import (
+        upload_labeled_dir_to_runpod,
+        list_run_ids_with_adapter,
+        download_directory_from_runpod,
+        DEFAULT_VOLUME_ID,
+    )
 except ImportError:
     upload_labeled_dir_to_runpod = None
+    list_run_ids_with_adapter = None
+    download_directory_from_runpod = None
+    DEFAULT_VOLUME_ID = "4rlm64f9lv"
 
 logger = logging.getLogger(__name__)
 
@@ -158,74 +158,6 @@ def build_dataset_flow(
         val_ratio=val_ratio,
         test_ratio=test_ratio,
         seed=seed,
-    )
-
-
-@task(name="labeling-task", log_prints=True)
-def labeling_task(
-    train_path: str,
-    val_path: str | None = None,
-    test_path: str | None = None,
-    openai_cap: int = 500,
-    output_labeled_dir: str | None = None,
-) -> dict:
-    """label_for_distill.py subprocess: OpenAI 골드 + self-hosted teacher + 품질 필터 (distill_strategy.md)."""
-    out_dir = Path(output_labeled_dir or _PROJECT_ROOT / "distill_pipeline_output")
-    version = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-    labeled_dir = out_dir / "labeled" / version
-    labeled_dir.mkdir(parents=True, exist_ok=True)
-
-    cmd = [
-        sys.executable,
-        str(_SCRIPT_DIR / "label_for_distill.py"),
-        "--train-path", str(train_path),
-        "--openai-cap", str(openai_cap),
-        "--output-dir", str(labeled_dir),
-    ]
-    if val_path and Path(val_path).exists():
-        cmd.extend(["--val-path", str(val_path)])
-    if test_path and Path(test_path).exists():
-        cmd.extend(["--test-path", str(test_path)])
-
-    result = subprocess.run(cmd, cwd=str(_PROJECT_ROOT), capture_output=False)
-    if result.returncode != 0:
-        raise RuntimeError(f"label_for_distill.py exited with {result.returncode}")
-
-    labeled_path = labeled_dir / "train_labeled.json"
-    out = {"labeled_version": version, "labeled_path": str(labeled_path)}
-    val_lbl = labeled_dir / "val_labeled.json"
-    test_lbl = labeled_dir / "test_labeled.json"
-    if val_lbl.exists():
-        out["val_labeled_path"] = str(val_lbl)
-    if test_lbl.exists():
-        out["test_labeled_path"] = str(test_lbl)
-    # RunPod 네트워크 볼륨 업로드 (RUNPOD_S3_ACCESS_KEY 설정 시)
-    if upload_labeled_dir_to_runpod and os.environ.get("RUNPOD_S3_ACCESS_KEY"):
-        try:
-            labeled_dir = Path(labeled_path).parent
-            n = upload_labeled_dir_to_runpod(labeled_dir)
-            out["runpod_upload"] = {"uploaded": True, "count": n, "labeled_dir": str(labeled_dir)}
-        except Exception as e:
-            logger.warning("RunPod S3 upload failed: %s", e)
-            out["runpod_upload"] = {"uploaded": False, "error": str(e)}
-    return out
-
-
-@flow(name="labeling_flow", log_prints=True)
-def labeling_flow(
-    train_path: str,
-    val_path: str | None = None,
-    test_path: str | None = None,
-    openai_cap: int = 500,
-    output_labeled_dir: str | Path | None = None,
-) -> dict:
-    """OpenAI 골드 라벨링(cap, 전략 300~800) + self-hosted teacher 나머지 + 품질 필터/dedup (distill_strategy.md)."""
-    return labeling_task(
-        train_path=train_path,
-        val_path=val_path,
-        test_path=test_path,
-        openai_cap=openai_cap,
-        output_labeled_dir=str(output_labeled_dir) if output_labeled_dir else None,
     )
 
 
@@ -374,72 +306,110 @@ def labeling_with_pod_flow(
     )
 
 
-@task(name="train-student-task", log_prints=True)
-def train_student_task(
-    labeled_path: str,
-    student_model: str = "Qwen/Qwen2.5-0.5B-Instruct",
-    output_dir: str | None = None,
-    gold_oversample_ratio: float = GOLD_OVERSAMPLE_RATIO,
-) -> dict:
-    """train_qlora.py subprocess: QLoRA SFT, report_to=wandb (kd_qlora_prefect_wandb_strategy.md)."""
-    import os
-    out_dir = Path(output_dir or _PROJECT_ROOT / "distill_pipeline_output")
-    env = os.environ.copy()
-    try:
-        ctx = get_run_context()
-        if hasattr(ctx, "flow_run") and ctx.flow_run:
-            flow_run_id = str(ctx.flow_run.id)
-            env["WANDB_RUN_ID"] = flow_run_id
-            env["PREFECT_FLOW_RUN_ID"] = flow_run_id
-    except Exception:
-        pass
-
-    cmd = [
-        sys.executable,
-        str(_SCRIPT_DIR / "train_qlora.py"),
-        "--labeled-path", str(labeled_path),
-        "--student-model", student_model,
-        "--output-dir", str(out_dir),
-        "--gold-oversample-ratio", str(gold_oversample_ratio),
-    ]
-    result = subprocess.run(cmd, cwd=str(_PROJECT_ROOT), env=env, capture_output=True, text=True)
-    if result.returncode != 0:
-        raise RuntimeError(f"train_qlora.py exited with {result.returncode}\n{result.stderr or ''}")
-
-    for line in reversed((result.stdout or "").strip().splitlines()):
-        line = line.strip()
-        if line.startswith("{"):
-            out = json.loads(line)
-            return {
-                "adapter_path": out["adapter_path"],
-                "training_meta_path": out["training_meta_path"],
-                "run_id": out["run_id"],
-            }
-    # fallback: infer from output dir
-    runs_dir = out_dir / "runs"
-    if runs_dir.exists():
-        subdirs = sorted(runs_dir.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True)
-        if subdirs:
-            run_dir = subdirs[0]
-            return {
-                "adapter_path": str(run_dir / "adapter"),
-                "training_meta_path": str(run_dir / "training_meta.json"),
-                "run_id": run_dir.name,
-            }
-    raise RuntimeError("train_qlora.py did not produce expected output")
+def _get_train_volume_id() -> str:
+    return os.environ.get("RUNPOD_NETWORK_VOLUME_ID_TRAIN", os.environ.get("RUNPOD_NETWORK_VOLUME_ID", DEFAULT_VOLUME_ID))
 
 
-@flow(name="train_student_flow", log_prints=True)
-def train_student_flow(
+@task(name="train-student-with-pod-task", log_prints=True)
+def train_student_with_pod_task(
     labeled_path: str,
     student_model: str = "Qwen/Qwen2.5-0.5B-Instruct",
     output_dir: str | Path | None = None,
+    pod_wait_timeout_sec: int = 600,
+    train_poll_interval_sec: int = 90,
+    train_timeout_sec: int = 7200,
 ) -> dict:
-    """QLoRA 학습 실행, artifact 저장, 학습 메타 기록."""
-    return train_student_task(
+    """
+    학습용 Pod 생성 → 볼륨에 라벨 업로드 → Pod에서 train_qlora 실행 →
+    S3로 완료 감지 후 adapter 다운로드 → Pod 삭제.
+    RUNPOD_API_KEY, RUNPOD_S3_ACCESS_KEY, RUNPOD_S3_SECRET_ACCESS_KEY 필요.
+    """
+    if RunPodClient is None:
+        raise RuntimeError("RunPodClient not available.")
+    if not upload_labeled_dir_to_runpod or not list_run_ids_with_adapter or not download_directory_from_runpod:
+        raise RuntimeError("runpod_s3_upload (upload/list/download) required for train_student_with_pod.")
+    token = os.environ.get("RUNPOD_API_KEY")
+    if not token:
+        raise ValueError("RUNPOD_API_KEY required for train_student_with_pod")
+    if not os.environ.get("RUNPOD_S3_ACCESS_KEY") or not os.environ.get("RUNPOD_S3_SECRET_ACCESS_KEY"):
+        raise ValueError("RUNPOD_S3_ACCESS_KEY and RUNPOD_S3_SECRET_ACCESS_KEY required for train_student_with_pod")
+
+    out_dir = Path(output_dir or _PROJECT_ROOT / "distill_pipeline_output")
+    labeled_dir = Path(labeled_path).parent
+    version = labeled_dir.name
+    path_on_volume = f"/workspace/labeled/{version}/train_labeled.json"
+
+    try:
+        upload_labeled_dir_to_runpod(labeled_dir, volume_id=_get_train_volume_id())
+    except Exception as e:
+        raise RuntimeError(f"Upload labeled dir to volume failed: {e}") from e
+
+    vol_id = _get_train_volume_id()
+    try:
+        existing_runs = set(list_run_ids_with_adapter(vol_id))
+    except Exception:
+        existing_runs = set()
+
+    docker_start_cmd = [
+        "--labeled-path", path_on_volume,
+        "--output-dir", "/workspace/distill_pipeline_output",
+    ]
+    payload = RunPodClient.get_default_pod_payload(use="train", docker_start_cmd=docker_start_cmd)
+    client = RunPodClient(token=token)
+    pod = client.create_pod(payload)
+    pod_id = pod["id"]
+    print("Train Pod created:", pod_id)
+
+    try:
+        client.wait_until_running(pod_id, timeout_sec=pod_wait_timeout_sec)
+        deadline = time.time() + train_timeout_sec
+        new_run_id: str | None = None
+        while time.time() < deadline:
+            try:
+                runs = list_run_ids_with_adapter(vol_id)
+                for rid in runs:
+                    if rid not in existing_runs:
+                        new_run_id = rid
+                        break
+                if new_run_id:
+                    break
+            except Exception as e:
+                logger.debug("Poll runs: %s", e)
+            time.sleep(train_poll_interval_sec)
+        if not new_run_id:
+            raise TimeoutError(f"Train Pod did not produce adapter within {train_timeout_sec}s. Check Pod logs.")
+
+        remote_prefix = f"distill_pipeline_output/runs/{new_run_id}/adapter"
+        local_adapter_dir = out_dir / "adapters" / new_run_id / "adapter"
+        local_adapter_dir.mkdir(parents=True, exist_ok=True)
+        n = download_directory_from_runpod(vol_id, remote_prefix, local_adapter_dir)
+        print("Downloaded adapter files:", n)
+
+        return {
+            "adapter_path": str(local_adapter_dir),
+            "run_id": new_run_id,
+            "training_meta_path": str(out_dir / "adapters" / new_run_id / "training_meta.json"),
+        }
+    finally:
+        print("Cleaning up train pod:", pod_id)
+        client.delete_pod(pod_id)
+
+
+@flow(name="train_student_with_pod_flow", log_prints=True)
+def train_student_with_pod_flow(
+    labeled_path: str,
+    student_model: str = "Qwen/Qwen2.5-0.5B-Instruct",
+    output_dir: str | Path | None = None,
+    pod_wait_timeout_sec: int = 600,
+    train_timeout_sec: int = 7200,
+) -> dict:
+    """학습을 RunPod 학습용 Pod에서만 실행 (볼륨 업로드 → Pod 생성 → 완료 시 adapter 다운로드)."""
+    return train_student_with_pod_task(
         labeled_path=labeled_path,
         student_model=student_model,
         output_dir=str(output_dir) if output_dir else None,
+        pod_wait_timeout_sec=pod_wait_timeout_sec,
+        train_timeout_sec=train_timeout_sec,
     )
 
 
@@ -611,19 +581,23 @@ def distill_pipeline_all(
     openai_cap: int = 500,
     student_model: str = "Qwen/Qwen2.5-0.5B-Instruct",
 ) -> dict:
-    """build_dataset → labeling → train_student → evaluate 순차 실행."""
+    """build_dataset → labeling(Pod) → train_student(Pod) → evaluate 순차 실행."""
     out_dir = Path(out_dir or _PROJECT_ROOT / "distill_pipeline_output")
     input_path = Path(input_path or _PROJECT_ROOT / "tasteam_app_all_review_data.json")
 
     ds = build_dataset_flow(input_path=input_path, out_dir=out_dir)
-    lb = labeling_flow(
+    lb = labeling_with_pod_flow(
         train_path=ds["train_path"],
         val_path=ds["val_path"],
         test_path=ds["test_path"],
         openai_cap=openai_cap,
         output_labeled_dir=out_dir,
     )
-    tr = train_student_flow(labeled_path=lb["labeled_path"], student_model=student_model, output_dir=out_dir)
+    tr = train_student_with_pod_flow(
+        labeled_path=lb["labeled_path"],
+        student_model=student_model,
+        output_dir=out_dir,
+    )
     ev = evaluate_flow(
         adapter_path=tr["adapter_path"],
         val_labeled_path=lb.get("val_labeled_path"),
@@ -641,12 +615,12 @@ def distill_pipeline_all_sweep(
     openai_cap: int = 500,
     student_model: str = "Qwen/Qwen2.5-0.5B-Instruct",
 ) -> dict:
-    """build_dataset → labeling → run_sweep (subprocess) → best run adapter로 evaluate 순차 실행."""
+    """build_dataset → labeling(Pod) → run_sweep → best run adapter로 evaluate."""
     out_dir = Path(out_dir or _PROJECT_ROOT / "distill_pipeline_output")
     input_path = Path(input_path or _PROJECT_ROOT / "tasteam_app_all_review_data.json")
 
     ds = build_dataset_flow(input_path=input_path, out_dir=out_dir)
-    lb = labeling_flow(
+    lb = labeling_with_pod_flow(
         train_path=ds["train_path"],
         val_path=ds["val_path"],
         test_path=ds["test_path"],
@@ -668,20 +642,20 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Prefect flows for summary KD pipeline (distill_by_prefect.md)")
     parser.add_argument(
         "flow",
-        choices=["build_dataset", "labeling", "labeling_with_pod", "train_student", "run_sweep", "evaluate", "all", "all_sweep"],
-        help="Flow to run (run_sweep: wandb sweep subprocess, all_sweep: build_dataset→labeling→sweep→best run으로 evaluate)",
+        choices=["build_dataset", "labeling_with_pod", "train_student_with_pod", "run_sweep", "evaluate", "all", "all_sweep"],
+        help="Flow to run. all/all_sweep: 라벨링·학습 Pod 기준.",
     )
     parser.add_argument("--sweep-id", type=str, default=None, help="wandb sweep id (for run_sweep)")
     parser.add_argument("--input", type=Path, default=None, help="Input reviews JSON (default: tasteam_app_all_review_data.json)")
     parser.add_argument("--out-dir", type=Path, default=None, help="Output root (default: distill_pipeline_output)")
-    parser.add_argument("--train-path", type=Path, default=None, help="train.json (for labeling)")
-    parser.add_argument("--val-path", type=Path, default=None, help="val.json (for labeling)")
-    parser.add_argument("--test-path", type=Path, default=None, help="test.json (for labeling)")
-    parser.add_argument("--labeled-path", type=Path, default=None, help="train_labeled.json (for train_student)")
+    parser.add_argument("--train-path", type=Path, default=None, help="train.json (for labeling_with_pod)")
+    parser.add_argument("--val-path", type=Path, default=None, help="val.json (for labeling_with_pod)")
+    parser.add_argument("--test-path", type=Path, default=None, help="test.json (for labeling_with_pod)")
+    parser.add_argument("--labeled-path", type=Path, default=None, help="train_labeled.json (for train_student_with_pod, run_sweep)")
     parser.add_argument("--adapter-path", type=Path, default=None, help="adapter path (for evaluate)")
     parser.add_argument("--val-labeled-path", type=Path, default=None, help="val_labeled.json (for evaluate)")
     parser.add_argument("--test-labeled-path", type=Path, default=None, help="test_labeled.json (for evaluate)")
-    parser.add_argument("--openai-cap", type=int, default=500, help="OpenAI labeling cap (for labeling/all)")
+    parser.add_argument("--openai-cap", type=int, default=500, help="OpenAI labeling cap (for labeling_with_pod/all)")
     parser.add_argument("--student-model", type=str, default="Qwen/Qwen2.5-0.5B-Instruct", help="Student model")
     args = parser.parse_args()
 
@@ -689,35 +663,6 @@ def main() -> None:
 
     if args.flow == "build_dataset":
         result = build_dataset_flow(input_path=args.input, out_dir=out_dir)
-        print("Result:", result)
-    elif args.flow == "labeling":
-        if not args.train_path:
-            parser.error("labeling requires --train-path")
-        ds_dir = out_dir / "datasets"
-        val_p, test_p = None, None
-        if args.val_path:
-            val_p = str(args.val_path)
-        elif ds_dir.exists():
-            for d in sorted(ds_dir.iterdir(), reverse=True):
-                v = d / "val.json"
-                if v.exists():
-                    val_p = str(v)
-                    break
-        if args.test_path:
-            test_p = str(args.test_path)
-        elif ds_dir.exists():
-            for d in sorted(ds_dir.iterdir(), reverse=True):
-                t = d / "test.json"
-                if t.exists():
-                    test_p = str(t)
-                    break
-        result = labeling_flow(
-            train_path=str(args.train_path),
-            val_path=val_p,
-            test_path=test_p,
-            openai_cap=args.openai_cap,
-            output_labeled_dir=out_dir,
-        )
         print("Result:", result)
     elif args.flow == "labeling_with_pod":
         if not args.train_path:
@@ -748,10 +693,10 @@ def main() -> None:
             output_labeled_dir=out_dir,
         )
         print("Result:", result)
-    elif args.flow == "train_student":
+    elif args.flow == "train_student_with_pod":
         if not args.labeled_path:
-            parser.error("train_student requires --labeled-path")
-        result = train_student_flow(
+            parser.error("train_student_with_pod requires --labeled-path")
+        result = train_student_with_pod_flow(
             labeled_path=str(args.labeled_path),
             student_model=args.student_model,
             output_dir=out_dir,
