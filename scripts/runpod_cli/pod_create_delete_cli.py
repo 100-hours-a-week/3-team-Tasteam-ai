@@ -67,15 +67,23 @@ class RunPodClient:
         raise TimeoutError(f"Pod {pod_id} did not reach RUNNING within {timeout_sec}s. Last: {last}")
 
     @staticmethod
-    def get_default_pod_payload(use: Literal["labeling", "train"] = "labeling") -> Dict[str, Any]:
-        """vLLM Pod 생성용 기본 payload (distill 라벨링 등에서 재사용).
-        use: "labeling" → RUNPOD_POD_IMAGE_NAME_LABELING / "train" → RUNPOD_POD_IMAGE_NAME_TRAIN
+    def get_default_pod_payload(
+        use: Literal["labeling", "train"] = "labeling",
+        docker_start_cmd: list[str] | None = None,
+    ) -> Dict[str, Any]:
+        """Pod 생성용 기본 payload.
+        use: "labeling" → vLLM 이미지/볼륨, "train" → 학습 이미지/볼륨.
+        docker_start_cmd: 지정 시 컨테이너 CMD 오버라이드 (train 시 --labeled-path 등 전달용).
         """
         if use == "train":
             image_name = os.environ.get("RUNPOD_POD_IMAGE_NAME_TRAIN", "jinsoo1218/train-llm:latest")
+            network_volume_id = os.environ.get("RUNPOD_NETWORK_VOLUME_ID_TRAIN", "4rlm64f9lv")
+            name = "train-pod"
         else:
             image_name = os.environ.get("RUNPOD_POD_IMAGE_NAME_LABELING", "jinsoo1218/runpod-pod-vllm:latest")
-        return {
+            network_volume_id = os.environ.get("RUNPOD_NETWORK_VOLUME_ID_LABELING", "2kn4qj6rql")
+            name = "vllm-pod"
+        payload = {
             "allowedCudaVersions": ["13.0"],
             "cloudType": "SECURE",
             "computeType": "GPU",
@@ -89,7 +97,7 @@ class RunPodClient:
             ],
             "dataCenterPriority": "availability",
             "dockerEntrypoint": [],
-            "dockerStartCmd": [],
+            "dockerStartCmd": docker_start_cmd if docker_start_cmd is not None else [],
             "env": {"ENV_VAR": "value",**({"WANDB_API_KEY": os.environ["WANDB_API_KEY"]} if os.environ.get("WANDB_API_KEY") else {}),},
             "globalNetworking": False,
             "gpuCount": 1,
@@ -103,14 +111,15 @@ class RunPodClient:
             "minRAMPerGPU": 8,
             "minUploadMbps": 123,
             "minVCPUPerGPU": 2,
-            "name": "vllm-pod",
-            "networkVolumeId": "2kn4qj6rql",
-            "ports": ["8000/http", "22/tcp"],
+            "name": name,
+            "networkVolumeId": network_volume_id,
+            "ports": ["8000/http", "22/tcp"] if use == "labeling" else ["22/tcp"],
             "supportPublicIp": True,
             "vcpuCount": 2,
             "volumeInGb": 20,
             "volumeMountPath": "/workspace",
         }
+        return payload
 
     def _handle_json_response(self, resp: requests.Response) -> Dict[str, Any]:
         # 에러 메시지를 보기 좋게

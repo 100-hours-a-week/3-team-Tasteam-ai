@@ -117,6 +117,55 @@ def upload_labeled_dir_to_runpod(
     return upload_directory(client, bucket, labeled_dir, prefix)
 
 
+def list_run_ids_with_adapter(volume_id: str, runs_prefix: str = "distill_pipeline_output/runs") -> list[str]:
+    """볼륨 내 runs/ 하위에서 adapter가 있는 run_id 목록 반환 (최신 순)."""
+    client = get_runpod_s3_client()
+    bucket = volume_id or os.environ.get("RUNPOD_NETWORK_VOLUME_ID", DEFAULT_VOLUME_ID)
+    prefix = f"{runs_prefix}/"
+    run_ids: list[str] = []
+    paginator = client.get_paginator("list_objects_v2")
+    for page in paginator.paginate(Bucket=bucket, Prefix=prefix, Delimiter="/"):
+        for cp in page.get("CommonPrefixes", []):
+            run_prefix = cp.get("Prefix", "").rstrip("/")
+            if not run_prefix:
+                continue
+            run_id = run_prefix.split("/")[-1]
+            # adapter 폴더 존재 여부
+            adj = client.list_objects_v2(Bucket=bucket, Prefix=f"{run_prefix}/adapter/", MaxKeys=1)
+            if adj.get("KeyCount", 0) > 0:
+                run_ids.append(run_id)
+    run_ids.sort(reverse=True)
+    return run_ids
+
+
+def download_directory_from_runpod(
+    volume_id: str,
+    remote_prefix: str,
+    local_dir: str | Path,
+) -> int:
+    """볼륨의 remote_prefix 하위를 로컬 local_dir로 다운로드. 반환: 파일 수."""
+    client = get_runpod_s3_client()
+    bucket = volume_id
+    local_dir = Path(local_dir)
+    local_dir.mkdir(parents=True, exist_ok=True)
+    prefix = remote_prefix.rstrip("/") + "/"
+    count = 0
+    paginator = client.get_paginator("list_objects_v2")
+    for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+        for obj in page.get("Contents", []):
+            key = obj.get("Key")
+            if not key or not key.startswith(prefix):
+                continue
+            rel = key[len(prefix):].lstrip("/")
+            if not rel:
+                continue
+            local_path = local_dir / rel
+            local_path.parent.mkdir(parents=True, exist_ok=True)
+            client.download_file(bucket, key, str(local_path))
+            count += 1
+    return count
+
+
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="Upload a directory to RunPod Network Volume (S3 API).")
