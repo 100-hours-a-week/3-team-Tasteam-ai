@@ -121,6 +121,16 @@ python scripts/run_qlora_sweep.py <sweep_id>
 wandb agent <sweep_id>
 ```
 
+**Prefect에서 subprocess로 실행** (프로세스 격리, `docs/wandb/wandb_subprocess_oneprocess.md`):
+
+```bash
+# sweep 등록 후
+python scripts/distill_flows.py run_sweep \
+  --sweep-id <sweep_id> \
+  --labeled-path distill_pipeline_output/labeled/YYYYMMDD_HHMMSS/train_labeled.json \
+  --out-dir distill_pipeline_output
+```
+
 탐색 파라미터 예: `learning_rate`, `num_epochs`, `batch_size`, `r`, `alpha`, `max_seq_length`.  
 고정값: `student_model`, `gold_oversample_ratio`, `target_modules`, `grad_accum`.  
 `labeled_path`·`output_dir`는 환경변수 `WANDB_SWEEP_LABELED_PATH`, `WANDB_SWEEP_OUTPUT_DIR`로 전달.

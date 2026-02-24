@@ -19,6 +19,8 @@ Flow (docs/easydistill/distill_by_prefect.md):
   python scripts/distill_flows.py build_dataset [--input path] [--out-dir dir]
   python scripts/distill_flows.py labeling --train-path datasets/xxx/train.json
   python scripts/distill_flows.py labeling_with_pod --train-path datasets/xxx/train.json  # Pod 생성→라벨링→삭제
+  python scripts/distill_flows.py train_student --labeled-path .../train_labeled.json --output-dir ...
+  python scripts/distill_flows.py run_sweep --sweep-id <sweep_id> --labeled-path .../train_labeled.json [--out-dir ...]  # wandb sweep (subprocess)
   python scripts/distill_flows.py all
   
 예시:
@@ -399,6 +401,39 @@ def train_student_flow(
     )
 
 
+@task(name="run-sweep-agent-task", log_prints=True)
+def run_sweep_agent_task(
+    sweep_id: str,
+    labeled_path: str,
+    output_dir: str,
+) -> dict:
+    """run_qlora_sweep.py를 subprocess로 실행. sweep 전체가 끝날 때까지 대기 (프로세스 격리)."""
+    env = os.environ.copy()
+    env["WANDB_SWEEP_LABELED_PATH"] = labeled_path
+    env["WANDB_SWEEP_OUTPUT_DIR"] = output_dir
+    cmd = [
+        sys.executable,
+        str(_SCRIPT_DIR / "run_qlora_sweep.py"),
+        sweep_id,
+    ]
+    logger.info("Running sweep agent (subprocess): %s", " ".join(cmd))
+    result = subprocess.run(cmd, cwd=str(_PROJECT_ROOT), env=env, capture_output=False)
+    if result.returncode != 0:
+        raise RuntimeError(f"run_qlora_sweep.py exited with {result.returncode}")
+    return {"sweep_id": sweep_id, "labeled_path": labeled_path, "output_dir": output_dir}
+
+
+@flow(name="run_sweep_flow", log_prints=True)
+def run_sweep_flow(
+    sweep_id: str,
+    labeled_path: str,
+    output_dir: str | Path | None = None,
+) -> dict:
+    """wandb sweep 에이전트를 subprocess로 실행 (프로세스 격리, docs/wandb/wandb_subprocess_oneprocess.md)."""
+    out_dir = str(output_dir) if output_dir else str(_PROJECT_ROOT / "distill_pipeline_output")
+    return run_sweep_agent_task(sweep_id=sweep_id, labeled_path=labeled_path, output_dir=out_dir)
+
+
 @task(name="evaluate-task", log_prints=True)
 def evaluate_task(
     adapter_path: str,
@@ -499,9 +534,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Prefect flows for summary KD pipeline (distill_by_prefect.md)")
     parser.add_argument(
         "flow",
-        choices=["build_dataset", "labeling", "labeling_with_pod", "train_student", "evaluate", "all"],
-        help="Flow to run (labeling_with_pod: Pod 생성→라벨링→삭제)",
+        choices=["build_dataset", "labeling", "labeling_with_pod", "train_student", "run_sweep", "evaluate", "all"],
+        help="Flow to run (labeling_with_pod: Pod 생성→라벨링→삭제, run_sweep: wandb sweep subprocess)",
     )
+    parser.add_argument("--sweep-id", type=str, default=None, help="wandb sweep id (for run_sweep)")
     parser.add_argument("--input", type=Path, default=None, help="Input reviews JSON (default: tasteam_app_all_review_data.json)")
     parser.add_argument("--out-dir", type=Path, default=None, help="Output root (default: distill_pipeline_output)")
     parser.add_argument("--train-path", type=Path, default=None, help="train.json (for labeling)")
@@ -584,6 +620,17 @@ def main() -> None:
         result = train_student_flow(
             labeled_path=str(args.labeled_path),
             student_model=args.student_model,
+            output_dir=out_dir,
+        )
+        print("Result:", result)
+    elif args.flow == "run_sweep":
+        if not args.sweep_id:
+            parser.error("run_sweep requires --sweep-id")
+        if not args.labeled_path:
+            parser.error("run_sweep requires --labeled-path")
+        result = run_sweep_flow(
+            sweep_id=args.sweep_id,
+            labeled_path=str(args.labeled_path),
             output_dir=out_dir,
         )
         print("Result:", result)
