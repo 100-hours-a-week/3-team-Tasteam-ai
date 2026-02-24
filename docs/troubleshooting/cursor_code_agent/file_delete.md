@@ -2,6 +2,8 @@
 
 ---
 
+1번째 작업
+
 적용해 두었습니다. 라벨링·학습이 모두 Pod 기준으로만 동작하도록 바꿨습니다.
 
 ---
@@ -54,6 +56,46 @@
 **6. 로컬 전용 플로우**
 
 - `labeling`, `train_student`는 그대로 두었으므로, 로컬에서만 라벨링/학습이 필요할 때는 이 플로우들을 그대로 사용하면 됩니다.
+
+---
+
+2번째 작업
+
+---
+
+
+수정 반영했습니다. 동작 순서는 그대로 두고, **문구만** “OpenAI 라벨링 후 Pod 생성”이 드러나도록 바꿨습니다.
+
+**변경한 주석/문서**
+
+1. **실행 예시 주석**  
+   - `# Pod 생성→라벨링→삭제`  
+   → `# OpenAI 골드 라벨링 후 Pod 생성→teacher 라벨링→삭제`
+
+2. **labeling_with_pod_task docstring**  
+   - `OpenAI 골드 먼저(Pod 없이) → Pod 기동 → ...`  
+   → `OpenAI로 골드 라벨링 완료 후 Pod 생성 → self-hosted teacher로 나머지 라벨링 → Pod 삭제.`
+
+3. **labeling_with_pod_flow docstring**  
+   - `OpenAI 골드 먼저(Pod 없이) → Pod 기동 → ...`  
+   → `OpenAI 골드 라벨링 후 Pod 기동 → self-hosted teacher 나머지 → Pod 삭제.`
+
+실제 흐름은 이미 다음 순서입니다.
+
+1. **OpenAI로 골드 라벨링** (`--phase openai_first`, Pod 없음)  
+2. **Pod 생성** → vLLM 준비  
+3. **teacher로 나머지 라벨링** (`--phase teacher_rest`)  
+4. **Pod 삭제**
+
+---
+
+여기서 undo로 파일 되돌리기 수행.
+
+---
+
+이후 commit 진행
+
+---
 
 커밋 결과
 
