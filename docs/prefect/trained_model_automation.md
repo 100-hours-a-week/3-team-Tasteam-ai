@@ -113,8 +113,8 @@ API/추론을 **RunPod Pod**에서 돌릴 경우, merge도 **같은 네트워크
 
 ### flow: merge_for_serving_with_pod
 
-- **동작 (둘 중 하나)**: **--adapter-path** 로컬 adapter를 볼륨에 업로드 후 Pod에서 merge. **--run-id** 볼륨에 이미 있는 runs/RUN_ID/adapter 사용(업로드 없음) 후 Pod에서 merge. 결과는 볼륨의 merged_for_serving/YYYYMMDD_HHMMSS/ 및 latest_merged_path.json.
-- **실행**: `--adapter-path .../adapter` 또는 `--run-id RUN_ID`
+- **동작 (셋 중 하나)**: **--adapter-path** 로컬 adapter를 볼륨에 업로드 후 Pod에서 merge. **--run-id** 볼륨에 이미 있는 runs/RUN_ID/adapter 사용(업로드 없음) 후 Pod에서 merge. **인자 없음** 볼륨에서 adapter가 있는 run 중 최신 사용. 결과는 볼륨의 merged_for_serving/YYYYMMDD_HHMMSS/ 및 latest_merged_path.json.
+- **실행**: `--adapter-path .../adapter` 또는 `--run-id RUN_ID` 또는 인자 없이 `merge_for_serving_with_pod`
 - **필요 환경변수**: `RUNPOD_API_KEY`, `RUNPOD_S3_ACCESS_KEY`, `RUNPOD_S3_SECRET_ACCESS_KEY`, (선택) `RUNPOD_NETWORK_VOLUME_ID_TRAIN`.
 
 ### 추론 Pod에서 사용

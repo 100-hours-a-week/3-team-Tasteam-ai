@@ -25,6 +25,7 @@ Flow (docs/easydistill/distill_by_prefect.md):
   python scripts/distill_flows.py merge_for_serving --adapter-path .../adapter [--out-dir ...]  # adapter만 merge하여 서빙 경로 생성
   python scripts/distill_flows.py merge_for_serving_with_pod --adapter-path .../adapter  # 로컬 adapter 업로드 후 Pod merge
   python scripts/distill_flows.py merge_for_serving_with_pod --run-id RUN_ID  # 볼륨의 runs/RUN_ID/adapter로 merge
+  python scripts/distill_flows.py merge_for_serving_with_pod  # 볼륨에서 최신 학습 adapter로 merge
 
 예시:
   python scripts/distill_flows.py build_dataset --input tasteam_app_all_review_data.json --out-dir distill_pipeline_output
@@ -699,13 +700,15 @@ def merge_adapter_with_pod_task(
     볼륨이 마운트된 Pod에서 merge 스크립트 실행 → 결과를 볼륨에 직접 저장.
     - run_id 지정 시: 볼륨에 이미 있는 runs/<run_id>/adapter 사용 (로컬 업로드 없음).
     - adapter_path 지정 시: 로컬 adapter 디렉터리를 볼륨에 업로드 후 Pod에서 merge 실행.
+    - 둘 다 미지정 시: 볼륨에서 adapter가 있는 run 중 최신(run_id 타임스탬프 역순 첫 번째) 사용.
     완료 시 볼륨에 merged_for_serving/<version>/ 및 latest_merged_path.json 기록.
-    추론 Pod는 같은 볼륨 마운트 후 LLM_MODEL=.../merged_for_serving/<version> 또는 latest_merged_path.json 사용.
     """
     if RunPodClient is None:
         raise RuntimeError("RunPodClient not available.")
     if not upload_file_to_volume or not upload_directory or not get_runpod_s3_client or not object_exists:
         raise RuntimeError("runpod_s3_upload (upload_file_to_volume, upload_directory, object_exists) required.")
+    if list_run_ids_with_adapter is None:
+        raise RuntimeError("list_run_ids_with_adapter required for merge_adapter_with_pod (latest run fallback).")
     token = os.environ.get("RUNPOD_API_KEY")
     if not token:
         raise ValueError("RUNPOD_API_KEY required for merge_adapter_with_pod")
@@ -718,7 +721,12 @@ def merge_adapter_with_pod_task(
     if run_id and adapter_path:
         raise ValueError("Provide either run_id or adapter_path, not both.")
     if not run_id and not adapter_path:
-        raise ValueError("Provide run_id (adapter on volume) or adapter_path (local dir).")
+        # 볼륨에서 adapter가 있는 run 중 최신 사용
+        run_ids = list_run_ids_with_adapter(vol_id)
+        if not run_ids:
+            raise ValueError("No run with adapter found on volume. Train first or provide --adapter-path or --run-id.")
+        run_id = run_ids[0]
+        logger.info("Using latest run on volume: run_id=%s", run_id)
 
     client = get_runpod_s3_client()
 
@@ -743,7 +751,6 @@ def merge_adapter_with_pod_task(
     upload_file_to_volume(merge_script, volume_id=vol_id, object_key="distill_pipeline_output/merge_scripts/merge_adapter_for_serving.py")
 
     # Pod에서 merge 실행 (볼륨 경로: /workspace)
-    adapter_on_volume = f"/workspace/distill_pipeline_output/merge_input/{version}/adapter"
     output_on_volume = f"/workspace/distill_pipeline_output/merged_for_serving/{version}"
     docker_start_cmd = [
         "/workspace/distill_pipeline_output/merge_scripts/merge_adapter_for_serving.py",
@@ -788,6 +795,7 @@ def merge_adapter_with_pod_task(
             "merged_model_path_on_volume": output_on_volume,
             "pointer_path_on_volume": "/workspace/distill_pipeline_output/merged_for_serving/latest_merged_path.json",
             "version": version,
+            "run_id_used": run_id,
             "pointer": pointer,
         }
     finally:
@@ -805,7 +813,8 @@ def merge_for_serving_with_pod_flow(
 ) -> dict:
     """볼륨이 마운트된 Pod에서 adapter+base merge 실행 후 결과를 볼륨에 저장.
     run_id: 볼륨에 이미 있는 학습 run (runs/<run_id>/adapter 사용). adapter_path와 둘 중 하나만 지정.
-    adapter_path: 로컬 adapter 디렉터리 (볼륨에 업로드 후 merge)."""
+    adapter_path: 로컬 adapter 디렉터리 (볼륨에 업로드 후 merge).
+    둘 다 미지정 시: 볼륨에서 adapter가 있는 run 중 최신 사용."""
     return merge_adapter_with_pod_task(
         base_model=base_model,
         adapter_path=adapter_path,
@@ -992,8 +1001,6 @@ def main() -> None:
         print("Result:", result)
         print("API 사용: LLM_MODEL=" + result["merged_model_path"])
     elif args.flow == "merge_for_serving_with_pod":
-        if not args.run_id and not args.adapter_path:
-            parser.error("merge_for_serving_with_pod requires --run-id (adapter on volume) or --adapter-path (local)")
         if args.run_id and args.adapter_path:
             parser.error("merge_for_serving_with_pod: use either --run-id or --adapter-path, not both")
         result = merge_for_serving_with_pod_flow(
