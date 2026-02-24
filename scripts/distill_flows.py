@@ -21,8 +21,9 @@ Flow (docs/easydistill/distill_by_prefect.md):
   python scripts/distill_flows.py labeling_with_pod --train-path datasets/xxx/train.json  # Pod 생성→라벨링→삭제
   python scripts/distill_flows.py train_student --labeled-path .../train_labeled.json --output-dir ...
   python scripts/distill_flows.py run_sweep --sweep-id <sweep_id> --labeled-path .../train_labeled.json [--out-dir ...]  # wandb sweep (subprocess)
-  python scripts/distill_flows.py all
-  
+  python scripts/distill_flows.py all        # build_dataset → labeling → 단일 train_student → evaluate
+  python scripts/distill_flows.py all_sweep --sweep-id <sweep_id>  # build_dataset → labeling → sweep → best run으로 evaluate
+
 예시:
 데이터셋 생성(아직 없다면)
   python scripts/distill_flows.py build_dataset --input tasteam_app_all_review_data.json --out-dir distill_pipeline_output
@@ -434,6 +435,67 @@ def run_sweep_flow(
     return run_sweep_agent_task(sweep_id=sweep_id, labeled_path=labeled_path, output_dir=out_dir)
 
 
+@task(name="get-best-adapter-from-sweep-task", log_prints=True)
+def get_best_adapter_path_from_sweep_task(
+    sweep_id: str,
+    output_dir: str,
+    metric_name: str = "train/loss",
+) -> str | None:
+    """wandb API로 sweep의 best run 조회 후 로컬 adapter 경로 반환 (run name = run_id)."""
+    try:
+        import wandb
+        api = wandb.Api()
+        sweep = api.sweep(sweep_id)
+        runs = list(sweep.runs)
+    except Exception as e:
+        logger.warning("wandb sweep best run 조회 실패: %s", e)
+        return None
+    runs_with_metric = [r for r in runs if r.summary.get(metric_name) is not None]
+    if not runs_with_metric:
+        logger.warning("sweep에 메트릭 %s가 있는 run이 없음", metric_name)
+        return None
+    best = min(runs_with_metric, key=lambda r: float(r.summary[metric_name]))
+    run_name = best.name or getattr(best, "id", None)
+    if not run_name:
+        logger.warning("best run에 name 없음")
+        return None
+    adapter_path = str(Path(output_dir) / "runs" / run_name / "adapter")
+    if not Path(adapter_path).exists():
+        logger.warning("best run adapter 경로가 없음: %s", adapter_path)
+        return None
+    logger.info("sweep best run: %s, adapter_path=%s", run_name, adapter_path)
+    return adapter_path
+
+
+@flow(name="run_sweep_and_evaluate_flow", log_prints=True)
+def run_sweep_and_evaluate_flow(
+    sweep_id: str,
+    labeled_path: str,
+    output_dir: str | Path | None = None,
+    val_labeled_path: str | None = None,
+    test_labeled_path: str | None = None,
+    base_model: str = "Qwen/Qwen2.5-0.5B-Instruct",
+) -> dict:
+    """sweep subprocess 실행 → best run adapter 경로 조회 → evaluate 실행."""
+    out_dir = str(output_dir) if output_dir else str(_PROJECT_ROOT / "distill_pipeline_output")
+    run_sweep_agent_task(sweep_id=sweep_id, labeled_path=labeled_path, output_dir=out_dir)
+    best_adapter = get_best_adapter_path_from_sweep_task(
+        sweep_id=sweep_id,
+        output_dir=out_dir,
+        metric_name="train/loss",
+    )
+    if not best_adapter:
+        return {"sweep_id": sweep_id, "best_adapter_path": None, "evaluate": None}
+    ev = evaluate_flow(
+        adapter_path=best_adapter,
+        val_labeled_path=val_labeled_path,
+        test_labeled_path=test_labeled_path,
+        output_dir=out_dir,
+        base_model=base_model,
+    )
+    return {"sweep_id": sweep_id, "best_adapter_path": best_adapter, "evaluate": ev}
+
+
 @task(name="evaluate-task", log_prints=True)
 def evaluate_task(
     adapter_path: str,
@@ -530,12 +592,43 @@ def distill_pipeline_all(
     return {"build_dataset": ds, "labeling": lb, "train_student": tr, "evaluate": ev}
 
 
+@flow(name="distill_pipeline_all_sweep", log_prints=True)
+def distill_pipeline_all_sweep(
+    sweep_id: str,
+    input_path: str | Path | None = None,
+    out_dir: str | Path | None = None,
+    openai_cap: int = 500,
+    student_model: str = "Qwen/Qwen2.5-0.5B-Instruct",
+) -> dict:
+    """build_dataset → labeling → run_sweep (subprocess) → best run adapter로 evaluate 순차 실행."""
+    out_dir = Path(out_dir or _PROJECT_ROOT / "distill_pipeline_output")
+    input_path = Path(input_path or _PROJECT_ROOT / "tasteam_app_all_review_data.json")
+
+    ds = build_dataset_flow(input_path=input_path, out_dir=out_dir)
+    lb = labeling_flow(
+        train_path=ds["train_path"],
+        val_path=ds["val_path"],
+        test_path=ds["test_path"],
+        openai_cap=openai_cap,
+        output_labeled_dir=out_dir,
+    )
+    sweep_ev = run_sweep_and_evaluate_flow(
+        sweep_id=sweep_id,
+        labeled_path=lb["labeled_path"],
+        output_dir=out_dir,
+        val_labeled_path=lb.get("val_labeled_path"),
+        test_labeled_path=lb.get("test_labeled_path"),
+        base_model=student_model,
+    )
+    return {"build_dataset": ds, "labeling": lb, "run_sweep_and_evaluate": sweep_ev}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Prefect flows for summary KD pipeline (distill_by_prefect.md)")
     parser.add_argument(
         "flow",
-        choices=["build_dataset", "labeling", "labeling_with_pod", "train_student", "run_sweep", "evaluate", "all"],
-        help="Flow to run (labeling_with_pod: Pod 생성→라벨링→삭제, run_sweep: wandb sweep subprocess)",
+        choices=["build_dataset", "labeling", "labeling_with_pod", "train_student", "run_sweep", "evaluate", "all", "all_sweep"],
+        help="Flow to run (run_sweep: wandb sweep subprocess, all_sweep: build_dataset→labeling→sweep→best run으로 evaluate)",
     )
     parser.add_argument("--sweep-id", type=str, default=None, help="wandb sweep id (for run_sweep)")
     parser.add_argument("--input", type=Path, default=None, help="Input reviews JSON (default: tasteam_app_all_review_data.json)")
@@ -647,6 +740,17 @@ def main() -> None:
         print("Result:", result)
     elif args.flow == "all":
         result = distill_pipeline_all(
+            input_path=args.input,
+            out_dir=out_dir,
+            openai_cap=args.openai_cap,
+            student_model=args.student_model,
+        )
+        print("Result keys:", list(result.keys()))
+    elif args.flow == "all_sweep":
+        if not args.sweep_id:
+            parser.error("all_sweep requires --sweep-id")
+        result = distill_pipeline_all_sweep(
+            sweep_id=args.sweep_id,
             input_path=args.input,
             out_dir=out_dir,
             openai_cap=args.openai_cap,
