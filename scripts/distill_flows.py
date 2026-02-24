@@ -76,6 +76,10 @@ try:
     from runpod_cli.pod_create_delete_cli import RunPodClient
 except ImportError:
     RunPodClient = None
+try:
+    from runpod_cli.runpod_s3_upload import upload_labeled_dir_to_runpod
+except ImportError:
+    upload_labeled_dir_to_runpod = None
 
 logger = logging.getLogger(__name__)
 
@@ -195,6 +199,15 @@ def labeling_task(
         out["val_labeled_path"] = str(val_lbl)
     if test_lbl.exists():
         out["test_labeled_path"] = str(test_lbl)
+    # RunPod 네트워크 볼륨 업로드 (RUNPOD_S3_ACCESS_KEY 설정 시)
+    if upload_labeled_dir_to_runpod and os.environ.get("RUNPOD_S3_ACCESS_KEY"):
+        try:
+            labeled_dir = Path(labeled_path).parent
+            n = upload_labeled_dir_to_runpod(labeled_dir)
+            out["runpod_upload"] = {"uploaded": True, "count": n, "labeled_dir": str(labeled_dir)}
+        except Exception as e:
+            logger.warning("RunPod S3 upload failed: %s", e)
+            out["runpod_upload"] = {"uploaded": False, "error": str(e)}
     return out
 
 
@@ -244,8 +257,8 @@ def labeling_with_pod_task(
     vllm_ready_timeout_sec: int = 180,
 ) -> dict:
     """
-    Pod 생성 → vLLM 준비 대기 → 라벨링 → Pod 삭제.
-    RUNPOD_API_KEY 필요. self-hosted teacher용 vLLM Pod를 생성 후 label_for_distill 실행.
+    OpenAI 골드 먼저(Pod 없이) → Pod 기동 → self-hosted teacher로 나머지 라벨링 → Pod 삭제.
+    RUNPOD_API_KEY 필요.
     """
     if RunPodClient is None:
         raise RuntimeError("RunPodClient not available. Check runpod_cli import.")
@@ -253,6 +266,33 @@ def labeling_with_pod_task(
     if not token:
         raise ValueError("RUNPOD_API_KEY environment variable is required for labeling_with_pod")
 
+    out_dir = Path(output_labeled_dir or _PROJECT_ROOT / "distill_pipeline_output")
+    version = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    labeled_dir = out_dir / "labeled" / version
+    labeled_dir.mkdir(parents=True, exist_ok=True)
+
+    # 1) OpenAI 골드만 먼저 (Pod 없이)
+    cmd_gold = [
+        sys.executable,
+        str(_SCRIPT_DIR / "label_for_distill.py"),
+        "--phase", "openai_first",
+        "--train-path", str(train_path),
+        "--openai-cap", str(openai_cap),
+        "--output-dir", str(labeled_dir),
+        "--seed", "42",
+    ]
+    if val_path and Path(val_path).exists():
+        cmd_gold.extend(["--val-path", str(val_path)])
+    if test_path and Path(test_path).exists():
+        cmd_gold.extend(["--test-path", str(test_path)])
+    result = subprocess.run(cmd_gold, cwd=str(_PROJECT_ROOT), capture_output=False)
+    if result.returncode != 0:
+        raise RuntimeError(f"label_for_distill.py openai_first exited with {result.returncode}")
+    gold_path = labeled_dir / "train_labeled_gold_only.json"
+    if not gold_path.exists():
+        raise RuntimeError(f"Expected {gold_path} after openai_first")
+
+    # 2) Pod 생성 → vLLM 준비
     client = RunPodClient(token=token)
     payload = RunPodClient.get_default_pod_payload(use="labeling")
     pod = client.create_pod(payload)
@@ -275,26 +315,19 @@ def labeling_with_pod_task(
         env["USE_POD_VLLM"] = "true"
         env["LLM_PROVIDER"] = "runpod"
 
-        out_dir = Path(output_labeled_dir or _PROJECT_ROOT / "distill_pipeline_output")
-        version = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-        labeled_dir = out_dir / "labeled" / version
-        labeled_dir.mkdir(parents=True, exist_ok=True)
-
-        cmd = [
+        # 3) 나머지 teacher 라벨링 + 병합 → train_labeled.json
+        cmd_teacher = [
             sys.executable,
             str(_SCRIPT_DIR / "label_for_distill.py"),
+            "--phase", "teacher_rest",
             "--train-path", str(train_path),
-            "--openai-cap", str(openai_cap),
+            "--gold-labeled-path", str(gold_path),
             "--output-dir", str(labeled_dir),
+            "--seed", "42",
         ]
-        if val_path and Path(val_path).exists():
-            cmd.extend(["--val-path", str(val_path)])
-        if test_path and Path(test_path).exists():
-            cmd.extend(["--test-path", str(test_path)])
-
-        result = subprocess.run(cmd, cwd=str(_PROJECT_ROOT), env=env, capture_output=False)
+        result = subprocess.run(cmd_teacher, cwd=str(_PROJECT_ROOT), env=env, capture_output=False)
         if result.returncode != 0:
-            raise RuntimeError(f"label_for_distill.py exited with {result.returncode}")
+            raise RuntimeError(f"label_for_distill.py teacher_rest exited with {result.returncode}")
 
         labeled_path = labeled_dir / "train_labeled.json"
         out = {"labeled_version": version, "labeled_path": str(labeled_path)}
@@ -302,6 +335,14 @@ def labeling_with_pod_task(
             p = labeled_dir / fn
             if p.exists():
                 out[name] = str(p)
+        # RunPod 네트워크 볼륨 업로드 (RUNPOD_S3_ACCESS_KEY 설정 시)
+        if upload_labeled_dir_to_runpod and os.environ.get("RUNPOD_S3_ACCESS_KEY"):
+            try:
+                n = upload_labeled_dir_to_runpod(labeled_dir)
+                out["runpod_upload"] = {"uploaded": True, "count": n, "labeled_dir": str(labeled_dir)}
+            except Exception as e:
+                logger.warning("RunPod S3 upload failed: %s", e)
+                out["runpod_upload"] = {"uploaded": False, "error": str(e)}
         return out
     finally:
         print("Cleaning up pod:", pod_id)
@@ -319,8 +360,8 @@ def labeling_with_pod_flow(
     vllm_ready_timeout_sec: int = 180,
 ) -> dict:
     """
-    Pod 생성 → 라벨링(OpenAI 골드 + vLLM teacher) → Pod 삭제.
-    docs/runpod_cli/cli_strategy.md: "Pod 생성 → 대기 → VLLM_POD_BASE_URL 설정 후 label_for_distill 실행 → 작업 완료 후 Pod 삭제"
+    OpenAI 골드 먼저(Pod 없이) → Pod 기동 → self-hosted teacher 나머지 → Pod 삭제.
+    docs/runpod_cli/cli_strategy.md
     """
     return labeling_with_pod_task(
         train_path=train_path,

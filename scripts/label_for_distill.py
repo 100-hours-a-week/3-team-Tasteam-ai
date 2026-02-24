@@ -7,6 +7,8 @@ OpenAI 골드(소량) + self-hosted teacher(나머지) + 품질 필터 (distill_
 
 사용:
   python scripts/label_for_distill.py --train-path datasets/xxx/train.json --openai-cap 500 --output-dir labeled/
+  python scripts/label_for_distill.py --phase openai_first --train-path ... --openai-cap 500 --output-dir labeled/  # 골드만(Pod 없이)
+  python scripts/label_for_distill.py --phase teacher_rest --train-path ... --gold-labeled-path labeled/train_labeled_gold_only.json --output-dir labeled/  # 나머지 teacher + 병합
 """
 
 from __future__ import annotations
@@ -231,9 +233,123 @@ def _label_samples(
     return labeled, meta
 
 
+def _label_openai_first_only(
+    samples: list[dict],
+    openai_cap: int,
+    seed: int,
+) -> tuple[list[dict], list[int], dict]:
+    """
+    OpenAI 골드만 먼저 라벨링 (Pod 없이 호출용).
+    반환: (labeled_gold_list, gold_train_indices, meta).
+    labeled_gold_list[i]에 대응하는 train 인덱스는 gold_train_indices[i].
+    """
+    rng = random.Random(seed)
+    indices = list(range(len(samples)))
+    rng.shuffle(indices)
+    labeled: list[dict] = []
+    gold_indices: list[int] = []
+    meta = {"openai_count": 0, "self_hosted_count": 0, "filter_drop_count": 0, "llm_fail_count": 0}
+    for i, idx in enumerate(indices):
+        if meta["openai_count"] >= openai_cap:
+            break
+        sample = samples[idx]
+        payload = _build_payload(sample)
+        if not any(payload[k] for k in ("service", "price", "food")):
+            continue
+        raw_text = _call_llm(payload, use_openai=True)
+        if raw_text is None:
+            meta["llm_fail_count"] += 1
+            continue
+        parsed = _extract_json(raw_text)
+        if parsed is None:
+            meta["filter_drop_count"] += 1
+            continue
+        ok, _ = _quality_filter(parsed, payload)
+        if not ok:
+            meta["filter_drop_count"] += 1
+            continue
+        instruction = json.dumps(payload, ensure_ascii=False)
+        output = json.dumps(parsed, ensure_ascii=False)
+        labeled.append({
+            "sample_id": sample.get("sample_id"),
+            "restaurant_id": sample.get("restaurant_id"),
+            "instruction": instruction,
+            "output": output,
+            "label_source": "openai",
+            "train_index": idx,
+        })
+        gold_indices.append(idx)
+        meta["openai_count"] += 1
+        if (len(labeled) % 100) == 0:
+            logger.info("OpenAI gold labeled %d samples", len(labeled))
+    return labeled, gold_indices, meta
+
+
+def _label_teacher_rest_and_merge(
+    samples: list[dict],
+    gold_labeled_path: Path,
+    seed: int,
+) -> tuple[list[dict], dict]:
+    """
+    골드 파일을 불러와 나머지만 teacher로 라벨링 후 병합.
+    gold_labeled_path: train_labeled_gold_only.json (samples에 train_index 포함).
+    """
+    with open(gold_labeled_path, "r", encoding="utf-8") as f:
+        gold_data = json.load(f)
+    gold_samples = gold_data.get("samples", [])
+    gold_meta = gold_data.get("meta", {})
+    gold_by_index: dict[int, dict] = {s["train_index"]: s for s in gold_samples if "train_index" in s}
+    gold_indices_set = set(gold_by_index.keys())
+
+    rng = random.Random(seed)
+    indices = list(range(len(samples)))
+    rng.shuffle(indices)
+
+    meta = {"openai_count": len(gold_samples), "self_hosted_count": 0, "filter_drop_count": 0, "llm_fail_count": 0}
+    result: list[dict] = []
+    for idx in indices:
+        if idx in gold_indices_set:
+            s = gold_by_index[idx].copy()
+            s.pop("train_index", None)
+            result.append(s)
+            continue
+        sample = samples[idx]
+        payload = _build_payload(sample)
+        if not any(payload[k] for k in ("service", "price", "food")):
+            continue
+        raw_text = _call_llm(payload, use_openai=False)
+        if raw_text is None:
+            meta["llm_fail_count"] += 1
+            continue
+        parsed = _extract_json(raw_text)
+        if parsed is None:
+            meta["filter_drop_count"] += 1
+            continue
+        ok, _ = _quality_filter(parsed, payload)
+        if not ok:
+            meta["filter_drop_count"] += 1
+            continue
+        instruction = json.dumps(payload, ensure_ascii=False)
+        output = json.dumps(parsed, ensure_ascii=False)
+        result.append({
+            "sample_id": sample.get("sample_id"),
+            "restaurant_id": sample.get("restaurant_id"),
+            "instruction": instruction,
+            "output": output,
+            "label_source": "self_hosted",
+        })
+        meta["self_hosted_count"] += 1
+        if (len(result) % 100) == 0:
+            logger.info("Merged+teacher labeled %d samples", len(result))
+    return result, meta
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Label train samples for distill (OpenAI gold + teacher)")
+    parser.add_argument("--phase", choices=["single", "openai_first", "teacher_rest"], default="single",
+                        help="single: one pass. openai_first: gold only (no Pod). teacher_rest: merge gold + teacher rest")
     parser.add_argument("--train-path", type=Path, required=True, help="train.json path")
+    parser.add_argument("--gold-labeled-path", type=Path, default=None, help="train_labeled_gold_only.json (phase=teacher_rest)")
     parser.add_argument("--val-path", type=Path, default=None, help="val.json (optional, OpenAI-only for eval)")
     parser.add_argument("--test-path", type=Path, default=None, help="test.json (optional, OpenAI-only for eval)")
     parser.add_argument("--openai-cap", type=int, default=500, help="OpenAI gold label cap for train")
@@ -250,6 +366,50 @@ def main() -> None:
     if not train_samples:
         logger.error("No samples in %s", args.train_path)
         sys.exit(1)
+
+    if args.phase == "openai_first":
+        labeled_gold, gold_indices, meta = _label_openai_first_only(train_samples, args.openai_cap, args.seed)
+        out_path = args.output_dir / "train_labeled_gold_only.json"
+        with open(out_path, "w", encoding="utf-8") as f:
+            json.dump({"samples": labeled_gold, "gold_indices": gold_indices, "meta": meta}, f, ensure_ascii=False, indent=2)
+        results["labeled_path"] = str(out_path)
+        logger.info("Wrote %s: %d gold samples", out_path, len(labeled_gold))
+        for name, path, fn in [
+            ("val_labeled_path", args.val_path, "val_labeled.json"),
+            ("test_labeled_path", args.test_path, "test_labeled.json"),
+        ]:
+            if path and path.exists():
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                samples = data.get("samples", [])
+                lbl, _ = _label_samples(samples, openai_cap=999999, seed=args.seed, teacher_for_rest=False)
+                p = args.output_dir / fn
+                with open(p, "w", encoding="utf-8") as f:
+                    json.dump({"samples": lbl, "meta": {"openai_count": len(lbl)}}, f, ensure_ascii=False, indent=2)
+                results[name] = str(p)
+                logger.info("Wrote %s: %d samples", p, len(lbl))
+        out = {"labeled_path": results["labeled_path"], "meta": meta}
+        if "val_labeled_path" in results:
+            out["val_labeled_path"] = results["val_labeled_path"]
+        if "test_labeled_path" in results:
+            out["test_labeled_path"] = results["test_labeled_path"]
+        print(json.dumps(out, ensure_ascii=False))
+        return
+
+    if args.phase == "teacher_rest":
+        if not args.gold_labeled_path or not args.gold_labeled_path.exists():
+            logger.error("teacher_rest requires --gold-labeled-path")
+            sys.exit(1)
+        labeled, meta = _label_teacher_rest_and_merge(train_samples, args.gold_labeled_path, args.seed)
+        out_path = args.output_dir / "train_labeled.json"
+        with open(out_path, "w", encoding="utf-8") as f:
+            json.dump({"samples": labeled, "meta": meta}, f, ensure_ascii=False, indent=2)
+        results["labeled_path"] = str(out_path)
+        logger.info("Wrote %s: %d samples", out_path, len(labeled))
+        out = {"labeled_path": results["labeled_path"], "meta": meta}
+        print(json.dumps(out, ensure_ascii=False))
+        return
+
     labeled, meta = _label_samples(train_samples, args.openai_cap, args.seed, teacher_for_rest=True)
     out_path = args.output_dir / "train_labeled.json"
     with open(out_path, "w", encoding="utf-8") as f:

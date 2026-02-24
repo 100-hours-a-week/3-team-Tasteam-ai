@@ -52,6 +52,16 @@ aws s3 cp \
 
 ---
 
+## 5) Python으로 업로드 (Prefect 라벨링 연동)
+
+프로젝트에서 라벨링 결과를 RunPod 네트워크 볼륨에 올리려면 환경변수를 설정한 뒤 라벨링 flow를 실행하면 된다.
+
+* **환경변수**: `RUNPOD_S3_ACCESS_KEY`, `RUNPOD_S3_SECRET_ACCESS_KEY` (필수), `RUNPOD_NETWORK_VOLUME_ID` (선택, 기본 4rlm64f9lv)
+* **동작**: `labeling_flow` / `labeling_with_pod_flow` 실행 후, 위 환경변수가 있으면 라벨 디렉터리(`train_labeled.json` 등)를 자동으로 네트워크 볼륨 `labeled/YYYYMMDD_HHMMSS/` 에 업로드한다.
+* **스크립트**: `scripts/runpod_cli/runpod_s3_upload.py` — 디렉터리 업로드용. CLI 예: `python -m runpod_cli.runpod_s3_upload ./labeled/20260216_123456 --volume-id 4rlm64f9lv`
+
+---
+
 ### 한 줄 결론
 
 네가 보여준 `aws s3 ls ...` 방식 그대로, **`aws s3 cp` / `aws s3 sync`로 RunPod 네트워크 볼륨에 파일 올릴 수 있어.** ([Runpod Documentation][1])
