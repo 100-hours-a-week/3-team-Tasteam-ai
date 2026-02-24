@@ -14,6 +14,9 @@ trl==0.12.0
 datasets>=2.18.0
 huggingface_hub>=0.20.0
 
+# wandb: report_to=wandb 로깅 + 학습 완료 시 adapter artifact 업로드 (WANDB_RUN_ID 사용 시)
+wandb>=0.16.0
+
 # prefect: WANDB_RUN_ID 전달용, train_qlora는 import 안 함. 선택 사항(이미지 절약 시 제거 가능)
 # prefect>=2.0.0
 

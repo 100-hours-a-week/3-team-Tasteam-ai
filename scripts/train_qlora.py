@@ -84,8 +84,15 @@ def main() -> None:
     parser.add_argument("--num-epochs", type=int, default=DEFAULT_NUM_EPOCHS)
     parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
     parser.add_argument("--grad-accum", type=int, default=DEFAULT_GRAD_ACCUM)
+    parser.add_argument("--learning-rate", type=float, default=2e-5, help="Peak learning rate")
     args = parser.parse_args()
+    run_train(args)
 
+
+def run_train(args: argparse.Namespace) -> None:
+    """QLoRA 학습 실행. CLI 인자 또는 sweep용 wandb.config에서 넘긴 args 사용."""
+    args.labeled_path = Path(args.labeled_path)
+    args.output_dir = Path(args.output_dir)
     try:
         from datasets import Dataset
         from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
@@ -144,12 +151,13 @@ def main() -> None:
     out_path = args.output_dir / "runs" / run_id
     out_path.mkdir(parents=True, exist_ok=True)
 
+    learning_rate = getattr(args, "learning_rate", 2e-5)
     training_args = SFTConfig(
         output_dir=str(out_path),
         per_device_train_batch_size=args.batch_size,
         gradient_accumulation_steps=args.grad_accum,
         num_train_epochs=args.num_epochs,
-        learning_rate=2e-5,
+        learning_rate=learning_rate,
         max_seq_length=args.max_seq_length,
         warmup_ratio=0.03,
         logging_steps=10,
@@ -184,6 +192,23 @@ def main() -> None:
     with open(meta_path, "w", encoding="utf-8") as f:
         json.dump(meta, f, ensure_ascii=False, indent=2)
     logger.info("Saved adapter to %s", out_path / "adapter")
+
+    # wandb artifact: 학습된 adapter + meta를 같은 run에 업로드 (WANDB_RUN_ID 사용 시)
+    try:
+        import wandb
+        if wandb.run is not None:
+            artifact = wandb.Artifact(
+                name=f"qlora-adapter-{run_id}",
+                type="model",
+                metadata={"student_model": args.student_model, "n_samples": len(samples), "run_id": run_id},
+            )
+            artifact.add_dir(str(out_path / "adapter"), name="adapter")
+            artifact.add_file(str(meta_path), name="training_meta.json")
+            wandb.log_artifact(artifact)
+            logger.info("Uploaded adapter to wandb artifact qlora-adapter-%s", run_id)
+    except ImportError:
+        pass
+
     print(json.dumps({"adapter_path": str(out_path / "adapter"), "training_meta_path": str(meta_path), "run_id": run_id}))
 
 
