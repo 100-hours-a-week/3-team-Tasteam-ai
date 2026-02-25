@@ -480,6 +480,65 @@ def run_sweep_agent_task(
     return {"sweep_id": sweep_id, "labeled_path": labeled_path, "output_dir": output_dir}
 
 
+@task(name="run-sweep-on-pod-task", log_prints=True)
+def run_sweep_on_pod_task(
+    sweep_id: str,
+    labeled_path: str,
+    output_dir: str,
+    pod_wait_timeout_sec: int = 600,
+    sweep_timeout_sec: int = 14400,
+    sweep_poll_interval_sec: int = 60,
+) -> dict:
+    """
+    학습용 Pod에서 wandb sweep 에이전트 실행 (run_qlora_sweep.py).
+    볼륨에 라벨 업로드 → Pod 생성(ENTRYPOINT/CMD 오버라이드) → Pod 종료까지 대기 → Pod 삭제.
+    완료 후 adapter는 wandb artifact에서 get_best_adapter_from_artifact_task로 수급.
+    """
+    if RunPodClient is None:
+        raise RuntimeError("RunPodClient not available.")
+    if not upload_labeled_dir_to_runpod:
+        raise RuntimeError("upload_labeled_dir_to_runpod required for run_sweep_on_pod.")
+    token = os.environ.get("RUNPOD_API_KEY")
+    if not token:
+        raise ValueError("RUNPOD_API_KEY required for run_sweep_on_pod")
+    out_dir = Path(output_dir)
+    labeled_dir = Path(labeled_path).parent
+    version = labeled_dir.name
+    path_on_volume = f"/workspace/labeled/{version}/train_labeled.json"
+    try:
+        upload_labeled_dir_to_runpod(labeled_dir, volume_id=_get_train_volume_id())
+    except Exception as e:
+        raise RuntimeError(f"Upload labeled dir to volume failed: {e}") from e
+
+    payload = RunPodClient.get_default_pod_payload(use="train", docker_start_cmd=[sweep_id])
+    payload["name"] = "sweep-pod"
+    payload["dockerEntrypoint"] = ["python", "/app/scripts/run_qlora_sweep.py"]
+    payload["dockerStartCmd"] = [sweep_id]
+    base_env = payload.get("env") or {}
+    payload["env"] = {
+        **base_env,
+        "WANDB_SWEEP_LABELED_PATH": path_on_volume,
+        "WANDB_SWEEP_OUTPUT_DIR": "/workspace/distill_pipeline_output",
+        "WANDB_SWEEP_ID": sweep_id,
+    }
+    client = RunPodClient(token=token)
+    pod = client.create_pod(payload)
+    pod_id = pod["id"]
+    logger.info("Sweep Pod created: %s (sweep_id=%s)", pod_id, sweep_id)
+    try:
+        client.wait_until_running(pod_id, timeout_sec=pod_wait_timeout_sec)
+        client.wait_until_stopped(
+            pod_id,
+            timeout_sec=sweep_timeout_sec,
+            poll_interval_sec=sweep_poll_interval_sec,
+        )
+        logger.info("Sweep Pod finished: %s", pod_id)
+    finally:
+        logger.info("Cleaning up sweep pod: %s", pod_id)
+        client.delete_pod(pod_id)
+    return {"sweep_id": sweep_id, "labeled_path": labeled_path, "output_dir": output_dir}
+
+
 DEFAULT_SWEEP_YAML = _SCRIPT_DIR / "wandb_sweep_qlora.yaml"
 
 
@@ -583,13 +642,17 @@ def run_sweep_and_evaluate_flow(
     val_labeled_path: str | None = None,
     test_labeled_path: str | None = None,
     base_model: str = "Qwen/Qwen2.5-0.5B-Instruct",
+    use_pod: bool = True,
 ) -> dict:
-    """sweep subprocess 실행 → best run adapter를 wandb artifact에서 다운로드 → evaluate 실행. sweep_id 없으면 sweep_yaml으로 등록 후 실행."""
+    """sweep 실행(use_pod=True 시 Pod에서, False 시 로컬 subprocess) → best adapter를 wandb artifact에서 다운로드 → evaluate. sweep_id 없으면 sweep_yaml으로 등록."""
     if sweep_id is None:
         yaml_path = sweep_yaml if sweep_yaml is not None else DEFAULT_SWEEP_YAML
         sweep_id = register_sweep_task(yaml_path)
     out_dir = str(output_dir) if output_dir else str(_PROJECT_ROOT / "distill_pipeline_output")
-    run_sweep_agent_task(sweep_id=sweep_id, labeled_path=labeled_path, output_dir=out_dir)
+    if use_pod:
+        run_sweep_on_pod_task(sweep_id=sweep_id, labeled_path=labeled_path, output_dir=out_dir)
+    else:
+        run_sweep_agent_task(sweep_id=sweep_id, labeled_path=labeled_path, output_dir=out_dir)
     best_adapter = get_best_adapter_from_artifact_task(
         sweep_id=sweep_id,
         download_dir=out_dir,
@@ -935,6 +998,7 @@ def distill_pipeline_all_sweep(
         val_labeled_path=lb.get("val_labeled_path"),
         test_labeled_path=lb.get("test_labeled_path"),
         base_model=student_model,
+        use_pod=True,
     )
     merge_result = None
     if sweep_ev.get("best_adapter_path"):

@@ -66,6 +66,30 @@ class RunPodClient:
 
         raise TimeoutError(f"Pod {pod_id} did not reach RUNNING within {timeout_sec}s. Last: {last}")
 
+    def wait_until_stopped(
+        self,
+        pod_id: str,
+        timeout_sec: int = 14400,
+        poll_interval_sec: int = 60,
+    ) -> Dict[str, Any]:
+        """
+        Pod가 RUNNING이 아닌 상태(컨테이너 종료 등)가 될 때까지 폴링.
+        sweep 등 장시간 작업 후 종료 감지용.
+        """
+        deadline = time.time() + timeout_sec
+        last = None
+        while time.time() < deadline:
+            pod = self.get_pod(pod_id)
+            last = pod
+            if pod.get("status") == "already_deleted":
+                return pod
+            desired = (pod.get("desiredStatus") or "").upper()
+            status = (pod.get("status") or pod.get("runtimeStatus") or "").upper()
+            if desired != "RUNNING" or ("EXIT" in status or "STOP" in status or status == "COMPLETED"):
+                return pod
+            time.sleep(poll_interval_sec)
+        raise TimeoutError(f"Pod {pod_id} did not stop within {timeout_sec}s. Last: {last}")
+
     @staticmethod
     def get_default_pod_payload(
         use: Literal["labeling", "train", "merge"] = "labeling",

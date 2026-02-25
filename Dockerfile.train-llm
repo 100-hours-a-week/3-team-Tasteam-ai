@@ -43,8 +43,9 @@ COPY requirements.train-llm.txt /app/
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.train-llm.txt
 
-# train_qlora.py 단독 사용. src/ import 시 COPY 추가 필요.
+# train_qlora.py, run_qlora_sweep.py (Pod에서 sweep 시 사용)
 COPY scripts/train_qlora.py /app/scripts/
+COPY scripts/run_qlora_sweep.py /app/scripts/
 
 ENV PYTHONPATH=/app
 
