@@ -271,7 +271,7 @@
 
 ### 8.5 배치 실행 주체 분리 (오프라인 배치)
 
-배치 작업이 API 프로세스를 과부하시키지 않도록, **실행 주체를 분리**합니다. **RQ 방식만** 사용합니다.
+배치 작업이 API 프로세스를 과부하시키지 않도록, **실행 주체를 분리**합니다. **RQ 방식만** 사용합니다. 배치 처리 시 LLM 추론에는 **훈련이 끝난(서빙용) 모델**을 사용하며, 해당 vLLM Pod는 **GPU A40**을 사용하도록 명시한다(§6.1 GPU 용도별 지정 참고).
 
 | 방식 | 설명 | 사용 |
 |------|------|------|
@@ -632,10 +632,41 @@ GET /api/v1/batch/status/{job_id} → 결과 조회
 
 | 항목 | 내용 |
 |------|------|
-| **오케스트레이션** | Prefect (`scripts/distill_flows.py`): build_dataset → labeling → train_student → evaluate. `docs/easydistill/distill_with_prefect.md` |
+| **오케스트레이션** | Prefect (`scripts/distill_flows.py`): **all** = build_dataset → labeling(Pod) → train_student(Pod, 단일 run) → evaluate → merge. **all_sweep** = 동일하되 학습은 Pod에서 sweep(여러 run) 실행 후 best adapter는 wandb artifact에서 수급. §6.1.1·6.1.2 참고. `docs/easydistill/distill_with_prefect.md` |
 | **학습 실행** | RunPod Pod에서 Docker 이미지(`Dockerfile.train-llm`, `jinsoo1218/train-llm`)로 `train_qlora.py` 실행. Network Volume `/workspace`에 데이터·어댑터 저장. |
 | **스토리지** | RunPod Network Volume. Pod 없이 파일 접근은 **S3 호환 API**(`aws s3 --endpoint-url https://s3api-eu-ro-1.runpod.io`) 사용. 학습용 볼륨 ID 예: `4rlm64f9lv`, vLLM용: `2kn4qj6rql`. |
 | **관련 문서** | `docs/runpod_cli/runpod_net_vol_s3_api.md`, `docs/runpod_cli/distill_train_net_vol.md`, `docs/runpod_cli/vllm_net_vol.md`, `docs/easydistill/distill_strategy.md` |
+
+**GPU 용도별 지정**
+
+| 용도 | GPU | 비고 |
+|------|-----|------|
+| **훈련** (train Pod, sweep Pod) | **RTX 4090** | QLoRA 등 학습 전용 Pod. |
+| **라벨링** (labeling Pod) | **A40** | Teacher vLLM 추론. |
+| **배치 처리** (vLLM 추론 Pod) | **A40** | 배치 작업 시 사용하는 LLM은 **훈련이 끝난(서빙용) 모델**이다. |
+
+#### 6.1.1 파이프라인 종류: all vs all_sweep
+
+| 플로우 | 단계 | 학습 실행 위치 |
+|--------|------|----------------|
+| **all** | build_dataset → labeling(Pod) → **train_student_with_pod**(단일 run) → evaluate → merge | 학습용 Pod에서 **한 번** QLoRA 학습 (`train_qlora.py`). adapter는 Pod 볼륨에서 다운로드. |
+| **all_sweep** | build_dataset → labeling(Pod) → **run_sweep_and_evaluate**(use_pod=True) → merge | 학습용 Pod에서 **sweep** 실행. 아래 §6.1.2 참고. |
+
+실행 예: `python scripts/distill_flows.py all`, `python scripts/distill_flows.py all_sweep [--sweep-id ...]`.
+
+#### 6.1.2 Sweep on Pod (all_sweep)
+
+**Sweep**이란 wandb에서 정의한 하이퍼파라미터 조합들에 대해 **여러 번의 학습(run)**을 수행하는 단위입니다. **Pod에서 sweep을 한다** = **한 Pod 안에서 wandb agent가 run 1 → run 2 → … 순서대로 여러 번 학습**을 진행하는 것을 의미합니다.
+
+| 항목 | 내용 |
+|------|------|
+| **등록** | `register_sweep_task(sweep_yaml)`로 wandb에 sweep 등록 후 `sweep_id` 획득. |
+| **실행** | `run_sweep_on_pod_task(sweep_id, labeled_path, output_dir)`: 라벨 디렉터리를 학습용 Network Volume에 업로드 → 학습용 이미지로 Pod 생성 (`dockerEntrypoint`: `python /app/scripts/run_qlora_sweep.py`, `dockerStartCmd`: `[sweep_id]`) → Pod RUNNING 대기 → **Pod가 종료될 때까지** 대기(`wait_until_stopped`, 기본 4시간) → Pod 삭제. |
+| **Pod 내 동작** | 컨테이너 진입점은 `run_qlora_sweep.py`(wandb agent). 동일 Pod에서 sweep에 할당된 여러 run을 **순차 실행**. 각 run은 QLoRA 학습 후 adapter를 wandb artifact로 업로드. |
+| **Best adapter** | Pod 디스크가 아닌 **wandb artifact**에서 수급. `get_best_adapter_from_artifact_task(sweep_id, download_dir, metric_name="train/loss")`로 sweep의 best run을 조회한 뒤 해당 run의 `qlora-adapter-{run_id}` artifact를 다운로드. |
+| **이어지는 단계** | `run_sweep_and_evaluate_flow(use_pod=True)`는 sweep(Pod) 완료 후 위 task로 best adapter를 받아 로컬에서 `evaluate_flow` 실행. `distill_pipeline_all_sweep`은 이 flow를 `use_pod=True`로 호출한 뒤, best adapter가 있으면 `merge_for_serving_flow`까지 수행. |
+
+요약: **all_sweep**은 로컬이 아닌 **한 대의 학습용 Pod**에서 sweep 전체(여러 run)를 실행하고, best adapter는 wandb artifact로 받아 로컬에서 평가·merge 합니다.
 
 ### 6.2 DeepFM 파이프라인 (추천/CTR, API 외부)
 
