@@ -8,16 +8,16 @@ Data center
 EU-RO-1
 
 Monthly cost
-$1.12
+$0.70
 
 Volume ID
-4rlm64f9lv
+v3i546pkrz
 
 Bucket name
-4rlm64f9lv
+v3i546pkrz
 
 Endpoint URL
 https://s3api-eu-ro-1.runpod.io
 
 example
-aws s3 ls --region eu-ro-1 --endpoint-url https://s3api-eu-ro-1.runpod.io s3://4rlm64f9lv/
+aws s3 ls --region eu-ro-1 --endpoint-url https://s3api-eu-ro-1.runpod.io s3://v3i546pkrz/
