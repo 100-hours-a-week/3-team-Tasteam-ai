@@ -91,3 +91,13 @@
 - 로컬 경로 반환 로직과 섞지 않아서, “artifact 없이 로컬만 쓰는” 경로는 그대로 가볍게 유지 가능.
 
 정리하면, **adapter 출처를 “artifact”로 두고 싶을 때는 옵션 B처럼 전용 task를 두는 쪽이 확장성·모듈화 측면에서 더 나은 선택**입니다.
+
+---
+
+## 구현 상태 (옵션 B 반영)
+
+- **Task**: `get_best_adapter_from_artifact_task(sweep_id, download_dir, metric_name="train/loss")`  
+  - sweep에서 best run 조회 → 해당 run의 artifact `qlora-adapter-{run_id}:latest` 다운로드 → `download_dir/artifacts/{run_id}/adapter` 경로 반환.
+- **Flow**: `run_sweep_and_evaluate_flow` / `distill_pipeline_all_sweep` 에서 best adapter는 **artifact task**를 사용.  
+  - 즉, sweep 종료 후 로컬 `runs/` 디스크가 없어도 wandb artifact에서 다운로드한 경로로 evaluate·merge 진행.
+- **로컬 전용**: `get_best_adapter_path_from_sweep_task` 는 그대로 두었으며, 로컬 디스크에 이미 adapter가 있을 때만 사용하는 경로로 유지.

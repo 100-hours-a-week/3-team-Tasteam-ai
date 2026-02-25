@@ -504,7 +504,7 @@ def get_best_adapter_path_from_sweep_task(
     output_dir: str,
     metric_name: str = "train/loss",
 ) -> str | None:
-    """wandb API로 sweep의 best run 조회 후 로컬 adapter 경로 반환 (run name = run_id)."""
+    """wandb API로 sweep의 best run 조회 후 로컬 adapter 경로 반환 (run name = run_id). 로컬 디스크에 이미 있을 때만 유효."""
     try:
         import wandb
         api = wandb.Api()
@@ -530,6 +530,50 @@ def get_best_adapter_path_from_sweep_task(
     return adapter_path
 
 
+@task(name="get-best-adapter-from-artifact-task", log_prints=True)
+def get_best_adapter_from_artifact_task(
+    sweep_id: str,
+    download_dir: str | Path,
+    metric_name: str = "train/loss",
+) -> str | None:
+    """
+    wandb API로 sweep의 best run 조회 후, 해당 run의 adapter artifact(qlora-adapter-{run_id})를
+    다운로드하여 로컬 adapter 경로 반환. 확장성·모듈화용 전용 task (sweep 없이 run_id만으로 호출 시에는 별도 wrapper 사용).
+    """
+    try:
+        import wandb
+        api = wandb.Api()
+        sweep = api.sweep(sweep_id)
+        runs = list(sweep.runs)
+    except Exception as e:
+        logger.warning("wandb sweep best run 조회 실패: %s", e)
+        return None
+    runs_with_metric = [r for r in runs if r.summary.get(metric_name) is not None]
+    if not runs_with_metric:
+        logger.warning("sweep에 메트릭 %s가 있는 run이 없음", metric_name)
+        return None
+    best = min(runs_with_metric, key=lambda r: float(r.summary[metric_name]))
+    run_name = best.name or getattr(best, "id", None)
+    if not run_name:
+        logger.warning("best run에 name 없음")
+        return None
+    artifact_name = f"qlora-adapter-{run_name}"
+    try:
+        art = api.artifact(f"{best.entity}/{best.project}/{artifact_name}:latest")
+    except Exception as e:
+        logger.warning("wandb artifact 조회 실패 (%s): %s", artifact_name, e)
+        return None
+    root = Path(download_dir) / "artifacts" / run_name
+    root.mkdir(parents=True, exist_ok=True)
+    art.download(root=str(root))
+    adapter_path = root / "adapter"
+    if not adapter_path.is_dir():
+        logger.warning("artifact 내 adapter 디렉터리가 없음: %s", adapter_path)
+        return None
+    logger.info("sweep best run: %s, adapter_path=%s (from artifact)", run_name, adapter_path)
+    return str(adapter_path)
+
+
 @flow(name="run_sweep_and_evaluate_flow", log_prints=True)
 def run_sweep_and_evaluate_flow(
     labeled_path: str,
@@ -540,15 +584,15 @@ def run_sweep_and_evaluate_flow(
     test_labeled_path: str | None = None,
     base_model: str = "Qwen/Qwen2.5-0.5B-Instruct",
 ) -> dict:
-    """sweep subprocess 실행 → best run adapter 경로 조회 → evaluate 실행. sweep_id 없으면 sweep_yaml으로 등록 후 실행."""
+    """sweep subprocess 실행 → best run adapter를 wandb artifact에서 다운로드 → evaluate 실행. sweep_id 없으면 sweep_yaml으로 등록 후 실행."""
     if sweep_id is None:
         yaml_path = sweep_yaml if sweep_yaml is not None else DEFAULT_SWEEP_YAML
         sweep_id = register_sweep_task(yaml_path)
     out_dir = str(output_dir) if output_dir else str(_PROJECT_ROOT / "distill_pipeline_output")
     run_sweep_agent_task(sweep_id=sweep_id, labeled_path=labeled_path, output_dir=out_dir)
-    best_adapter = get_best_adapter_path_from_sweep_task(
+    best_adapter = get_best_adapter_from_artifact_task(
         sweep_id=sweep_id,
-        output_dir=out_dir,
+        download_dir=out_dir,
         metric_name="train/loss",
     )
     if not best_adapter:
