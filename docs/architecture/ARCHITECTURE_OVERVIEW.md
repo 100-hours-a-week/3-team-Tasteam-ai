@@ -642,7 +642,7 @@ GET /api/v1/batch/status/{job_id} → 결과 조회
 | 용도 | GPU | 비고 |
 |------|-----|------|
 | **훈련** (train Pod, sweep Pod) | **RTX 4090** | QLoRA 등 학습 전용 Pod. |
-| **라벨링** (labeling Pod) | **A40** | Teacher vLLM 추론. |
+| **라벨링** (labeling Pod) | **RTX 5090** | Teacher vLLM 추론. |
 | **배치 처리** (vLLM 추론 Pod) | **A40** | 배치 작업 시 사용하는 LLM은 **훈련이 끝난(서빙용) 모델**이다. |
 
 #### 6.1.1 파이프라인 종류: all vs all_sweep
