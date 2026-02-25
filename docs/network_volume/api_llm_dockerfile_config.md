@@ -1,3 +1,6 @@
+**구현**: `Dockerfile.api-llm`, `scripts/runpod_api_inference_entrypoint.sh`. 볼륨·경로 규약은 `api_llm_net_vol.md` 참고.
+
+---
 
 프로젝트에 이미 있는 Pod용 vLLM 이미지/엔트리포인트를 기준으로, **추론 전용(모델은 S3→볼륨)** 이미지에 들어가면 될 것들을 정리했습니다.
 
