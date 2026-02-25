@@ -5,21 +5,21 @@ Size
 16 GB
 
 Data center
-EU-RO-1
+EUR-NO-1
 
 Monthly cost
 $1.12
 
 Volume ID
-2kn4qj6rql
+b4zdzi0haz
 
 S3 API Access
 
 Bucket name
-2kn4qj6rql
+b4zdzi0haz
 
 Endpoint URL
-https://s3api-eu-ro-1.runpod.io
+https://s3api-eur-no-1.runpod.io
 
 example
-aws s3 ls --region eu-ro-1 --endpoint-url https://s3api-eu-ro-1.runpod.io s3://2kn4qj6rql/
+aws s3 ls --region eur-no-1 --endpoint-url https://s3api-eur-no-1.runpod.io s3://b4zdzi0haz/
