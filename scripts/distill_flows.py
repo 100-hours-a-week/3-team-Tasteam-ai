@@ -18,6 +18,7 @@ Flow (docs/easydistill/distill_by_prefect.md):
 실행:
   python scripts/distill_flows.py build_dataset [--input path] [--out-dir dir]
   python scripts/distill_flows.py labeling_with_pod --train-path datasets/xxx/train.json
+  python scripts/distill_flows.py labeling_pod_only --train-path .../train.json --gold-path .../train_labeled_gold_only.json  # OpenAI 생략, Pod teacher만
   python scripts/distill_flows.py train_student_with_pod --labeled-path .../train_labeled.json --output-dir ...
   python scripts/distill_flows.py run_sweep [--sweep-id <sweep_id>] --labeled-path .../train_labeled.json [--out-dir ...]
   python scripts/distill_flows.py all        # build_dataset → labeling(Pod) → train(Pod) → evaluate → merge for serving
@@ -30,6 +31,7 @@ Flow (docs/easydistill/distill_by_prefect.md):
 예시:
   python scripts/distill_flows.py build_dataset --input tasteam_app_all_review_data.json --out-dir distill_pipeline_output
   python scripts/distill_flows.py labeling_with_pod --train-path distill_pipeline_output/datasets/YYYYMMDD_HHMMSS/train.json --out-dir distill_pipeline_output --openai-cap 500
+  python scripts/distill_flows.py labeling_pod_only --train-path .../train.json --gold-path .../labeled/YYYYMMDD_HHMMSS/train_labeled_gold_only.json --out-dir distill_pipeline_output
   python scripts/distill_flows.py train_student_with_pod --labeled-path distill_pipeline_output/labeled/YYYYMMDD_HHMMSS/train_labeled.json --output-dir distill_pipeline_output
   python scripts/distill_flows.py all --out-dir distill_pipeline_output --openai-cap 500
 """
@@ -312,6 +314,104 @@ def labeling_with_pod_flow(
         val_path=val_path,
         test_path=test_path,
         openai_cap=openai_cap,
+        output_labeled_dir=str(output_labeled_dir) if output_labeled_dir else None,
+        pod_wait_timeout_sec=pod_wait_timeout_sec,
+        vllm_ready_timeout_sec=vllm_ready_timeout_sec,
+    )
+
+
+@task(name="labeling-pod-only-task", log_prints=True)
+def labeling_pod_only_task(
+    train_path: str,
+    gold_path: str,
+    output_labeled_dir: str | None = None,
+    pod_wait_timeout_sec: int = 600,
+    vllm_ready_timeout_sec: int = 180,
+) -> dict:
+    """
+    이미 생성된 train_labeled_gold_only.json이 있을 때, Pod만 띄워 teacher_rest 라벨링 후 Pod 삭제.
+    OpenAI 단계는 건너뜀. RUNPOD_API_KEY 필요.
+    """
+    if RunPodClient is None:
+        raise RuntimeError("RunPodClient not available. Check runpod_cli import.")
+    token = os.environ.get("RUNPOD_API_KEY")
+    if not token:
+        raise ValueError("RUNPOD_API_KEY environment variable is required for labeling_pod_only")
+
+    gold_path_resolved = Path(gold_path)
+    if not gold_path_resolved.exists():
+        raise FileNotFoundError(f"Gold file not found: {gold_path}")
+    labeled_dir = Path(output_labeled_dir) if output_labeled_dir else gold_path_resolved.parent
+    labeled_dir.mkdir(parents=True, exist_ok=True)
+
+    client = RunPodClient(token=token)
+    payload = RunPodClient.get_default_pod_payload(use="labeling")
+    pod = client.create_pod(payload)
+    pod_id = pod["id"]
+    print("Pod created:", pod_id)
+
+    try:
+        ready = client.wait_until_running(pod_id, timeout_sec=pod_wait_timeout_sec)
+        public_ip = ready.get("publicIp")
+        if not public_ip:
+            raise RuntimeError(f"Pod {pod_id} has no publicIp. Response: {ready}")
+
+        base_url = f"http://{public_ip}:8000/v1"
+        print("Pod ready:", pod_id, "base_url:", base_url)
+
+        _wait_for_vllm_ready(base_url, timeout_sec=vllm_ready_timeout_sec)
+
+        env = os.environ.copy()
+        env["VLLM_POD_BASE_URL"] = base_url
+        env["USE_POD_VLLM"] = "true"
+        env["LLM_PROVIDER"] = "runpod"
+
+        cmd_teacher = [
+            sys.executable,
+            str(_SCRIPT_DIR / "label_for_distill.py"),
+            "--phase", "teacher_rest",
+            "--train-path", str(train_path),
+            "--gold-labeled-path", str(gold_path_resolved),
+            "--output-dir", str(labeled_dir),
+            "--seed", "42",
+        ]
+        result = subprocess.run(cmd_teacher, cwd=str(_PROJECT_ROOT), env=env, capture_output=False)
+        if result.returncode != 0:
+            raise RuntimeError(f"label_for_distill.py teacher_rest exited with {result.returncode}")
+
+        labeled_path = labeled_dir / "train_labeled.json"
+        out = {"labeled_path": str(labeled_path)}
+        for name, fn in [("val_labeled_path", "val_labeled.json"), ("test_labeled_path", "test_labeled.json")]:
+            p = labeled_dir / fn
+            if p.exists():
+                out[name] = str(p)
+        if upload_labeled_dir_to_runpod and os.environ.get("RUNPOD_S3_ACCESS_KEY"):
+            try:
+                n = upload_labeled_dir_to_runpod(labeled_dir)
+                out["runpod_upload"] = {"uploaded": True, "count": n, "labeled_dir": str(labeled_dir)}
+            except Exception as e:
+                logger.warning("RunPod S3 upload failed: %s", e)
+                out["runpod_upload"] = {"uploaded": False, "error": str(e)}
+        return out
+    finally:
+        print("Cleaning up pod:", pod_id)
+        client.delete_pod(pod_id)
+
+
+@flow(name="labeling_pod_only_flow", log_prints=True)
+def labeling_pod_only_flow(
+    train_path: str,
+    gold_path: str,
+    output_labeled_dir: str | Path | None = None,
+    pod_wait_timeout_sec: int = 600,
+    vllm_ready_timeout_sec: int = 180,
+) -> dict:
+    """
+    기존 train_labeled_gold_only.json으로 Pod에서 teacher_rest만 실행 (OpenAI 단계 생략).
+    """
+    return labeling_pod_only_task(
+        train_path=train_path,
+        gold_path=gold_path,
         output_labeled_dir=str(output_labeled_dir) if output_labeled_dir else None,
         pod_wait_timeout_sec=pod_wait_timeout_sec,
         vllm_ready_timeout_sec=vllm_ready_timeout_sec,
@@ -1012,9 +1112,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Prefect flows for summary KD pipeline (distill_by_prefect.md)")
     parser.add_argument(
         "flow",
-        choices=["build_dataset", "labeling_with_pod", "train_student_with_pod", "run_sweep", "evaluate", "merge_for_serving", "merge_for_serving_with_pod", "all", "all_sweep"],
-        help="Flow to run. all/all_sweep: 라벨링·학습 Pod 기준. merge_for_serving_with_pod: Pod에서 merge 후 볼륨에 저장.",
+        choices=["build_dataset", "labeling_with_pod", "labeling_pod_only", "train_student_with_pod", "run_sweep", "evaluate", "merge_for_serving", "merge_for_serving_with_pod", "all", "all_sweep"],
+        help="Flow to run. all/all_sweep: 라벨링·학습 Pod 기준. labeling_pod_only: OpenAI 생략, 기존 골드로 Pod teacher만.",
     )
+    parser.add_argument("--gold-path", type=Path, default=None, help="train_labeled_gold_only.json 경로 (labeling_pod_only 필수)")
     parser.add_argument("--sweep-id", type=str, default=None, help="wandb sweep id (optional; 없으면 --sweep-yaml으로 flow 내부에서 등록)")
     parser.add_argument("--sweep-yaml", type=Path, default=None, help="sweep 설정 yaml (sweep-id 없을 때 사용, 기본: scripts/wandb_sweep_qlora.yaml)")
     parser.add_argument("--input", type=Path, default=None, help="Input reviews JSON (default: tasteam_app_all_review_data.json)")
@@ -1063,6 +1164,17 @@ def main() -> None:
             test_path=test_p,
             openai_cap=args.openai_cap,
             output_labeled_dir=out_dir,
+        )
+        print("Result:", result)
+    elif args.flow == "labeling_pod_only":
+        if not args.train_path:
+            parser.error("labeling_pod_only requires --train-path")
+        if not args.gold_path or not args.gold_path.exists():
+            parser.error("labeling_pod_only requires --gold-path (path to train_labeled_gold_only.json)")
+        result = labeling_pod_only_flow(
+            train_path=str(args.train_path),
+            gold_path=str(args.gold_path),
+            output_labeled_dir=str(args.gold_path.parent),
         )
         print("Result:", result)
     elif args.flow == "train_student_with_pod":
