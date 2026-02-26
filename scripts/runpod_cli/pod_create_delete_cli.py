@@ -109,7 +109,7 @@ class RunPodClient:
             name = "merge-pod"
         else:
             image_name = os.environ.get("RUNPOD_POD_IMAGE_NAME_LABELING", "jinsoo1218/runpod-pod-vllm:latest")
-            network_volume_id = os.environ.get("RUNPOD_NETWORK_VOLUME_ID_LABELING", "b4zdzi0haz")
+            network_volume_id = os.environ.get("RUNPOD_NETWORK_VOLUME_ID_LABELING", "o3a3ya7flt")
             name = "vllm-pod"
         payload = {
             "allowedCudaVersions": ["13.0"],
