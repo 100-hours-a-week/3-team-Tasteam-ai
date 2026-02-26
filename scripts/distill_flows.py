@@ -43,8 +43,6 @@ TEST_SAMPLES_TARGET = (400, 600)
 # 품질 필터 (distill_by_prefect §2): ①JSON구조 ②길이 ③근거기반성휴리스틱 ④OpenAI골드비교(선택) ⑤반복/붕괴감지
 # 휴먼 평가 라벨 스키마: sample_id, model_name, relevance(1~5), faithfulness(1~5), structure_consistency(1~5), hallucination(0/1), overall_score(1~5), comment
 
-from __future__ import annotations
-
 import argparse
 import json
 import logging
