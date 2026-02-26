@@ -88,7 +88,7 @@ class _InferenceConfig:
     RUNPOD_POLL_INTERVAL: int = int(os.getenv("RUNPOD_POLL_INTERVAL", "2"))
     RUNPOD_MAX_WAIT_TIME: int = int(os.getenv("RUNPOD_MAX_WAIT_TIME", "300"))
     # RunPod Serverless vLLM 엔드포인트 사용 (앱 내 인프로세스 vLLM 제거됨)
-    #USE_POD_VLLM: bool = os.getenv("USE_POD_VLLM", "true").lower() == "true"
+    USE_POD_VLLM: bool = os.getenv("USE_POD_VLLM", "true").lower() == "true"
     # RunPod Pod 직접 URL (vLLM OpenAI 호환 /v1). 설정 시 Serverless 대신 이 URL로 추론. 기본값: 213.173.108.29:16366 (test_all_task 연동)
     VLLM_POD_BASE_URL: Optional[str] = (os.getenv("VLLM_POD_BASE_URL", "http://213.173.108.70:17517/v1") or "").strip() or None
 
