@@ -134,4 +134,30 @@ Traceback (most recent call last):
     raise requests.HTTPError(
 requests.exceptions.HTTPError: HTTP 500 for POST https://rest.runpod.io/v1/pods: {'error': 'create pod: There are no instances currently available', 'status': 500}
 22:10:24.467 | INFO    | prefect - Stopping temporary server on http://127.0.0.1:8015
-(env_ai) js@jinsoos-MacBook-Pro tasteam-new-async % 
+
+---
+
+
+에러 원인은 **코드가 아니라 RunPod 쪽**입니다.
+
+- **메시지**: `'create pod: There are no instances currently available'`
+- **의미**: 요청한 GPU/리전/스펙으로 **지금 사용 가능한 인스턴스가 없다**는 뜻입니다. RunPod API가 500을 반환한 상태입니다.
+
+즉, `labeling_pod_only` flow는 정상적으로 Pod 생성 요청까지 갔고, RunPod가 “인스턴스 없음”으로 실패한 상황입니다.
+
+---
+
+**할 수 있는 것**
+
+1. **나중에 다시 실행**  
+   잠시 뒤(몇 분~몇 시간) 같은 명령을 다시 실행해 보기.  
+   `python scripts/distill_flows.py labeling_pod_only --train-path ... --gold-path ... --out-dir ...`
+
+2. **RunPod 대시보드 확인**  
+   사용 중인 GPU 타입/리전이 인기 많으면 자주 발생합니다.  
+   다른 GPU나 리전을 쓰도록 `runpod_cli`의 pod payload(예: `get_default_pod_payload(use="labeling")`)를 바꿀 수 있는지 확인해 보기.
+
+3. **재시도 로직 추가(선택)**  
+   같은 500 에러일 때 N회 재시도 + 지수 백오프를 넣고 싶다면, Agent 모드에서 `labeling_pod_only_task`의 `client.create_pod(payload)` 호출 부분에 재시도 루프를 넣는 식으로 구현할 수 있습니다.
+
+지금 단계에서는 **코드 수정 없이, 시간을 두고 같은 명령을 다시 실행**해 보는 것이 우선입니다.
