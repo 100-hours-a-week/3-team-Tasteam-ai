@@ -41,7 +41,7 @@ payload = {
     "minUploadMbps": 123,
     "minVCPUPerGPU": 2,
     "name": "vllm-pod",
-    "networkVolumeId": "2kn4qj6rql",   # <-- 여기 실제 ID로
+    "networkVolumeId": "b4zdzi0haz",   # 라벨링용 (docs/network_volume/labelling_net_vol.md)
     "ports": ["8888/http", "22/tcp"],
     "supportPublicIp": True,
     "vcpuCount": 2,

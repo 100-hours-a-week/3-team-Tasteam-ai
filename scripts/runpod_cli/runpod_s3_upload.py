@@ -4,7 +4,7 @@ RunPod Network Volume S3 호환 API로 로컬 파일/디렉터리 업로드.
 환경변수:
   RUNPOD_S3_ACCESS_KEY   - RunPod S3 API Access Key (user_...)
   RUNPOD_S3_SECRET_ACCESS_KEY - RunPod S3 API Secret (rps_...)
-  RUNPOD_NETWORK_VOLUME_ID    - 업로드 대상 볼륨 ID (기본: 4rlm64f9lv, train용)
+  RUNPOD_NETWORK_VOLUME_ID    - 업로드 대상 볼륨 ID (기본: v3i546pkrz, train용)
   RUNPOD_S3_REGION            - 데이터센터 ID (기본: eu-ro-1)
   RUNPOD_S3_ENDPOINT_URL      - S3 엔드포인트 (기본: https://s3api-eu-ro-1.runpod.io)
 
@@ -27,7 +27,7 @@ except ImportError:
 # EU-RO-1 기본값 (vllm_net_vol.md, distill_train_net_vol.md)
 DEFAULT_REGION = "eu-ro-1"
 DEFAULT_ENDPOINT_URL = "https://s3api-eu-ro-1.runpod.io"
-DEFAULT_VOLUME_ID = "4rlm64f9lv"  # train용 볼륨 (labeled 데이터 업로드 대상)
+DEFAULT_VOLUME_ID = "v3i546pkrz"  # train용 볼륨 (labeled 데이터 업로드 대상, distill_train_net_vol.md)
 
 
 def _get_credentials() -> tuple[str, str]:
@@ -134,7 +134,7 @@ def upload_labeled_dir_to_runpod(
     """
     라벨링 결과 디렉터리를 RunPod 네트워크 볼륨에 업로드.
     RUNPOD_S3_ACCESS_KEY, RUNPOD_S3_SECRET_ACCESS_KEY 필수.
-    volume_id 미지정 시 RUNPOD_NETWORK_VOLUME_ID 또는 기본값(4rlm64f9lv) 사용.
+    volume_id 미지정 시 RUNPOD_NETWORK_VOLUME_ID 또는 기본값(v3i546pkrz) 사용.
     remote_prefix 미지정 시 labeled/ 디렉터리 이름(버전) 사용.
     """
     if not os.environ.get("RUNPOD_S3_ACCESS_KEY") or not os.environ.get("RUNPOD_S3_SECRET_ACCESS_KEY"):

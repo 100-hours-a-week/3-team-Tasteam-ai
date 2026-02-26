@@ -101,15 +101,15 @@ class RunPodClient:
         """
         if use == "train":
             image_name = os.environ.get("RUNPOD_POD_IMAGE_NAME_TRAIN", "jinsoo1218/train-llm:latest")
-            network_volume_id = os.environ.get("RUNPOD_NETWORK_VOLUME_ID_TRAIN", "4rlm64f9lv")
+            network_volume_id = os.environ.get("RUNPOD_NETWORK_VOLUME_ID_TRAIN", "v3i546pkrz")
             name = "train-pod"
         elif use == "merge":
             image_name = os.environ.get("RUNPOD_POD_IMAGE_NAME_TRAIN", "jinsoo1218/train-llm:latest")
-            network_volume_id = os.environ.get("RUNPOD_NETWORK_VOLUME_ID_TRAIN", "4rlm64f9lv")
+            network_volume_id = os.environ.get("RUNPOD_NETWORK_VOLUME_ID_TRAIN", "v3i546pkrz")
             name = "merge-pod"
         else:
             image_name = os.environ.get("RUNPOD_POD_IMAGE_NAME_LABELING", "jinsoo1218/runpod-pod-vllm:latest")
-            network_volume_id = os.environ.get("RUNPOD_NETWORK_VOLUME_ID_LABELING", "2kn4qj6rql")
+            network_volume_id = os.environ.get("RUNPOD_NETWORK_VOLUME_ID_LABELING", "b4zdzi0haz")
             name = "vllm-pod"
         payload = {
             "allowedCudaVersions": ["13.0"],

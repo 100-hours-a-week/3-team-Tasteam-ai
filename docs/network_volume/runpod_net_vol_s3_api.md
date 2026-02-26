@@ -647,7 +647,7 @@ aws configure
 즉:
 
 ```
-aws s3 cp local.txt s3://4rlm64f9lv/models/x.txt
+aws s3 cp local.txt s3://v3i546pkrz/models/x.txt
 ```
 
 하면

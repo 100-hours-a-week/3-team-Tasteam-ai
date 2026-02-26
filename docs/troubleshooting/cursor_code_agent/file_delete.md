@@ -30,8 +30,8 @@
 - **`pod_create_delete_cli.py`**  
   - `get_default_pod_payload(use="labeling"|"train", docker_start_cmd=...)`  
   - `use="train"`: 이미지·볼륨·이름을 학습용으로 분리  
-    - `RUNPOD_NETWORK_VOLUME_ID_TRAIN` (기본 `4rlm64f9lv`)  
-    - `RUNPOD_NETWORK_VOLUME_ID_LABELING` (기본 `2kn4qj6rql`)  
+    - `RUNPOD_NETWORK_VOLUME_ID_TRAIN` (기본 `v3i546pkrz`, distill_train_net_vol.md)  
+    - `RUNPOD_NETWORK_VOLUME_ID_LABELING` (기본 `b4zdzi0haz`, labelling_net_vol.md)  
   - `docker_start_cmd`로 컨테이너 CMD 오버라이드 (학습용 `--labeled-path` 등)
 - **`runpod_s3_upload.py`**  
   - `list_run_ids_with_adapter(volume_id)`  

@@ -634,7 +634,7 @@ GET /api/v1/batch/status/{job_id} → 결과 조회
 |------|------|
 | **오케스트레이션** | Prefect (`scripts/distill_flows.py`): **all** = build_dataset → labeling(Pod) → train_student(Pod, 단일 run) → evaluate → merge. **all_sweep** = 동일하되 학습은 Pod에서 sweep(여러 run) 실행 후 best adapter는 wandb artifact에서 수급. §6.1.1·6.1.2 참고. `docs/easydistill/distill_with_prefect.md` |
 | **학습 실행** | RunPod Pod에서 Docker 이미지(`Dockerfile.train-llm`, `jinsoo1218/train-llm`)로 `train_qlora.py` 실행. Network Volume `/workspace`에 데이터·어댑터 저장. |
-| **스토리지** | RunPod Network Volume. Pod 없이 파일 접근은 **S3 호환 API**(`aws s3 --endpoint-url https://s3api-eu-ro-1.runpod.io`) 사용. 학습용 볼륨 ID 예: `4rlm64f9lv`, vLLM용: `2kn4qj6rql`. |
+| **스토리지** | RunPod Network Volume. Pod 없이 파일 접근은 **S3 호환 API**(`aws s3 --endpoint-url https://s3api-eu-ro-1.runpod.io`) 사용. 학습용: `v3i546pkrz`(distill_train_net_vol.md), 라벨링 vLLM용: `b4zdzi0haz`(labelling_net_vol.md). |
 | **관련 문서** | `docs/runpod_cli/runpod_net_vol_s3_api.md`, `docs/runpod_cli/distill_train_net_vol.md`, `docs/runpod_cli/vllm_net_vol.md`, `docs/easydistill/distill_strategy.md` |
 
 **GPU 용도별 지정**

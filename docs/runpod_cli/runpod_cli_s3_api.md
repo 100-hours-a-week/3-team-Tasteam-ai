@@ -10,12 +10,12 @@ RunPod Network Volume이 **S3-compatible API**를 제공해서, `aws s3` CLI로 
 
 ```bash
 aws s3 cp ./adapter_model.safetensors \
-  s3://4rlm64f9lv/models/adapter_model.safetensors \
+  s3://v3i546pkrz/models/adapter_model.safetensors \
   --region eu-ro-1 \
   --endpoint-url https://s3api-eu-ro-1.runpod.io
 ```
 
-* `s3://4rlm64f9lv/` → **볼륨 ID가 버킷 이름** 역할 ([Runpod Documentation][1])
+* `s3://v3i546pkrz/` → **볼륨 ID가 버킷 이름** 역할 ([Runpod Documentation][1])
 * `--endpoint-url ...runpod.io` → AWS가 아니라 **RunPod S3 API 엔드포인트로 접속** ([Runpod Documentation][1])
 * 경로는 볼륨 루트 기준 “객체 키”로 들어가고, Pod에서는 `/workspace/...`로 보이게 돼 ([Runpod Documentation][1])
 
@@ -25,7 +25,7 @@ aws s3 cp ./adapter_model.safetensors \
 
 ```bash
 aws s3 sync ./distill_pipeline_output/ \
-  s3://4rlm64f9lv/distill_pipeline_output/ \
+  s3://v3i546pkrz/distill_pipeline_output/ \
   --region eu-ro-1 \
   --endpoint-url https://s3api-eu-ro-1.runpod.io
 ```
@@ -38,7 +38,7 @@ aws s3 sync ./distill_pipeline_output/ \
 
 ```bash
 aws s3 cp \
-  s3://4rlm64f9lv/distill_pipeline_output/runs/xxx/adapter/adapter_model.safetensors \
+  s3://v3i546pkrz/distill_pipeline_output/runs/xxx/adapter/adapter_model.safetensors \
   ./adapter_model.safetensors \
   --region eu-ro-1 \
   --endpoint-url https://s3api-eu-ro-1.runpod.io
@@ -56,9 +56,9 @@ aws s3 cp \
 
 프로젝트에서 라벨링 결과를 RunPod 네트워크 볼륨에 올리려면 환경변수를 설정한 뒤 라벨링 flow를 실행하면 된다.
 
-* **환경변수**: `RUNPOD_S3_ACCESS_KEY`, `RUNPOD_S3_SECRET_ACCESS_KEY` (필수), `RUNPOD_NETWORK_VOLUME_ID` (선택, 기본 4rlm64f9lv)
+* **환경변수**: `RUNPOD_S3_ACCESS_KEY`, `RUNPOD_S3_SECRET_ACCESS_KEY` (필수), `RUNPOD_NETWORK_VOLUME_ID` (선택, 기본 v3i546pkrz (distill_train_net_vol.md))
 * **동작**: `labeling_flow` / `labeling_with_pod_flow` 실행 후, 위 환경변수가 있으면 라벨 디렉터리(`train_labeled.json` 등)를 자동으로 네트워크 볼륨 `labeled/YYYYMMDD_HHMMSS/` 에 업로드한다.
-* **스크립트**: `scripts/runpod_cli/runpod_s3_upload.py` — 디렉터리 업로드용. CLI 예: `python -m runpod_cli.runpod_s3_upload ./labeled/20260216_123456 --volume-id 4rlm64f9lv`
+* **스크립트**: `scripts/runpod_cli/runpod_s3_upload.py` — 디렉터리 업로드용. CLI 예: `python -m runpod_cli.runpod_s3_upload ./labeled/20260216_123456 --volume-id v3i546pkrz`
 
 ---
 

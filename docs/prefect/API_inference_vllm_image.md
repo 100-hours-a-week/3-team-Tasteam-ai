@@ -15,7 +15,7 @@
 ## 정리하면
 
 1. **추론 = vLLM 이미지** → 그 이미지의 Docker CMD가 기대하는 **볼륨·경로**가 정해져 있음.
-2. **학습/merge = 학습 이미지** → 학습용 볼륨(`4rlm64f9lv` 등)에 `runs/`, merge 결과 등을 씀.
+2. **학습/merge = 학습 이미지** → 학습용 볼륨(`v3i546pkrz` 등, distill_train_net_vol.md)에 `runs/`, merge 결과 등을 씀.
 3. merged 모델을 **추론에 쓰려면**  
    - **vLLM(추론) Pod가 마운트하는 볼륨**에,  
    - **vLLM CMD가 읽는 경로/구조**로 올려야 하고,  

@@ -91,7 +91,7 @@ except ImportError:
     upload_directory = None
     get_runpod_s3_client = None
     object_exists = None
-    DEFAULT_VOLUME_ID = "4rlm64f9lv"
+    DEFAULT_VOLUME_ID = "v3i546pkrz"
 
 logger = logging.getLogger(__name__)
 
