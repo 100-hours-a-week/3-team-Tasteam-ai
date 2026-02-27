@@ -162,7 +162,7 @@ class RunPodClient:
             "minVCPUPerGPU": 2,
             "name": name,
             "networkVolumeId": network_volume_id,
-            "ports": ["8000/http", "22/tcp"] if use == "labeling" else ["22/tcp"],
+            "ports": ["8000/http", "22/tcp"],
             "supportPublicIp": True,
             "vcpuCount": 2,
             "volumeInGb": 20,
