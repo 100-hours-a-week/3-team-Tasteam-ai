@@ -30,3 +30,7 @@ data/service_simul_data/
 260211_final_rampup/
 260209_rampuplogs/
 etc_logs/
+
+distill_pipeline_output/
+
+docs/prefect_log_analysis/long_logs/
