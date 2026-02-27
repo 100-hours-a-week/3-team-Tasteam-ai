@@ -175,10 +175,38 @@ def build_dataset_flow(
     )
 
 
+def _vllm_base_url_from_runpod_proxy(pod_id: str, internal_http_port: int = 8000) -> str:
+    """RunPod HTTP 프록시 URL: https://{pod_id}-{internal_port}.proxy.runpod.net (publicIp/portMappings 불필요)."""
+    base = f"https://{pod_id}-{internal_http_port}.proxy.runpod.net/v1"
+    logger.info("Using RunPod HTTP proxy: %s", base)
+    return base
+
+
+def _vllm_base_url_from_pod(pod: dict, internal_http_port: int = 8000) -> str:
+    """RunPod pod 응답에서 publicIp와 portMappings(내부→외부)를 사용해 vLLM base_url 생성."""
+    public_ip = (pod.get("publicIp") or "").strip()
+    if not public_ip:
+        raise ValueError("Pod has no publicIp")
+    port_mappings = pod.get("portMappings") or {}
+    # API는 내부 포트를 키로(문자열 또는 숫자), 외부 포트를 값으로 반환
+    external_port = port_mappings.get(str(internal_http_port)) or port_mappings.get(internal_http_port)
+    if external_port is None:
+        external_port = internal_http_port  # 매핑 없으면 내부 포트 그대로 시도(대칭/레거시)
+    logger.info(
+        "portMappings=%s, internal_http_port=%s -> external_port=%s, base_url=http://%s:%s/v1",
+        port_mappings,
+        internal_http_port,
+        external_port,
+        public_ip,
+        external_port,
+    )
+    return f"http://{public_ip}:{external_port}/v1"
+
+
 def _wait_for_vllm_ready(base_url: str, timeout_sec: int = 180, poll_interval: int = 10) -> None:
     """vLLM /v1/models 가 응답할 때까지 대기."""
     import requests
-    url = base_url.rstrip("/") + "/v1/models"
+    url = base_url.rstrip("/") + "/models"
     deadline = time.time() + timeout_sec
     while time.time() < deadline:
         try:
@@ -248,10 +276,7 @@ def labeling_with_pod_task(
 
     try:
         client.wait_until_running(pod_id, timeout_sec=pod_wait_timeout_sec)
-        ready = client.wait_for_public_ip(pod_id, timeout_sec=public_ip_wait_timeout_sec)
-        public_ip = ready["publicIp"]
-
-        base_url = f"http://{public_ip}:8000/v1"
+        base_url = _vllm_base_url_from_runpod_proxy(pod_id)
         print("Pod ready:", pod_id, "base_url:", base_url)
 
         _wait_for_vllm_ready(base_url, timeout_sec=vllm_ready_timeout_sec)
@@ -355,10 +380,7 @@ def labeling_pod_only_task(
 
     try:
         client.wait_until_running(pod_id, timeout_sec=pod_wait_timeout_sec)
-        ready = client.wait_for_public_ip(pod_id, timeout_sec=public_ip_wait_timeout_sec)
-        public_ip = ready["publicIp"]
-
-        base_url = f"http://{public_ip}:8000/v1"
+        base_url = _vllm_base_url_from_runpod_proxy(pod_id)
         print("Pod ready:", pod_id, "base_url:", base_url)
 
         _wait_for_vllm_ready(base_url, timeout_sec=vllm_ready_timeout_sec)
@@ -1039,6 +1061,7 @@ def distill_pipeline_all(
     out_dir: str | Path | None = None,
     openai_cap: int = 500,
     public_ip_wait_timeout_sec: int = 180,
+    vllm_ready_timeout_sec: int = 180,
     student_model: str = "Qwen/Qwen2.5-0.5B-Instruct",
 ) -> dict:
     """build_dataset → labeling(Pod) → train_student(Pod) → evaluate 순차 실행."""
@@ -1053,6 +1076,7 @@ def distill_pipeline_all(
         openai_cap=openai_cap,
         output_labeled_dir=out_dir,
         public_ip_wait_timeout_sec=public_ip_wait_timeout_sec,
+        vllm_ready_timeout_sec=vllm_ready_timeout_sec,
     )
     tr = train_student_with_pod_flow(
         labeled_path=lb["labeled_path"],
@@ -1081,6 +1105,7 @@ def distill_pipeline_all_sweep(
     out_dir: str | Path | None = None,
     openai_cap: int = 500,
     public_ip_wait_timeout_sec: int = 180,
+    vllm_ready_timeout_sec: int = 180,
     student_model: str = "Qwen/Qwen2.5-0.5B-Instruct",
 ) -> dict:
     """build_dataset → labeling(Pod) → run_sweep → best run adapter로 evaluate. sweep_id 없으면 sweep_yaml으로 등록 후 실행."""
@@ -1095,6 +1120,7 @@ def distill_pipeline_all_sweep(
         openai_cap=openai_cap,
         output_labeled_dir=out_dir,
         public_ip_wait_timeout_sec=public_ip_wait_timeout_sec,
+        vllm_ready_timeout_sec=vllm_ready_timeout_sec,
     )
     sweep_ev = run_sweep_and_evaluate_flow(
         sweep_id=sweep_id,
@@ -1138,6 +1164,7 @@ def main() -> None:
     parser.add_argument("--test-labeled-path", type=Path, default=None, help="test_labeled.json (for evaluate)")
     parser.add_argument("--openai-cap", type=int, default=500, help="OpenAI labeling cap (for labeling_with_pod/all)")
     parser.add_argument("--public-ip-wait-timeout", type=int, default=180, help="publicIp 할당 대기 초 (labeling_with_pod, labeling_pod_only)")
+    parser.add_argument("--vllm-ready-timeout", type=int, default=180, help="vLLM /v1/models 준비 대기 초 (labeling_with_pod, labeling_pod_only)")
     parser.add_argument("--student-model", type=str, default="Qwen/Qwen2.5-0.5B-Instruct", help="Student model")
     args = parser.parse_args()
 
@@ -1174,6 +1201,7 @@ def main() -> None:
             openai_cap=args.openai_cap,
             output_labeled_dir=out_dir,
             public_ip_wait_timeout_sec=args.public_ip_wait_timeout,
+            vllm_ready_timeout_sec=args.vllm_ready_timeout,
         )
         print("Result:", result)
     elif args.flow == "labeling_pod_only":
@@ -1186,6 +1214,7 @@ def main() -> None:
             gold_path=str(args.gold_path),
             output_labeled_dir=str(args.gold_path.parent),
             public_ip_wait_timeout_sec=args.public_ip_wait_timeout,
+            vllm_ready_timeout_sec=args.vllm_ready_timeout,
         )
         print("Result:", result)
     elif args.flow == "train_student_with_pod":
@@ -1246,6 +1275,7 @@ def main() -> None:
             out_dir=out_dir,
             openai_cap=args.openai_cap,
             public_ip_wait_timeout_sec=args.public_ip_wait_timeout,
+            vllm_ready_timeout_sec=args.vllm_ready_timeout,
             student_model=args.student_model,
         )
         print("Result keys:", list(result.keys()))
@@ -1258,6 +1288,7 @@ def main() -> None:
             out_dir=out_dir,
             openai_cap=args.openai_cap,
             public_ip_wait_timeout_sec=args.public_ip_wait_timeout,
+            vllm_ready_timeout_sec=args.vllm_ready_timeout,
             student_model=args.student_model,
         )
         print("Result keys:", list(result.keys()))

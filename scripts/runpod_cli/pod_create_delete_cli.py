@@ -87,6 +87,30 @@ class RunPodClient:
             time.sleep(poll_interval_sec)
         raise TimeoutError(f"Pod {pod_id} publicIp not assigned within {timeout_sec}s. Last: {last}")
 
+    def wait_for_port_mappings(
+        self,
+        pod_id: str,
+        internal_port: int = 8000,
+        timeout_sec: int = 120,
+        poll_interval_sec: int = 5,
+    ) -> Dict[str, Any]:
+        """
+        publicIp 할당 후 portMappings에 내부 포트가 채워질 때까지 폴링.
+        RunPod는 초기화 중에는 portMappings가 비어 있을 수 있음.
+        """
+        deadline = time.time() + timeout_sec
+        last = None
+        while time.time() < deadline:
+            pod = self.get_pod(pod_id)
+            last = pod
+            port_mappings = pod.get("portMappings") or {}
+            if port_mappings.get(str(internal_port)) is not None or port_mappings.get(internal_port) is not None:
+                return pod
+            time.sleep(poll_interval_sec)
+        raise TimeoutError(
+            f"Pod {pod_id} portMappings[{internal_port}] not assigned within {timeout_sec}s. Last portMappings: {last.get('portMappings') if last else None}"
+        )
+
     def wait_until_stopped(
         self,
         pod_id: str,
