@@ -246,10 +246,9 @@ def labeling_with_pod_task(
     print("Pod created:", pod_id)
 
     try:
-        ready = client.wait_until_running(pod_id, timeout_sec=pod_wait_timeout_sec)
-        public_ip = ready.get("publicIp")
-        if not public_ip:
-            raise RuntimeError(f"Pod {pod_id} has no publicIp. Response: {ready}")
+        client.wait_until_running(pod_id, timeout_sec=pod_wait_timeout_sec)
+        ready = client.wait_for_public_ip(pod_id, timeout_sec=180)
+        public_ip = ready["publicIp"]
 
         base_url = f"http://{public_ip}:8000/v1"
         print("Pod ready:", pod_id, "base_url:", base_url)
@@ -351,10 +350,9 @@ def labeling_pod_only_task(
     print("Pod created:", pod_id)
 
     try:
-        ready = client.wait_until_running(pod_id, timeout_sec=pod_wait_timeout_sec)
-        public_ip = ready.get("publicIp")
-        if not public_ip:
-            raise RuntimeError(f"Pod {pod_id} has no publicIp. Response: {ready}")
+        client.wait_until_running(pod_id, timeout_sec=pod_wait_timeout_sec)
+        ready = client.wait_for_public_ip(pod_id, timeout_sec=180)
+        public_ip = ready["publicIp"]
 
         base_url = f"http://{public_ip}:8000/v1"
         print("Pod ready:", pod_id, "base_url:", base_url)

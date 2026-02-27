@@ -66,6 +66,27 @@ class RunPodClient:
 
         raise TimeoutError(f"Pod {pod_id} did not reach RUNNING within {timeout_sec}s. Last: {last}")
 
+    def wait_for_public_ip(
+        self,
+        pod_id: str,
+        timeout_sec: int = 180,
+        poll_interval_sec: int = 5,
+    ) -> Dict[str, Any]:
+        """
+        wait_until_running 이후 publicIp가 할당될 때까지 폴링.
+        labeling Pod처럼 publicIp로 접속해야 하는 경우에 사용.
+        """
+        deadline = time.time() + timeout_sec
+        last = None
+        while time.time() < deadline:
+            pod = self.get_pod(pod_id)
+            last = pod
+            public_ip = (pod.get("publicIp") or "").strip()
+            if public_ip:
+                return pod
+            time.sleep(poll_interval_sec)
+        raise TimeoutError(f"Pod {pod_id} publicIp not assigned within {timeout_sec}s. Last: {last}")
+
     def wait_until_stopped(
         self,
         pod_id: str,
