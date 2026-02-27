@@ -1,5 +1,7 @@
 """
-Prefect 기반 DeepFM 학습 파이프라인.
+Prefect 기반 DeepFM 학습 파이프라인 (deepfm_design.md §6-2).
+
+- 전처리 → 학습 → 모델 저장 + pipeline_version 발급 → 오프라인 지표 기록
 
 실행 (프로젝트 루트에서):
   python deepfm_training/training_flow.py
@@ -9,7 +11,9 @@ Prefect 기반 DeepFM 학습 파이프라인.
 """
 from __future__ import annotations
 
+import json
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 # deepfm_training 루트를 path에 넣어 model/data/utils import 가능하게 함 (repo root에서 실행 시)
@@ -43,15 +47,28 @@ def _default_output_dir() -> str:
     return str(_deepfm_root / "output")
 
 
+def _generate_pipeline_version() -> str:
+    """deepfm_design §6-2: pipeline_version 발급 (예: deepfm-1.0.20260227120000)."""
+    now = datetime.now(timezone.utc)
+    return f"deepfm-1.0.{now.strftime('%Y%m%d%H%M%S')}"
+
+
 @task(name="deepfm-preprocess", log_prints=True)
 def preprocess_task(
     raw_data_dir: str,
     processed_data_dir: str,
-    num_train_sample: int = 9000,
-    num_test_sample: int = 1000,
+    num_train_sample: int | None = 9000,
+    num_test_sample: int | None = 1000,
+    use_sample_weight: bool = True,
+    time_column: str | None = None,
+    train_end: str | None = None,
+    valid_end: str | None = None,
+    test_end: str | None = None,
+    group_column: str | None = None,
 ) -> str:
     """
-    Criteo raw 데이터를 전처리하여 train.txt, test.txt, feature_sizes.txt 생성.
+    data_designe 반영 전처리: train.txt, val.txt(시간 split 시), test.txt, feature_sizes.txt,
+    split_meta.json, test_meta.csv 생성. 시간 기준 split 시 time_column + train_end/valid_end/test_end 필요.
     """
     from utils.dataPreprocess import preprocess
 
@@ -66,6 +83,12 @@ def preprocess_task(
         outdir=str(out),
         num_train_sample=num_train_sample,
         num_test_sample=num_test_sample,
+        use_sample_weight=use_sample_weight,
+        time_column=time_column,
+        train_end=train_end,
+        valid_end=valid_end,
+        test_end=test_end,
+        group_column=group_column,
     )
     print(f"Preprocess done: {processed_data_dir}")
     return processed_data_dir
@@ -98,19 +121,32 @@ def train_task(
     out_run = out_path / run_name
     out_run.mkdir(parents=True, exist_ok=True)
 
-    # 데이터 로드
+    # 데이터 로드: 시간 기준 split 시 val.txt 사용, 없으면 train 뒤쪽을 val로 (랜덤 row split 아님)
     train_data = CriteoDataset(str(data_path), train=True)
-    loader_train = DataLoader(
-        train_data,
-        batch_size=batch_size,
-        sampler=sampler.SubsetRandomSampler(range(num_train)),
-    )
-    val_data = CriteoDataset(str(data_path), train=True)
-    loader_val = DataLoader(
-        val_data,
-        batch_size=batch_size,
-        sampler=sampler.SubsetRandomSampler(range(num_train, num_train + num_val)),
-    )
+    val_path = data_path / "val.txt"
+    if val_path.exists():
+        val_data = CriteoDataset(str(data_path), train=False, use_val_file=True)
+        loader_train = DataLoader(
+            train_data, batch_size=batch_size, shuffle=True
+        )
+        loader_val = DataLoader(
+            val_data, batch_size=batch_size, shuffle=False
+        )
+    else:
+        num_total = len(train_data)
+        val_start = max(0, num_total - num_val)
+        train_indices = list(range(0, val_start))
+        val_indices = list(range(val_start, num_total))
+        loader_train = DataLoader(
+            train_data,
+            batch_size=batch_size,
+            sampler=sampler.SubsetRandomSampler(train_indices),
+        )
+        loader_val = DataLoader(
+            train_data,
+            batch_size=batch_size,
+            sampler=sampler.SubsetRandomSampler(val_indices),
+        )
 
     feature_sizes_path = data_path / "feature_sizes.txt"
     feature_sizes = np.loadtxt(str(feature_sizes_path), delimiter=",")
@@ -120,17 +156,56 @@ def train_task(
     optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=0.0)
     model.fit(loader_train, loader_val, optimizer, epochs=epochs, verbose=verbose)
 
+    # §6-2: pipeline_version 발급
+    pipeline_version = _generate_pipeline_version()
+    version_path = out_run / "pipeline_version.txt"
+    version_path.write_text(pipeline_version, encoding="utf-8")
+
     # 모델 및 메타 저장
     model_path = out_run / "model.pt"
     torch.save(model.state_dict(), model_path)
     meta_path = out_run / "feature_sizes.txt"
     np.savetxt(str(meta_path), feature_sizes, fmt="%d", delimiter=",")
-    print(f"Model saved: {model_path}")
+    print(f"Model saved: {model_path}, pipeline_version: {pipeline_version}")
+
+    # §6-2: 오프라인 지표 산출(NDCG@K / Recall@K / AUC) 기록
+    run_metrics = {}
+    test_path = data_path / "test.txt"
+    if test_path.exists():
+        from utils.evaluate import run_evaluation
+        run_metrics = run_evaluation(
+            processed_data_dir=str(data_path),
+            model_path=str(model_path),
+            feature_sizes=feature_sizes,
+            k_list=[5, 10],
+            use_cuda=use_cuda,
+        )
+        if "error" not in run_metrics:
+            metrics_path = out_run / "run_metrics.json"
+            with open(metrics_path, "w", encoding="utf-8") as f:
+                json.dump(run_metrics, f, ensure_ascii=False, indent=2)
+            print(f"Offline metrics saved: {metrics_path}")
+
+    run_manifest = {
+        "pipeline_version": pipeline_version,
+        "model_path": str(model_path),
+        "feature_sizes_path": str(meta_path),
+        "processed_data_dir": processed_data_dir,
+        "metrics": run_metrics,
+        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+    }
+    manifest_path = out_run / "run_manifest.json"
+    with open(manifest_path, "w", encoding="utf-8") as f:
+        json.dump(run_manifest, f, ensure_ascii=False, indent=2)
+    print(f"Run manifest: {manifest_path}")
 
     return {
         "model_path": str(model_path),
         "feature_sizes_path": str(meta_path),
         "processed_data_dir": processed_data_dir,
+        "pipeline_version": pipeline_version,
+        "run_manifest_path": str(manifest_path),
+        "metrics": run_metrics,
     }
 
 
@@ -138,8 +213,8 @@ def train_task(
 def deepfm_training_flow(
     raw_data_dir: str | None = None,
     processed_data_dir: str | None = None,
-    num_train_sample: int = 9000,
-    num_test_sample: int = 1000,
+    num_train_sample: int | None = 9000,
+    num_test_sample: int | None = 1000,
     num_val: int = 1000,
     epochs: int = 5,
     batch_size: int = 100,
@@ -147,6 +222,12 @@ def deepfm_training_flow(
     output_dir: str | None = None,
     use_cuda: bool = False,
     skip_preprocess: bool = False,
+    use_sample_weight: bool = True,
+    time_column: str | None = None,
+    train_end: str | None = None,
+    valid_end: str | None = None,
+    test_end: str | None = None,
+    group_column: str | None = None,
 ) -> dict:
     """
     전처리 → 학습을 순서대로 실행하는 DeepFM 파이프라인.
@@ -163,6 +244,12 @@ def deepfm_training_flow(
             processed_data_dir=processed,
             num_train_sample=num_train_sample,
             num_test_sample=num_test_sample,
+            use_sample_weight=use_sample_weight,
+            time_column=time_column,
+            train_end=train_end,
+            valid_end=valid_end,
+            test_end=test_end,
+            group_column=group_column,
         )
 
     result = train_task(

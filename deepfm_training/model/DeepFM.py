@@ -121,35 +121,35 @@ class DeepFM(nn.Module):
     def fit(self, loader_train, loader_val, optimizer, epochs=100, verbose=False, print_every=100):
         """
         Training a model and valid accuracy.
-
-        Inputs:
-        - loader_train: I
-        - loader_val: .
-        - optimizer: Abstraction of optimizer used in training process, e.g., "torch.optim.Adam()""torch.optim.SGD()".
-        - epochs: Integer, number of epochs.
-        - verbose: Bool, if print.
-        - print_every: Integer, print after every number of iterations. 
-        """
-        """
-            load input data
+        loader_train 배치가 (xi, xv, y) 또는 (xi, xv, y, sample_weight)일 수 있음.
+        sample_weight가 있으면 BCE에 per-sample weight 적용(옵션 C).
         """
         model = self.train().to(device=self.device)
         criterion = F.binary_cross_entropy_with_logits
 
         for _ in range(epochs):
-            for t, (xi, xv, y) in enumerate(loader_train):
+            for t, batch in enumerate(loader_train):
+                if len(batch) == 4:
+                    xi, xv, y, sw = batch
+                    sw = sw.to(device=self.device, dtype=torch.float)
+                else:
+                    xi, xv, y = batch
+                    sw = None
                 xi = xi.to(device=self.device, dtype=self.dtype)
                 xv = xv.to(device=self.device, dtype=torch.float)
                 y = y.to(device=self.device, dtype=torch.float)
-                
+
                 total = model(xi, xv)
-                loss = criterion(total, y)
+                if sw is not None:
+                    loss = criterion(total, y, weight=sw)
+                else:
+                    loss = criterion(total, y)
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
 
                 if verbose and t % print_every == 0:
-                    print('Iteration %d, loss = %.4f' % (t, loss.item()))
+                    print("Iteration %d, loss = %.4f" % (t, loss.item()))
                     self.check_accuracy(loader_val, model)
                     print()
     
