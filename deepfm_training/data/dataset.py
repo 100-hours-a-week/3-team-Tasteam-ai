@@ -1,26 +1,38 @@
+import os
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
 import torch
 from torch.utils.data import Dataset
-import pandas as pd
-import numpy as np
-import os
 
-continous_features = 13
+
+def _get_continuous_feature_count(root: str) -> int:
+    """feature_sizes.txt에서 연속형 피처 개수(값이 1인 필드 수)를 반환. 없으면 Criteo 호환 13."""
+    path = Path(root) / "feature_sizes.txt"
+    if not path.exists():
+        return 13
+    sizes = np.loadtxt(str(path), delimiter=",", dtype=np.int64)
+    if sizes.ndim == 0:
+        sizes = np.array([sizes])
+    n = 0
+    for s in sizes:
+        if s == 1:
+            n += 1
+        else:
+            break
+    return n if n > 0 else 13
+
 
 class CriteoDataset(Dataset):
     """
-    Custom dataset class for Criteo dataset in order to use efficient 
-    dataloader tool provided by PyTorch.
-    """ 
+    Criteo/Tasteam 전처리 결과용 Dataset.
+    feature_sizes.txt가 있으면 연속형 개수를 자동 추론(Tasteam 호환).
+    """
     def __init__(self, root, train=True):
-        """
-        Initialize file path and train/test mode.
-
-        Inputs:
-        - root: Path where the processed data file stored.
-        - train: Train or test. Required.
-        """
         self.root = root
         self.train = train
+        self.continous_features = _get_continuous_feature_count(root)
 
         if not self._check_exists():
             raise RuntimeError('Dataset not found.')
@@ -31,32 +43,28 @@ class CriteoDataset(Dataset):
             self.target = data.iloc[:, -1].values
         else:
             data = pd.read_csv(os.path.join(root, 'test.txt'))
+            # test.txt도 마지막 컬럼이 라벨일 수 있음
             self.test_data = data.iloc[:, :-1].values
-    
+
     def __getitem__(self, idx):
+        n = self.continous_features
         if self.train:
             dataI, targetI = self.train_data[idx, :], self.target[idx]
-            # index of continous features are zero
-            Xi_coutinous = np.zeros_like(dataI[:continous_features])
-            Xi_categorial = dataI[continous_features:]
-            Xi = torch.from_numpy(np.concatenate((Xi_coutinous, Xi_categorial)).astype(np.int32)).unsqueeze(-1)
-            
-            # value of categorial features are one (one hot features)
-            Xv_categorial = np.ones_like(dataI[continous_features:])
-            Xv_coutinous = dataI[:continous_features]
-            Xv = torch.from_numpy(np.concatenate((Xv_coutinous, Xv_categorial)).astype(np.int32))
+            Xi_cont = np.zeros_like(dataI[:n])
+            Xi_cat = dataI[n:]
+            Xi = torch.from_numpy(np.concatenate((Xi_cont, Xi_cat)).astype(np.int32)).unsqueeze(-1)
+            Xv_cat = np.ones_like(dataI[n:])
+            Xv_cont = dataI[:n]
+            Xv = torch.from_numpy(np.concatenate((Xv_cont, Xv_cat)).astype(np.float32))
             return Xi, Xv, targetI
         else:
-            dataI = self.test_data.iloc[idx, :]
-            # index of continous features are one
-            Xi_coutinous = np.ones_like(dataI[:continous_features])
-            Xi_categorial = dataI[continous_features:]
-            Xi = torch.from_numpy(np.concatenate((Xi_coutinous, Xi_categorial)).astype(np.int32)).unsqueeze(-1)
-            
-            # value of categorial features are one (one hot features)
-            Xv_categorial = np.ones_like(dataI[continous_features:])
-            Xv_coutinous = dataI[:continous_features]
-            Xv = torch.from_numpy(np.concatenate((Xv_coutinous, Xv_categorial)).astype(np.int32))
+            dataI = self.test_data[idx, :]
+            Xi_cont = np.zeros_like(dataI[:n])
+            Xi_cat = dataI[n:]
+            Xi = torch.from_numpy(np.concatenate((Xi_cont, Xi_cat)).astype(np.int32)).unsqueeze(-1)
+            Xv_cat = np.ones_like(dataI[n:])
+            Xv_cont = dataI[:n]
+            Xv = torch.from_numpy(np.concatenate((Xv_cont, Xv_cat)).astype(np.float32))
             return Xi, Xv
 
     def __len__(self):
