@@ -1,0 +1,219 @@
+(env_ai) js@jinsoos-MacBook-Pro tasteam-new-async % python scripts/distill_flows.py labeling_pod_only \
+  --train-path distill_pipeline_output/datasets/20260226_051036/train.json \
+  --gold-path distill_pipeline_output/labeled/20260226_051037/train_labeled_gold_only.json \
+  --out-dir distill_pipeline_output
+10:33:45.725 | INFO    | prefect - Starting temporary server on http://127.0.0.1:8578
+See https://docs.prefect.io/v3/concepts/server#how-to-guides for more information on running a dedicated Prefect server.
+10:33:48.096 | INFO    | Flow run 'crimson-cuttlefish' - Beginning flow run 'crimson-cuttlefish' for flow 'labeling_pod_only_flow'
+10:33:49.990 | INFO    | Task run 'labeling-pod-only-task-d54' - Pod created: mf1agjg46jnoq7
+10:33:50.678 | INFO    | Task run 'labeling-pod-only-task-d54' - Cleaning up pod: mf1agjg46jnoq7
+10:33:51.424 | ERROR   | Task run 'labeling-pod-only-task-d54' - Task run failed with exception: RuntimeError("Pod mf1agjg46jnoq7 has no publicIp. Response: {'consumerUserId': 'user_37BIlBB5dZBoaBqfdzATSkf8j22', 'containerDiskInGb': 50, 'costPerHr': 0.59, 'createdAt': '2026-02-27 01:33:49.354 +0000 UTC', 'desiredStatus': 'RUNNING', 'env': {'ENV_VAR': 'value', 'PUBLIC_KEY': 'AAAAC3NzaC1lZDI1NTE5AAAAICKTLJQVaMbuKtYvByO3ejRnuuFuMz3eeXm0p5h/VJph', 'WANDB_API_KEY': 'fdf241dab0a3eb83907cc366f6420ff628a6d173'}, 'gpuCount': 1, 'id': 'mf1agjg46jnoq7', 'imageName': 'jinsoo1218/runpod-pod-vllm:latest', 'lastStartedAt': '2026-02-27 01:33:49.352 +0000 UTC', 'lastStatusChange': 'Rented by User: Fri Feb 27 2026 01:33:49 GMT+0000 (Coordinated Universal Time)', 'machine': {}, 'machineId': 'foxywh0sceg7', 'memoryInGb': 83, 'name': 'vllm-pod', 'networkVolumeId': 'o3a3ya7flt', 'ports': ['8000/http', '22/tcp'], 'publicIp': '', 'templateId': '', 'vcpuCount': 16, 'volumeInGb': 20, 'volumeMountPath': '/workspace'}")
+Traceback (most recent call last):
+  File "/Users/js/miniconda3/envs/env_ai/lib/python3.11/site-packages/prefect/task_engine.py", line 1014, in run_context
+    yield self
+  File "/Users/js/miniconda3/envs/env_ai/lib/python3.11/site-packages/prefect/task_engine.py", line 1673, in run_task_sync
+    engine.call_task_fn(txn)
+  File "/Users/js/miniconda3/envs/env_ai/lib/python3.11/site-packages/prefect/task_engine.py", line 1031, in call_task_fn
+    result = call_with_parameters(self.task.fn, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/js/miniconda3/envs/env_ai/lib/python3.11/site-packages/prefect/utilities/callables.py", line 210, in call_with_parameters
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/Users/js/tasteam-new-async/scripts/distill_flows.py", line 357, in labeling_pod_only_task
+    raise RuntimeError(f"Pod {pod_id} has no publicIp. Response: {ready}")
+RuntimeError: Pod mf1agjg46jnoq7 has no publicIp. Response: {'consumerUserId': 'user_37BIlBB5dZBoaBqfdzATSkf8j22', 'containerDiskInGb': 50, 'costPerHr': 0.59, 'createdAt': '2026-02-27 01:33:49.354 +0000 UTC', 'desiredStatus': 'RUNNING', 'env': {'ENV_VAR': 'value', 'PUBLIC_KEY': 'AAAAC3NzaC1lZDI1NTE5AAAAICKTLJQVaMbuKtYvByO3ejRnuuFuMz3eeXm0p5h/VJph', 'WANDB_API_KEY': 'fdf241dab0a3eb83907cc366f6420ff628a6d173'}, 'gpuCount': 1, 'id': 'mf1agjg46jnoq7', 'imageName': 'jinsoo1218/runpod-pod-vllm:latest', 'lastStartedAt': '2026-02-27 01:33:49.352 +0000 UTC', 'lastStatusChange': 'Rented by User: Fri Feb 27 2026 01:33:49 GMT+0000 (Coordinated Universal Time)', 'machine': {}, 'machineId': 'foxywh0sceg7', 'memoryInGb': 83, 'name': 'vllm-pod', 'networkVolumeId': 'o3a3ya7flt', 'ports': ['8000/http', '22/tcp'], 'publicIp': '', 'templateId': '', 'vcpuCount': 16, 'volumeInGb': 20, 'volumeMountPath': '/workspace'}
+10:33:51.436 | ERROR   | Task run 'labeling-pod-only-task-d54' - Finished in state Failed("Task run encountered an exception RuntimeError: Pod mf1agjg46jnoq7 has no publicIp. Response: {'consumerUserId': 'user_37BIlBB5dZBoaBqfdzATSkf8j22', 'containerDiskInGb': 50, 'costPerHr': 0.59, 'createdAt': '2026-02-27 01:33:49.354 +0000 UTC', 'desiredStatus': 'RUNNING', 'env': {'ENV_VAR': 'value', 'PUBLIC_KEY': 'AAAAC3NzaC1lZDI1NTE5AAAAICKTLJQVaMbuKtYvByO3ejRnuuFuMz3eeXm0p5h/VJph', 'WANDB_API_KEY': 'fdf241dab0a3eb83907cc366f6420ff628a6d173'}, 'gpuCount': 1, 'id': 'mf1agjg46jnoq7', 'imageName': 'jinsoo1218/runpod-pod-vllm:latest', 'lastStartedAt': '2026-02-27 01:33:49.352 +0000 UTC', 'lastStatusChange': 'Rented by User: Fri Feb 27 2026 01:33:49 GMT+0000 (Coordinated Universal Time)', 'machine': {}, 'machineId': 'foxywh0sceg7', 'memoryInGb': 83, 'name': 'vllm-pod', 'networkVolumeId': 'o3a3ya7flt', 'ports': ['8000/http', '22/tcp'], 'publicIp': '', 'templateId': '', 'vcpuCount': 16, 'volumeInGb': 20, 'volumeMountPath': '/workspace'}")
+10:33:51.438 | ERROR   | Flow run 'crimson-cuttlefish' - Encountered exception during execution: RuntimeError("Pod mf1agjg46jnoq7 has no publicIp. Response: {'consumerUserId': 'user_37BIlBB5dZBoaBqfdzATSkf8j22', 'containerDiskInGb': 50, 'costPerHr': 0.59, 'createdAt': '2026-02-27 01:33:49.354 +0000 UTC', 'desiredStatus': 'RUNNING', 'env': {'ENV_VAR': 'value', 'PUBLIC_KEY': 'AAAAC3NzaC1lZDI1NTE5AAAAICKTLJQVaMbuKtYvByO3ejRnuuFuMz3eeXm0p5h/VJph', 'WANDB_API_KEY': 'fdf241dab0a3eb83907cc366f6420ff628a6d173'}, 'gpuCount': 1, 'id': 'mf1agjg46jnoq7', 'imageName': 'jinsoo1218/runpod-pod-vllm:latest', 'lastStartedAt': '2026-02-27 01:33:49.352 +0000 UTC', 'lastStatusChange': 'Rented by User: Fri Feb 27 2026 01:33:49 GMT+0000 (Coordinated Universal Time)', 'machine': {}, 'machineId': 'foxywh0sceg7', 'memoryInGb': 83, 'name': 'vllm-pod', 'networkVolumeId': 'o3a3ya7flt', 'ports': ['8000/http', '22/tcp'], 'publicIp': '', 'templateId': '', 'vcpuCount': 16, 'volumeInGb': 20, 'volumeMountPath': '/workspace'}")
+Traceback (most recent call last):
+  File "/Users/js/miniconda3/envs/env_ai/lib/python3.11/site-packages/prefect/flow_engine.py", line 989, in run_context
+    yield self
+  File "/Users/js/miniconda3/envs/env_ai/lib/python3.11/site-packages/prefect/flow_engine.py", line 1634, in run_flow_sync
+    engine.call_flow_fn()
+  File "/Users/js/miniconda3/envs/env_ai/lib/python3.11/site-packages/prefect/flow_engine.py", line 1009, in call_flow_fn
+    result = call_with_parameters(self.flow.fn, self.parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/js/miniconda3/envs/env_ai/lib/python3.11/site-packages/prefect/utilities/callables.py", line 210, in call_with_parameters
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/Users/js/tasteam-new-async/scripts/distill_flows.py", line 412, in labeling_pod_only_flow
+    return labeling_pod_only_task(
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/js/miniconda3/envs/env_ai/lib/python3.11/site-packages/prefect/tasks.py", line 1209, in __call__
+    return run_task(
+           ^^^^^^^^^
+  File "/Users/js/miniconda3/envs/env_ai/lib/python3.11/site-packages/prefect/task_engine.py", line 1900, in run_task
+    return run_task_sync(**kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/js/miniconda3/envs/env_ai/lib/python3.11/site-packages/prefect/task_engine.py", line 1675, in run_task_sync
+    return engine.state if return_type == "state" else engine.result()
+                                                       ^^^^^^^^^^^^^^^
+  File "/Users/js/miniconda3/envs/env_ai/lib/python3.11/site-packages/prefect/task_engine.py", line 611, in result
+    raise self._raised
+  File "/Users/js/miniconda3/envs/env_ai/lib/python3.11/site-packages/prefect/task_engine.py", line 1014, in run_context
+    yield self
+  File "/Users/js/miniconda3/envs/env_ai/lib/python3.11/site-packages/prefect/task_engine.py", line 1673, in run_task_sync
+    engine.call_task_fn(txn)
+  File "/Users/js/miniconda3/envs/env_ai/lib/python3.11/site-packages/prefect/task_engine.py", line 1031, in call_task_fn
+    result = call_with_parameters(self.task.fn, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/js/miniconda3/envs/env_ai/lib/python3.11/site-packages/prefect/utilities/callables.py", line 210, in call_with_parameters
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/Users/js/tasteam-new-async/scripts/distill_flows.py", line 357, in labeling_pod_only_task
+    raise RuntimeError(f"Pod {pod_id} has no publicIp. Response: {ready}")
+RuntimeError: Pod mf1agjg46jnoq7 has no publicIp. Response: {'consumerUserId': 'user_37BIlBB5dZBoaBqfdzATSkf8j22', 'containerDiskInGb': 50, 'costPerHr': 0.59, 'createdAt': '2026-02-27 01:33:49.354 +0000 UTC', 'desiredStatus': 'RUNNING', 'env': {'ENV_VAR': 'value', 'PUBLIC_KEY': 'AAAAC3NzaC1lZDI1NTE5AAAAICKTLJQVaMbuKtYvByO3ejRnuuFuMz3eeXm0p5h/VJph', 'WANDB_API_KEY': 'fdf241dab0a3eb83907cc366f6420ff628a6d173'}, 'gpuCount': 1, 'id': 'mf1agjg46jnoq7', 'imageName': 'jinsoo1218/runpod-pod-vllm:latest', 'lastStartedAt': '2026-02-27 01:33:49.352 +0000 UTC', 'lastStatusChange': 'Rented by User: Fri Feb 27 2026 01:33:49 GMT+0000 (Coordinated Universal Time)', 'machine': {}, 'machineId': 'foxywh0sceg7', 'memoryInGb': 83, 'name': 'vllm-pod', 'networkVolumeId': 'o3a3ya7flt', 'ports': ['8000/http', '22/tcp'], 'publicIp': '', 'templateId': '', 'vcpuCount': 16, 'volumeInGb': 20, 'volumeMountPath': '/workspace'}
+10:33:51.457 | INFO    | Flow run 'crimson-cuttlefish' - Finished in state Failed("Flow run encountered an exception: RuntimeError: Pod mf1agjg46jnoq7 has no publicIp. Response: {'consumerUserId': 'user_37BIlBB5dZBoaBqfdzATSkf8j22', 'containerDiskInGb': 50, 'costPerHr': 0.59, 'createdAt': '2026-02-27 01:33:49.354 +0000 UTC', 'desiredStatus': 'RUNNING', 'env': {'ENV_VAR': 'value', 'PUBLIC_KEY': 'AAAAC3NzaC1lZDI1NTE5AAAAICKTLJQVaMbuKtYvByO3ejRnuuFuMz3eeXm0p5h/VJph', 'WANDB_API_KEY': 'fdf241dab0a3eb83907cc366f6420ff628a6d173'}, 'gpuCount': 1, 'id': 'mf1agjg46jnoq7', 'imageName': 'jinsoo1218/runpod-pod-vllm:latest', 'lastStartedAt': '2026-02-27 01:33:49.352 +0000 UTC', 'lastStatusChange': 'Rented by User: Fri Feb 27 2026 01:33:49 GMT+0000 (Coordinated Universal Time)', 'machine': {}, 'machineId': 'foxywh0sceg7', 'memoryInGb': 83, 'name': 'vllm-pod', 'networkVolumeId': 'o3a3ya7flt', 'ports': ['8000/http', '22/tcp'], 'publicIp': '', 'templateId': '', 'vcpuCount': 16, 'volumeInGb': 20, 'volumeMountPath': '/workspace'}")
+Traceback (most recent call last):
+  File "/Users/js/tasteam-new-async/scripts/distill_flows.py", line 1254, in <module>
+    main()
+  File "/Users/js/tasteam-new-async/scripts/distill_flows.py", line 1174, in main
+    result = labeling_pod_only_flow(
+             ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/js/miniconda3/envs/env_ai/lib/python3.11/site-packages/prefect/flows.py", line 1850, in __call__
+    return run_flow(
+           ^^^^^^^^^
+  File "/Users/js/miniconda3/envs/env_ai/lib/python3.11/site-packages/prefect/flow_engine.py", line 1791, in run_flow
+    ret_val = run_flow_sync(**kwargs)
+              ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/js/miniconda3/envs/env_ai/lib/python3.11/site-packages/prefect/flow_engine.py", line 1636, in run_flow_sync
+    return engine.state if return_type == "state" else engine.result()
+                                                       ^^^^^^^^^^^^^^^
+  File "/Users/js/miniconda3/envs/env_ai/lib/python3.11/site-packages/prefect/flow_engine.py", line 539, in result
+    raise self._raised
+  File "/Users/js/miniconda3/envs/env_ai/lib/python3.11/site-packages/prefect/flow_engine.py", line 989, in run_context
+    yield self
+  File "/Users/js/miniconda3/envs/env_ai/lib/python3.11/site-packages/prefect/flow_engine.py", line 1634, in run_flow_sync
+    engine.call_flow_fn()
+  File "/Users/js/miniconda3/envs/env_ai/lib/python3.11/site-packages/prefect/flow_engine.py", line 1009, in call_flow_fn
+    result = call_with_parameters(self.flow.fn, self.parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/js/miniconda3/envs/env_ai/lib/python3.11/site-packages/prefect/utilities/callables.py", line 210, in call_with_parameters
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/Users/js/tasteam-new-async/scripts/distill_flows.py", line 412, in labeling_pod_only_flow
+    return labeling_pod_only_task(
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/js/miniconda3/envs/env_ai/lib/python3.11/site-packages/prefect/tasks.py", line 1209, in __call__
+    return run_task(
+           ^^^^^^^^^
+  File "/Users/js/miniconda3/envs/env_ai/lib/python3.11/site-packages/prefect/task_engine.py", line 1900, in run_task
+    return run_task_sync(**kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/js/miniconda3/envs/env_ai/lib/python3.11/site-packages/prefect/task_engine.py", line 1675, in run_task_sync
+    return engine.state if return_type == "state" else engine.result()
+                                                       ^^^^^^^^^^^^^^^
+  File "/Users/js/miniconda3/envs/env_ai/lib/python3.11/site-packages/prefect/task_engine.py", line 611, in result
+    raise self._raised
+  File "/Users/js/miniconda3/envs/env_ai/lib/python3.11/site-packages/prefect/task_engine.py", line 1014, in run_context
+    yield self
+  File "/Users/js/miniconda3/envs/env_ai/lib/python3.11/site-packages/prefect/task_engine.py", line 1673, in run_task_sync
+    engine.call_task_fn(txn)
+  File "/Users/js/miniconda3/envs/env_ai/lib/python3.11/site-packages/prefect/task_engine.py", line 1031, in call_task_fn
+    result = call_with_parameters(self.task.fn, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/js/miniconda3/envs/env_ai/lib/python3.11/site-packages/prefect/utilities/callables.py", line 210, in call_with_parameters
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/Users/js/tasteam-new-async/scripts/distill_flows.py", line 357, in labeling_pod_only_task
+    raise RuntimeError(f"Pod {pod_id} has no publicIp. Response: {ready}")
+RuntimeError: Pod mf1agjg46jnoq7 has no publicIp. Response: {'consumerUserId': 'user_37BIlBB5dZBoaBqfdzATSkf8j22', 'containerDiskInGb': 50, 'costPerHr': 0.59, 'createdAt': '2026-02-27 01:33:49.354 +0000 UTC', 'desiredStatus': 'RUNNING', 'env': {'ENV_VAR': 'value', 'PUBLIC_KEY': 'AAAAC3NzaC1lZDI1NTE5AAAAICKTLJQVaMbuKtYvByO3ejRnuuFuMz3eeXm0p5h/VJph', 'WANDB_API_KEY': 'fdf241dab0a3eb83907cc366f6420ff628a6d173'}, 'gpuCount': 1, 'id': 'mf1agjg46jnoq7', 'imageName': 'jinsoo1218/runpod-pod-vllm:latest', 'lastStartedAt': '2026-02-27 01:33:49.352 +0000 UTC', 'lastStatusChange': 'Rented by User: Fri Feb 27 2026 01:33:49 GMT+0000 (Coordinated Universal Time)', 'machine': {}, 'machineId': 'foxywh0sceg7', 'memoryInGb': 83, 'name': 'vllm-pod', 'networkVolumeId': 'o3a3ya7flt', 'ports': ['8000/http', '22/tcp'], 'publicIp': '', 'templateId': '', 'vcpuCount': 16, 'volumeInGb': 20, 'volumeMountPath': '/workspace'}
+10:33:51.469 | INFO    | prefect - Stopping temporary server on http://127.0.0.1:8578
+
+---
+
+
+원인을 정리하면 다음과 같습니다.
+
+---
+
+## 무엇이 문제인가
+
+1. **Pod 생성**: `mf1agjg46jnoq7`는 정상적으로 생성됨.
+2. **대기 종료 시점**: `wait_until_running()`이 **약 1초 만에** 반환함.
+3. **실패 이유**: 반환 시점에 `publicIp`가 아직 비어 있음 (`''`), `machine`도 `{}`로 비어 있음.
+
+RunPod API는 Pod가 아직 “렌트된” 직후(`desiredStatus: RUNNING`)에 곧바로 RUNNING으로 보고할 수 있지만, 실제 머신 부팅과 네트워크 할당은 그보다 늦습니다. 그래서 상태는 RUNNING인데 `publicIp`가 비어 있는 시점이 존재합니다.
+
+---
+
+## 코드 동작
+
+`pod_create_delete_cli.py`의 `wait_until_running`(62~64행):
+
+```python
+if desired == "RUNNING" and (status in ("RUNNING", "", None) or "RUN" in status):
+    return pod
+```
+
+여기서는 **`desiredStatus == "RUNNING"`만 확인**하고, **`publicIp`가 채워졌는지는 보지 않습니다.**  
+그래서 `publicIp`가 비어 있는 상태에서도 곧바로 반환하고, 그 결과 `distill_flows.py` 355~357행에서:
+
+```python
+public_ip = ready.get("publicIp")
+if not public_ip:
+    raise RuntimeError(f"Pod {pod_id} has no publicIp. Response: {ready}")
+```
+
+이 체크에 걸려 예외가 발생합니다.
+
+---
+
+## 수정 방향 (개념)
+
+`publicIp`가 실제로 할당될 때까지 기다리도록 바꿔야 합니다. 예를 들어:
+
+1. **`wait_until_running` 수정**: 반환하기 전에 `publicIp`가 비어 있지 않을 때까지 추가 폴링  
+2. **`labeling_pod_only_task`에서 처리**: `wait_until_running` 이후에 `publicIp`가 생길 때까지 짧은 간격으로 재폴링
+
+두 방식 중 하나를 적용하면 됩니다.  
+원하면 Agent 모드에서 `wait_until_running` 쪽을 수정하는 패치 예시를 작성해 줄 수 있습니다.
+
+---
+
+
+---
+
+## 1. `wait_until_running` 수정 — 반환 전에 `publicIp`까지 폴링
+
+### 장점
+
+- 한 번 고치면, `wait_until_running`을 쓰는 모든 flow(labeling, train, sweep, merge 등)에서 `publicIp`가 보장됨
+- 로직 중복 없음
+- `publicIp`를 쓰는 곳에서 별도 대기 없이 바로 사용 가능
+
+### 단점
+
+- **train / merge / sweep**는 Pod에 직접 접속하지 않고 볼륨 업로드 → 작업 완료 대기만 함. 이 flow들은 `publicIp`가 필요 없음
+- 이들까지 `publicIp` 할당까지 기다리므로, 네트워크 설정(수십 초~수 분)이 끝날 때까지 불필요하게 대기
+- `wait_until_running`의 의미가 “Pod가 RUNNING”에서 “Pod가 RUNNING이고 `publicIp`까지 할당됨”으로 바뀜
+
+---
+
+## 2. `labeling_pod_only_task`에서만 처리 — `wait_until_running` 이후 `publicIp` 폴링
+
+### 장점
+
+- `wait_until_running`은 기존대로 “Pod가 RUNNING”까지만 담당
+- `publicIp`가 필요한 labeling 관련 task에서만 추가 대기
+- train / merge / sweep는 불필요한 대기 없이 그대로 동작
+
+### 단점
+
+- **`labeling_with_pod_task`에도 같은 문제가 있음** → 두 곳 모두에 같은 로직을 넣어야 함
+- 이 패턴을 그대로 구현하면 `publicIp` 폴링 코드가 두 번 반복됨  
+  → 이를 피하려면 `wait_until_public_ip(client, pod_id)` 같은 공용 헬퍼를 두는 게 좋음
+
+---
+
+## 요약
+
+| 구분 | wait_until_running 수정 | labeling 쪽 task에서 처리 |
+|------|-------------------------|---------------------------|
+| 영향 범위 | 모든 flow | labeling 관련 flow만 |
+| train/merge/sweep | 불필요한 대기 발생 | 영향 없음 |
+| 중복 | 없음 | 헬퍼 없으면 두 곳에 반복 |
+| `wait_until_running` 역할 | 더 넓어짐 | 기존 의미 유지 |
+
+---
+
+**추천**: `publicIp`가 필요한 flow는 labeling뿐이므로, `wait_until_running`은 그대로 두고, **`wait_for_public_ip(client, pod_id, timeout)` 같은 헬퍼를 하나 만들어서 `labeling_with_pod_task`와 `labeling_pod_only_task` 두 곳에서 공통으로 사용**하는 방식이 적절해 보입니다.
