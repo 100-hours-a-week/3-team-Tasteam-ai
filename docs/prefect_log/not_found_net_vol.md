@@ -222,4 +222,3 @@ Traceback (most recent call last):
     raise requests.HTTPError(
 requests.exceptions.HTTPError: HTTP 500 for POST https://rest.runpod.io/v1/pods: {'error': 'create pod: get attached volume: network volume not found', 'status': 500}
 21:19:18.195 | INFO    | prefect - Stopping temporary server on http://127.0.0.1:8648
-(env_ai) js@jinsoos-MacBook-Pro tasteam-new-async % 
