@@ -200,6 +200,7 @@ def labeling_with_pod_task(
     openai_cap: int = 500,
     output_labeled_dir: str | None = None,
     pod_wait_timeout_sec: int = 600,
+    public_ip_wait_timeout_sec: int = 180,
     vllm_ready_timeout_sec: int = 180,
 ) -> dict:
     """
@@ -247,7 +248,7 @@ def labeling_with_pod_task(
 
     try:
         client.wait_until_running(pod_id, timeout_sec=pod_wait_timeout_sec)
-        ready = client.wait_for_public_ip(pod_id, timeout_sec=180)
+        ready = client.wait_for_public_ip(pod_id, timeout_sec=public_ip_wait_timeout_sec)
         public_ip = ready["publicIp"]
 
         base_url = f"http://{public_ip}:8000/v1"
@@ -302,6 +303,7 @@ def labeling_with_pod_flow(
     openai_cap: int = 500,
     output_labeled_dir: str | Path | None = None,
     pod_wait_timeout_sec: int = 600,
+    public_ip_wait_timeout_sec: int = 180,
     vllm_ready_timeout_sec: int = 180,
 ) -> dict:
     """
@@ -315,6 +317,7 @@ def labeling_with_pod_flow(
         openai_cap=openai_cap,
         output_labeled_dir=str(output_labeled_dir) if output_labeled_dir else None,
         pod_wait_timeout_sec=pod_wait_timeout_sec,
+        public_ip_wait_timeout_sec=public_ip_wait_timeout_sec,
         vllm_ready_timeout_sec=vllm_ready_timeout_sec,
     )
 
@@ -325,6 +328,7 @@ def labeling_pod_only_task(
     gold_path: str,
     output_labeled_dir: str | None = None,
     pod_wait_timeout_sec: int = 600,
+    public_ip_wait_timeout_sec: int = 180,
     vllm_ready_timeout_sec: int = 180,
 ) -> dict:
     """
@@ -351,7 +355,7 @@ def labeling_pod_only_task(
 
     try:
         client.wait_until_running(pod_id, timeout_sec=pod_wait_timeout_sec)
-        ready = client.wait_for_public_ip(pod_id, timeout_sec=180)
+        ready = client.wait_for_public_ip(pod_id, timeout_sec=public_ip_wait_timeout_sec)
         public_ip = ready["publicIp"]
 
         base_url = f"http://{public_ip}:8000/v1"
@@ -402,6 +406,7 @@ def labeling_pod_only_flow(
     gold_path: str,
     output_labeled_dir: str | Path | None = None,
     pod_wait_timeout_sec: int = 600,
+    public_ip_wait_timeout_sec: int = 180,
     vllm_ready_timeout_sec: int = 180,
 ) -> dict:
     """
@@ -412,6 +417,7 @@ def labeling_pod_only_flow(
         gold_path=gold_path,
         output_labeled_dir=str(output_labeled_dir) if output_labeled_dir else None,
         pod_wait_timeout_sec=pod_wait_timeout_sec,
+        public_ip_wait_timeout_sec=public_ip_wait_timeout_sec,
         vllm_ready_timeout_sec=vllm_ready_timeout_sec,
     )
 
@@ -1032,6 +1038,7 @@ def distill_pipeline_all(
     input_path: str | Path | None = None,
     out_dir: str | Path | None = None,
     openai_cap: int = 500,
+    public_ip_wait_timeout_sec: int = 180,
     student_model: str = "Qwen/Qwen2.5-0.5B-Instruct",
 ) -> dict:
     """build_dataset → labeling(Pod) → train_student(Pod) → evaluate 순차 실행."""
@@ -1045,6 +1052,7 @@ def distill_pipeline_all(
         test_path=ds["test_path"],
         openai_cap=openai_cap,
         output_labeled_dir=out_dir,
+        public_ip_wait_timeout_sec=public_ip_wait_timeout_sec,
     )
     tr = train_student_with_pod_flow(
         labeled_path=lb["labeled_path"],
@@ -1072,6 +1080,7 @@ def distill_pipeline_all_sweep(
     input_path: str | Path | None = None,
     out_dir: str | Path | None = None,
     openai_cap: int = 500,
+    public_ip_wait_timeout_sec: int = 180,
     student_model: str = "Qwen/Qwen2.5-0.5B-Instruct",
 ) -> dict:
     """build_dataset → labeling(Pod) → run_sweep → best run adapter로 evaluate. sweep_id 없으면 sweep_yaml으로 등록 후 실행."""
@@ -1085,6 +1094,7 @@ def distill_pipeline_all_sweep(
         test_path=ds["test_path"],
         openai_cap=openai_cap,
         output_labeled_dir=out_dir,
+        public_ip_wait_timeout_sec=public_ip_wait_timeout_sec,
     )
     sweep_ev = run_sweep_and_evaluate_flow(
         sweep_id=sweep_id,
@@ -1127,6 +1137,7 @@ def main() -> None:
     parser.add_argument("--val-labeled-path", type=Path, default=None, help="val_labeled.json (for evaluate)")
     parser.add_argument("--test-labeled-path", type=Path, default=None, help="test_labeled.json (for evaluate)")
     parser.add_argument("--openai-cap", type=int, default=500, help="OpenAI labeling cap (for labeling_with_pod/all)")
+    parser.add_argument("--public-ip-wait-timeout", type=int, default=180, help="publicIp 할당 대기 초 (labeling_with_pod, labeling_pod_only)")
     parser.add_argument("--student-model", type=str, default="Qwen/Qwen2.5-0.5B-Instruct", help="Student model")
     args = parser.parse_args()
 
@@ -1162,6 +1173,7 @@ def main() -> None:
             test_path=test_p,
             openai_cap=args.openai_cap,
             output_labeled_dir=out_dir,
+            public_ip_wait_timeout_sec=args.public_ip_wait_timeout,
         )
         print("Result:", result)
     elif args.flow == "labeling_pod_only":
@@ -1173,6 +1185,7 @@ def main() -> None:
             train_path=str(args.train_path),
             gold_path=str(args.gold_path),
             output_labeled_dir=str(args.gold_path.parent),
+            public_ip_wait_timeout_sec=args.public_ip_wait_timeout,
         )
         print("Result:", result)
     elif args.flow == "train_student_with_pod":
@@ -1232,6 +1245,7 @@ def main() -> None:
             input_path=args.input,
             out_dir=out_dir,
             openai_cap=args.openai_cap,
+            public_ip_wait_timeout_sec=args.public_ip_wait_timeout,
             student_model=args.student_model,
         )
         print("Result keys:", list(result.keys()))
@@ -1243,6 +1257,7 @@ def main() -> None:
             input_path=args.input,
             out_dir=out_dir,
             openai_cap=args.openai_cap,
+            public_ip_wait_timeout_sec=args.public_ip_wait_timeout,
             student_model=args.student_model,
         )
         print("Result keys:", list(result.keys()))
