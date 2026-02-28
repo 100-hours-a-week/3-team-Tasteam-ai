@@ -553,6 +553,24 @@ def train_student_with_pod_flow(
     )
 
 
+DEFAULT_WANDB_PROJECT = "tasteam-distill"
+
+
+@task(name="ensure-wandb-project-task", log_prints=True)
+def ensure_wandb_project_task(
+    project: str = DEFAULT_WANDB_PROJECT,
+    entity: str | None = None,
+) -> None:
+    """wandb 프로젝트가 없으면 wandb.init으로 생성 (sweep/agent 404 방지)."""
+    import wandb
+    os.environ.setdefault("WANDB_PROJECT", project)
+    if entity:
+        os.environ.setdefault("WANDB_ENTITY", entity)
+    wandb.init(project=project, entity=entity or os.environ.get("WANDB_ENTITY"))
+    wandb.finish()
+    logger.info("W&B project ensured: %s (entity=%s)", project, entity or "default")
+
+
 @task(name="register-sweep-task", log_prints=True)
 def register_sweep_task(sweep_yaml_path: str | Path) -> str:
     """wandb sweep <yaml> 를 subprocess로 실행하고 stdout에서 sweep id를 파싱해 반환."""
@@ -636,6 +654,10 @@ def run_sweep_on_pod_task(
     except Exception as e:
         raise RuntimeError(f"Upload labeled dir to volume failed: {e}") from e
 
+    # sweep_id = entity/project/sweep_run_id → Pod에 동일 project/entity 전달해 404 방지
+    parts = sweep_id.split("/")
+    wandb_project = parts[1] if len(parts) >= 2 else DEFAULT_WANDB_PROJECT
+    wandb_entity = parts[0] if len(parts) >= 2 else os.environ.get("WANDB_ENTITY", "")
     payload = RunPodClient.get_default_pod_payload(use="train", docker_start_cmd=[sweep_id])
     payload["name"] = "sweep-pod"
     payload["dockerEntrypoint"] = ["python", "/app/scripts/run_qlora_sweep.py"]
@@ -646,7 +668,10 @@ def run_sweep_on_pod_task(
         "WANDB_SWEEP_LABELED_PATH": path_on_volume,
         "WANDB_SWEEP_OUTPUT_DIR": "/workspace/distill_pipeline_output",
         "WANDB_SWEEP_ID": sweep_id,
+        "WANDB_PROJECT": wandb_project,
     }
+    if wandb_entity:
+        payload["env"]["WANDB_ENTITY"] = wandb_entity
     client = RunPodClient(token=token)
     pod = client.create_pod(payload)
     pod_id = pod["id"]
@@ -677,6 +702,7 @@ def run_sweep_flow(
 ) -> dict:
     """wandb sweep 에이전트를 subprocess로 실행. sweep_id가 없으면 sweep_yaml으로 먼저 등록 후 실행."""
     if sweep_id is None:
+        ensure_wandb_project_task(project=DEFAULT_WANDB_PROJECT, entity=os.environ.get("WANDB_ENTITY"))
         yaml_path = sweep_yaml if sweep_yaml is not None else DEFAULT_SWEEP_YAML
         sweep_id = register_sweep_task(yaml_path)
     out_dir = str(output_dir) if output_dir else str(_PROJECT_ROOT / "distill_pipeline_output")
@@ -772,6 +798,7 @@ def run_sweep_and_evaluate_flow(
 ) -> dict:
     """sweep 실행(use_pod=True 시 Pod에서, False 시 로컬 subprocess) → best adapter를 wandb artifact에서 다운로드 → evaluate. sweep_id 없으면 sweep_yaml으로 등록."""
     if sweep_id is None:
+        ensure_wandb_project_task(project=DEFAULT_WANDB_PROJECT, entity=os.environ.get("WANDB_ENTITY"))
         yaml_path = sweep_yaml if sweep_yaml is not None else DEFAULT_SWEEP_YAML
         sweep_id = register_sweep_task(yaml_path)
     out_dir = str(output_dir) if output_dir else str(_PROJECT_ROOT / "distill_pipeline_output")
