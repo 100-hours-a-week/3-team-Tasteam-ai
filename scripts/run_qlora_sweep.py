@@ -33,6 +33,8 @@ def train() -> None:
     import wandb
     from scripts.train_qlora import run_train
 
+    wandb.init(project=os.environ.get("WANDB_PROJECT", "tasteam-distill"))
+
     labeled_path = os.environ.get("WANDB_SWEEP_LABELED_PATH")
     output_dir = os.environ.get("WANDB_SWEEP_OUTPUT_DIR")
     if not labeled_path or not output_dir:
