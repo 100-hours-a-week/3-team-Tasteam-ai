@@ -41,3 +41,41 @@
    필요하면 `torch>=2.2.0`을 요구사항에 넣은 뒤 **이미지를 다시 빌드**해 sweep Pod를 새 이미지로 띄우면 됩니다.
 
 요약하면, **이미지를 다시 빌드할 때 PyTorch가 2.2 이상이 확실히 들어가도록** (`torch>=2.2.0` 명시 + 필요 시 베이스 이미지 확인) 하면 이 에러를 피할 수 있습니다.
+
+---
+
+
+`torch>=2.2.0`을 넣었는데도 같은 에러가 나면, 아래 같은 경우일 수 있습니다.
+
+**1. 이미지를 다시 빌드/배포하지 않음**  
+- 수정한 건 **로컬의 `requirements.train-llm.txt`**뿐입니다.  
+- Pod는 **이미 빌드된 Docker 이미지**를 쓰므로, **같은 내용으로 이미지를 다시 빌드하고**, 그 이미지를 쓰는 Pod를 새로 띄우지 않으면 예전 환경이 그대로입니다.
+
+**2. 베이스 이미지의 PyTorch가 그대로 쓰이는 경우**  
+- `Dockerfile.train-llm`은 `runpod/pytorch:2.4.0-...` 같은 **이미 PyTorch가 들어 있는 베이스**를 씁니다.  
+- 그 다음에 `pip install -r requirements.train-llm.txt`만 하면:
+  - 베이스에 이미 설치된 `torch`가 2.1 이하이면
+  - `pip`는 “이미 torch가 설치되어 있다”고 보고 **업그레이드를 하지 않을 수 있습니다** (특히 `--upgrade` 없이 설치할 때).
+- 그래서 **실제로 돌 때는 여전히 베이스 이미지의 오래된 torch**가 쓰이고, `set_submodule`이 없어서 에러가 날 수 있습니다.
+
+**3. `pip install` 순서/옵션**  
+- `requirements`에 `torch>=2.2.0`만 넣고,  
+  `pip install --no-cache-dir -r requirements.train-llm.txt`  
+  같이만 해두면, “이미 설치된 패키지는 만족하면 건드리지 않는다”는 동작 때문에 torch가 올라가지 않을 수 있습니다.
+
+**그래서 “여전히 발생한다면” 할 수 있는 것**  
+- **Dockerfile에서 torch를 명시적으로 올리기**  
+  - 예: requirements 설치 전/후에  
+    `RUN pip install --no-cache-dir --upgrade 'torch>=2.2.0'`  
+  - 또는 requirements 설치 시  
+    `pip install --no-cache-dir --upgrade -r requirements.train-llm.txt`  
+  이렇게 하면 베이스에 낮은 버전이 있어도 2.2 이상으로 올라갈 가능성이 높습니다.  
+- **실제 Pod/컨테이너에서 버전 확인**  
+  - 그 이미지로 컨테이너를 띄운 뒤  
+    `python -c "import torch; print(torch.__version__)"`  
+  - 2.2 미만이면 “베이스가 오래된 torch를 쓰고 있고, pip이 올리지 않았다”는 뜻으로 보면 됩니다.
+
+정리하면, **여전히 발생한다면**  
+1) 새 이미지를 빌드해 그걸로 Pod를 띄웠는지 확인하고,  
+2) 그 안에서 `torch.__version__`이 2.2 이상인지 확인한 뒤,  
+3) 2.2 미만이면 Dockerfile에서 `pip install --upgrade 'torch>=2.2.0'`(또는 `--upgrade -r requirements.train-llm.txt`)를 넣어서 **강제로 2.2 이상이 깔리게** 하면 됩니다.
