@@ -780,8 +780,8 @@ def calculate_single_restaurant_ratios(
 ) -> Dict[str, float]:
     """
     단일 음식점의 카테고리별 긍정 비율 계산.
-    Summary와 동일 전략: 리뷰 수 < RECALL_SEEDS_SPARK_THRESHOLD → Kiwi만, 이상이면 Spark 시도.
-    SPARK_SERVICE_URL 설정 시 로컬 Spark 미사용(단일 음식점은 Python만).
+    Summary와 동일 전략: 리뷰 수 < RECALL_SEEDS_SPARK_THRESHOLD → Kiwi만, 이상이면 Spark(또는 Spark 서비스) 시도.
+    SPARK_SERVICE_URL 설정 시 로컬 Spark 미사용, 대규모면 Spark 서비스 호출, 실패 시 Kiwi 폴백.
     """
     if not reviews:
         return {"service": 0.0, "price": 0.0}
@@ -789,8 +789,14 @@ def calculate_single_restaurant_ratios(
     if not texts:
         return {"service": 0.0, "price": 0.0}
     threshold = _comparison_spark_threshold()
-    # SPARK_SERVICE_URL 설정 시 메인 앱은 Spark API만 쓰므로 단일 음식점은 Python으로만 계산
+    # SPARK_SERVICE_URL 설정 시: 규모 미만이면 Kiwi만, 이상이면 Spark 서비스 → 실패 시 Kiwi 폴백
     if _get_spark_service_url():
+        if len(texts) < threshold:
+            out = _python_calculate_ratios(texts, stopwords)
+            return {"service": round(out["service"], 2), "price": round(out["price"], 2)}
+        result = _fetch_all_average_from_spark_service_reviews(texts)
+        if result is not None:
+            return {"service": round(result["service"], 2), "price": round(result["price"], 2)}
         out = _python_calculate_ratios(texts, stopwords)
         return {"service": round(out["service"], 2), "price": round(out["price"], 2)}
     # 규모 미만이면 Kiwi만 (Summary와 동일)
