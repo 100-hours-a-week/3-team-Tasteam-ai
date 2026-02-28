@@ -21,6 +21,8 @@ Flow (docs/easydistill/distill_by_prefect.md):
   python scripts/distill_flows.py labeling_pod_only --train-path .../train.json --gold-path .../train_labeled_gold_only.json  # OpenAI 생략, Pod teacher만
   python scripts/distill_flows.py train_student_with_pod --labeled-path .../train_labeled.json --output-dir ...
   python scripts/distill_flows.py run_sweep [--sweep-id <sweep_id>] --labeled-path .../train_labeled.json [--out-dir ...]
+  python scripts/distill_flows.py train_and_evaluate --labeled-path .../train_labeled.json [--val-labeled-path ...] [--test-labeled-path ...]  # 학습(Pod) → 평가만
+  python scripts/distill_flows.py sweep_eval_merge --labeled-path .../train_labeled.json [--sweep-id ...]  # Pod sweep → evaluate → merge (build_dataset/labeling 생략)
   python scripts/distill_flows.py all        # build_dataset → labeling(Pod) → train(Pod) → evaluate → merge for serving
   python scripts/distill_flows.py all_sweep [--sweep-id <sweep_id>]  # sweep-id 없으면 flow 내부에서 sweep 등록 후 실행
   python scripts/distill_flows.py merge_for_serving --adapter-path .../adapter [--out-dir ...]  # adapter만 merge하여 서빙 경로 생성
@@ -1142,12 +1144,69 @@ def distill_pipeline_all_sweep(
     return {"build_dataset": ds, "labeling": lb, "run_sweep_and_evaluate": sweep_ev, "merge_for_serving": merge_result}
 
 
+@flow(name="train_and_evaluate_flow", log_prints=True)
+def train_and_evaluate_flow(
+    labeled_path: str,
+    val_labeled_path: str | None = None,
+    test_labeled_path: str | None = None,
+    output_dir: str | Path | None = None,
+    student_model: str = "Qwen/Qwen2.5-0.5B-Instruct",
+) -> dict:
+    """학습(Pod) → 평가만 실행. build_dataset, labeling, merge_for_serving은 건너뜀."""
+    out_dir = Path(output_dir or _PROJECT_ROOT / "distill_pipeline_output")
+    tr = train_student_with_pod_flow(
+        labeled_path=labeled_path,
+        student_model=student_model,
+        output_dir=out_dir,
+    )
+    ev = evaluate_flow(
+        adapter_path=tr["adapter_path"],
+        val_labeled_path=val_labeled_path,
+        test_labeled_path=test_labeled_path,
+        output_dir=out_dir,
+        base_model=student_model,
+    )
+    return {"train_student": tr, "evaluate": ev}
+
+
+@flow(name="sweep_eval_merge_flow", log_prints=True)
+def sweep_eval_merge_flow(
+    labeled_path: str,
+    val_labeled_path: str | None = None,
+    test_labeled_path: str | None = None,
+    sweep_id: str | None = None,
+    sweep_yaml: str | Path | None = None,
+    output_dir: str | Path | None = None,
+    student_model: str = "Qwen/Qwen2.5-0.5B-Instruct",
+) -> dict:
+    """Pod에서 sweep → best adapter로 evaluate → merge. build_dataset, labeling은 건너뜀."""
+    out_dir = Path(output_dir or _PROJECT_ROOT / "distill_pipeline_output")
+    sweep_ev = run_sweep_and_evaluate_flow(
+        labeled_path=labeled_path,
+        sweep_id=sweep_id,
+        sweep_yaml=sweep_yaml,
+        output_dir=out_dir,
+        val_labeled_path=val_labeled_path,
+        test_labeled_path=test_labeled_path,
+        base_model=student_model,
+        use_pod=True,
+    )
+    merge_result = None
+    if sweep_ev.get("best_adapter_path"):
+        merge_result = merge_for_serving_flow(
+            adapter_path=sweep_ev["best_adapter_path"],
+            base_model=student_model,
+            output_dir=out_dir,
+        )
+    return {"run_sweep_and_evaluate": sweep_ev, "merge_for_serving": merge_result}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Prefect flows for summary KD pipeline (distill_by_prefect.md)")
     parser.add_argument(
         "flow",
-        choices=["build_dataset", "labeling_with_pod", "labeling_pod_only", "train_student_with_pod", "run_sweep", "evaluate", "merge_for_serving", "merge_for_serving_with_pod", "all", "all_sweep"],
-        help="Flow to run. all/all_sweep: 라벨링·학습 Pod 기준. labeling_pod_only: OpenAI 생략, 기존 골드로 Pod teacher만.",
+        choices=["build_dataset", "labeling_with_pod", "labeling_pod_only", "train_student_with_pod", "run_sweep", "train_and_evaluate", "sweep_eval_merge", "evaluate", "merge_for_serving", "merge_for_serving_with_pod", "all", "all_sweep"],
+        help="Flow to run. sweep_eval_merge: Pod sweep→evaluate→merge만. train_and_evaluate: 학습(Pod)→평가만. all/all_sweep: 라벨링·학습 Pod 기준.",
     )
     parser.add_argument("--gold-path", type=Path, default=None, help="train_labeled_gold_only.json 경로 (labeling_pod_only 필수)")
     parser.add_argument("--sweep-id", type=str, default=None, help="wandb sweep id (optional; 없으면 --sweep-yaml으로 flow 내부에서 등록)")
@@ -1237,6 +1296,39 @@ def main() -> None:
             output_dir=out_dir,
         )
         print("Result:", result)
+    elif args.flow == "train_and_evaluate":
+        if not args.labeled_path:
+            parser.error("train_and_evaluate requires --labeled-path")
+        labeled_dir = Path(args.labeled_path).parent
+        val_p = str(args.val_labeled_path) if args.val_labeled_path else (str(labeled_dir / "val_labeled.json") if (labeled_dir / "val_labeled.json").exists() else None)
+        test_p = str(args.test_labeled_path) if args.test_labeled_path else (str(labeled_dir / "test_labeled.json") if (labeled_dir / "test_labeled.json").exists() else None)
+        result = train_and_evaluate_flow(
+            labeled_path=str(args.labeled_path),
+            val_labeled_path=val_p,
+            test_labeled_path=test_p,
+            output_dir=out_dir,
+            student_model=args.student_model,
+        )
+        print("Result keys:", list(result.keys()))
+    elif args.flow == "sweep_eval_merge":
+        if not args.labeled_path:
+            parser.error("sweep_eval_merge requires --labeled-path")
+        labeled_dir = Path(args.labeled_path).parent
+        val_p = str(args.val_labeled_path) if args.val_labeled_path else (str(labeled_dir / "val_labeled.json") if (labeled_dir / "val_labeled.json").exists() else None)
+        test_p = str(args.test_labeled_path) if args.test_labeled_path else (str(labeled_dir / "test_labeled.json") if (labeled_dir / "test_labeled.json").exists() else None)
+        sweep_yaml = args.sweep_yaml if args.sweep_yaml is not None else DEFAULT_SWEEP_YAML
+        result = sweep_eval_merge_flow(
+            labeled_path=str(args.labeled_path),
+            val_labeled_path=val_p,
+            test_labeled_path=test_p,
+            sweep_id=args.sweep_id,
+            sweep_yaml=sweep_yaml,
+            output_dir=out_dir,
+            student_model=args.student_model,
+        )
+        print("Result keys:", list(result.keys()))
+        if result.get("merge_for_serving"):
+            print("API 사용: LLM_MODEL=" + result["merge_for_serving"]["merged_model_path"])
     elif args.flow == "evaluate":
         if not args.adapter_path:
             parser.error("evaluate requires --adapter-path")
