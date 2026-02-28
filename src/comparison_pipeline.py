@@ -605,19 +605,52 @@ def compute_recall_seeds_from_file(
         return None
     path = str(p)
 
-    # Spark 마이크로서비스 사용 (설정 시 로컬 Spark 미사용, API 실패 시 Python 폴백만)
+    # Spark 마이크로서비스 사용: 서비스 → 실패 시 로컬 Spark → 실패 시 Kiwi
     if _get_spark_service_url():
         result = _fetch_recall_seeds_from_spark_service(path, project_root)
         if result is not None:
             return result
+        if SPARK_AVAILABLE and not _spark_disabled():
+            if stopwords is None:
+                stopwords = _load_stopwords_for_recall(project_root)
+            try:
+                from pyspark.sql.functions import col, length
+                spark = _get_spark()
+                if path.lower().endswith(".json"):
+                    df = spark.read.option("multiline", "true").json(path)
+                    text_col = next((c for c in ("content", "text") if c in df.columns), None)
+                    if text_col:
+                        base_df = df.select(col(text_col).alias("text")).where(
+                            col("text").isNotNull() & (length(col("text")) > 0)
+                        )
+                        texts_rdd = base_df.rdd.map(lambda r: r["text"])
+                        out = _spark_recall_seeds(texts_rdd, stopwords)
+                        return out
+                elif path.lower().endswith(".tsv") or path.lower().endswith(".csv"):
+                    sep = "\t" if path.lower().endswith(".tsv") else ","
+                    df = spark.read.option("sep", sep).option("header", "true").csv(path)
+                    text_col = next((c for c in ("Review", "content", "text") if c in df.columns), None)
+                    if text_col:
+                        base_df = df.select(col(text_col).alias("text")).where(
+                            col("text").isNotNull() & (length(col("text")) > 0)
+                        )
+                        texts_rdd = base_df.rdd.map(lambda r: r["text"])
+                        out = _spark_recall_seeds(texts_rdd, stopwords)
+                        return out
+            except Exception as e:
+                if _is_spark_or_jvm_error(e):
+                    logger.warning("recall_seeds 로컬 Spark 실패, Kiwi 폴백: %s", e)
+                    _reset_spark()
         try:
             rows = load_reviews_from_aspect_data_file(path, project_root)
             texts = [(r.get("content") or r.get("text") or "").strip() for r in rows if isinstance(r, dict)]
             texts = [t for t in texts if t]
             if texts:
+                if stopwords is None:
+                    stopwords = _load_stopwords_for_recall(project_root)
                 return _python_recall_seeds(texts, stopwords)
         except Exception as e:
-            logger.warning("Spark API 실패 후 recall_seeds Python 폴백 실패: %s", e)
+            logger.warning("recall_seeds Kiwi 폴백 실패: %s", e)
         return None
 
     if not SPARK_AVAILABLE:
@@ -711,11 +744,22 @@ def compute_recall_seeds_from_reviews(
     except Exception:
         threshold = 2000
 
-    # SPARK_SERVICE_URL 설정 시 Spark API만 사용, API 실패 시 Python 폴백만 (로컬 Spark 미사용)
+    # SPARK_SERVICE_URL 설정 시: Spark 서비스 → 실패 시 로컬 Spark → 실패 시 Kiwi
     if _get_spark_service_url() and len(texts) >= threshold:
         remote = _fetch_recall_seeds_from_spark_service_reviews(texts)
         if remote is not None:
             return remote
+        if SPARK_AVAILABLE and not _spark_disabled():
+            try:
+                spark = _get_spark()
+                rdd = spark.sparkContext.parallelize(
+                    texts, numSlices=max(1, min(len(texts) // 100, 256))
+                )
+                return _spark_recall_seeds(rdd, stopwords)
+            except Exception as e:
+                if _is_spark_or_jvm_error(e):
+                    logger.warning("recall_seeds 로컬 Spark 실패, Kiwi 폴백: %s", e)
+                    _reset_spark()
         return _python_recall_seeds(texts, stopwords)
 
     use_spark = (
@@ -765,20 +809,52 @@ SERVICE_POSITIVE_KW = {"친절"}
 PRICE_POSITIVE_KW = {"가성비", "가격 합리", "가격 만족", "무한 리필", "리필 가능"}
 
 
+def _comparison_spark_threshold() -> int:
+    """Summary와 동일: Kiwi only → 규모 커지면 Spark. RECALL_SEEDS_SPARK_THRESHOLD 사용."""
+    try:
+        from .config import Config
+        return getattr(Config, "RECALL_SEEDS_SPARK_THRESHOLD", 2000)
+    except Exception:
+        return 2000
+
+
 def calculate_single_restaurant_ratios(
     reviews: List[str],
     stopwords: Optional[List[str]] = None,
 ) -> Dict[str, float]:
     """
-    단일 음식점의 카테고리별 긍정 비율 계산. SPARK_SERVICE_URL 설정 시 로컬 Spark 미사용(Python만).
+    단일 음식점의 카테고리별 긍정 비율 계산.
+    Summary와 동일 전략: 리뷰 수 < RECALL_SEEDS_SPARK_THRESHOLD → Kiwi만, 이상이면 Spark(또는 Spark 서비스) 시도.
+    SPARK_SERVICE_URL 설정 시 로컬 Spark 미사용, 대규모면 Spark 서비스 호출, 실패 시 Kiwi 폴백.
     """
     if not reviews:
         return {"service": 0.0, "price": 0.0}
     texts = [s for s in reviews if s and isinstance(s, str)]
     if not texts:
         return {"service": 0.0, "price": 0.0}
-    # SPARK_SERVICE_URL 설정 시 메인 앱은 Spark API만 쓰므로 단일 음식점은 Python으로만 계산
+    threshold = _comparison_spark_threshold()
+    # SPARK_SERVICE_URL 설정 시: 규모 미만이면 Kiwi만, 이상이면 Spark 서비스 → 실패 시 로컬 Spark → 실패 시 Kiwi
     if _get_spark_service_url():
+        if len(texts) < threshold:
+            out = _python_calculate_ratios(texts, stopwords)
+            return {"service": round(out["service"], 2), "price": round(out["price"], 2)}
+        result = _fetch_all_average_from_spark_service_reviews(texts)
+        if result is not None:
+            return {"service": round(result["service"], 2), "price": round(result["price"], 2)}
+        if SPARK_AVAILABLE and not _spark_disabled():
+            try:
+                spark = _get_spark()
+                rdd = spark.sparkContext.parallelize(texts, numSlices=max(1, min(len(texts) // 50, 32)))
+                out = _spark_calculate_ratios(rdd, stopwords)
+                return {"service": round(out["service"], 2), "price": round(out["price"], 2)}
+            except Exception as e:
+                if _is_spark_or_jvm_error(e):
+                    logger.warning("단일 음식점 비율 로컬 Spark 실패, Kiwi 폴백: %s", e)
+                    _reset_spark()
+        out = _python_calculate_ratios(texts, stopwords)
+        return {"service": round(out["service"], 2), "price": round(out["price"], 2)}
+    # 규모 미만이면 Kiwi만 (Summary와 동일)
+    if len(texts) < threshold:
         out = _python_calculate_ratios(texts, stopwords)
         return {"service": round(out["service"], 2), "price": round(out["price"], 2)}
     if SPARK_AVAILABLE and not _spark_disabled():
@@ -860,11 +936,43 @@ def calculate_all_average_ratios_from_file(
         return None
     path = str(p)
 
-    # Spark 마이크로서비스 사용 (설정 시 로컬 Spark 미사용, API 실패 시 Python 폴백만)
+    # Spark 마이크로서비스 사용: 서비스 → 실패 시 로컬 Spark → 실패 시 Kiwi
     if _get_spark_service_url():
         result = _fetch_all_average_from_spark_service(path, project_root)
         if result is not None:
             return result
+        if SPARK_AVAILABLE and not _spark_disabled():
+            try:
+                from pyspark.sql.functions import col, length, explode
+                spark = _get_spark()
+                base_df = None
+                if path.lower().endswith(".json"):
+                    df = spark.read.option("multiline", "true").json(path)
+                    text_col = next((c for c in ("content", "text") if c in df.columns), None)
+                    if not text_col and "reviews" in df.columns:
+                        flat_df = df.select(explode(col("reviews")).alias("r"))
+                        base_df = flat_df.select(col("r.content").alias("text")).where(
+                            col("text").isNotNull() & (length(col("text")) > 0)
+                        )
+                    elif text_col:
+                        base_df = df.select(col(text_col).alias("text")).where(
+                            col("text").isNotNull() & (length(col("text")) > 0)
+                        )
+                elif path.lower().endswith(".tsv") or path.lower().endswith(".csv"):
+                    sep = "\t" if path.lower().endswith(".tsv") else ","
+                    df = spark.read.option("sep", sep).option("header", "true").csv(path)
+                    text_col = next((c for c in ("Review", "content", "text") if c in df.columns), None)
+                    if text_col:
+                        base_df = df.select(col(text_col).alias("text")).where(
+                            col("text").isNotNull() & (length(col("text")) > 0)
+                        )
+                if base_df is not None:
+                    texts_rdd = base_df.select("text").rdd.map(lambda r: r["text"])
+                    return _spark_calculate_ratios(texts_rdd, stopwords)
+            except Exception as e:
+                if _is_spark_or_jvm_error(e):
+                    logger.warning("전체 평균(파일) 로컬 Spark 실패, Kiwi 폴백: %s", e)
+                    _reset_spark()
         try:
             rows = load_reviews_from_aspect_data_file(path, project_root)
             texts = [(r.get("content") or r.get("text") or "").strip() for r in rows if isinstance(r, dict)]
@@ -872,7 +980,7 @@ def calculate_all_average_ratios_from_file(
             if texts:
                 return _python_calculate_ratios(texts, stopwords)
         except Exception as e:
-            logger.warning("Spark API 실패 후 Python 폴백 실패: %s", e)
+            logger.warning("전체 평균(파일) Kiwi 폴백 실패: %s", e)
         return None
 
     if not SPARK_AVAILABLE:
@@ -1033,7 +1141,8 @@ def calculate_all_average_ratios_from_reviews(
     stopwords: Optional[List[str]] = None,
 ) -> Dict[str, float]:
     """
-    전체 리뷰에서 service/price 긍정 비율 계산. SPARK_SERVICE_URL 설정 시 Spark API만 사용, API 실패/미설정 시 로컬 Spark 또는 Python.
+    전체 리뷰에서 service/price 긍정 비율 계산.
+    Summary와 동일 전략: 리뷰 수 < RECALL_SEEDS_SPARK_THRESHOLD → Kiwi만, 이상이면 Spark(또는 Spark 서비스) 시도.
     리뷰: [{"content":"..."} or {"text":"..."}, ...]
     """
     if not reviews:
@@ -1046,11 +1155,27 @@ def calculate_all_average_ratios_from_reviews(
     if not texts:
         return {"service": 0.0, "price": 0.0}
 
-    # SPARK_SERVICE_URL 설정 시 Spark API만 사용, API 실패 시 Python 폴백만 (로컬 Spark 미사용)
+    threshold = _comparison_spark_threshold()
+    # 규모 미만이면 Kiwi만 (Summary와 동일)
+    if len(texts) < threshold:
+        return _python_calculate_ratios(texts, stopwords)
+
+    # SPARK_SERVICE_URL 설정 시: Spark 서비스 → 실패 시 로컬 Spark → 실패 시 Kiwi
     if _get_spark_service_url():
         result = _fetch_all_average_from_spark_service_reviews(texts)
         if result is not None:
             return result
+        if SPARK_AVAILABLE and not _spark_disabled():
+            try:
+                spark = _get_spark()
+                rdd = spark.sparkContext.parallelize(
+                    texts, numSlices=max(1, min(len(texts) // 100, 256))
+                )
+                return _spark_calculate_ratios(rdd, stopwords)
+            except Exception as e:
+                if _is_spark_or_jvm_error(e):
+                    logger.warning("전체 평균 로컬 Spark 실패, Kiwi 폴백: %s", e)
+                    _reset_spark()
         return _python_calculate_ratios(texts, stopwords)
 
     if SPARK_AVAILABLE and not _spark_disabled():

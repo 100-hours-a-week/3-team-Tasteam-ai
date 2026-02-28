@@ -160,11 +160,11 @@ class _SparkConfig:
     """Spark/배치: 전체 평균 데이터 경로, 비율. DISABLE_SPARK=true 시 JVM 없이 Kiwi만 사용 (Docker 등)."""
     DISABLE_SPARK: bool = os.getenv("DISABLE_SPARK", "false").lower() == "true"
     # Spark 마이크로서비스 URL. 설정 시 메인 앱/워커는 로컬 Spark 미사용, 해당 서비스로 HTTP 호출.
-    SPARK_SERVICE_URL: Optional[str] = os.getenv("SPARK_SERVICE_URL", "").strip() or None
+    SPARK_SERVICE_URL: Optional[str] = os.getenv("SPARK_SERVICE_URL", "http://localhost:8002").strip() or None
     ALL_AVERAGE_ASPECT_DATA_PATH: Optional[str] = os.getenv("ALL_AVERAGE_ASPECT_DATA_PATH", "data/test_data_sample.json")
     ALL_AVERAGE_SERVICE_RATIO: float = float(os.getenv("ALL_AVERAGE_SERVICE_RATIO", "0.60"))
     ALL_AVERAGE_PRICE_RATIO: float = float(os.getenv("ALL_AVERAGE_PRICE_RATIO", "0.55"))
-    # 리뷰 수가 이 값 미만이면 recall_seeds 계산 시 Spark 대신 Python(Kiwi) 사용. 약 2000건 이하는 단일 프로세스가 유리.
+    # 리뷰 수가 이 값 미만이면 recall_seeds·Comparison 비율 계산 시 Spark 대신 Python(Kiwi) 사용. 약 2000건 이하는 단일 프로세스가 유리. Summary와 Comparison 통일.
     RECALL_SEEDS_SPARK_THRESHOLD: int = int(os.getenv("RECALL_SEEDS_SPARK_THRESHOLD", "2000"))
 
 
