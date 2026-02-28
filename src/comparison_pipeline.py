@@ -765,20 +765,36 @@ SERVICE_POSITIVE_KW = {"친절"}
 PRICE_POSITIVE_KW = {"가성비", "가격 합리", "가격 만족", "무한 리필", "리필 가능"}
 
 
+def _comparison_spark_threshold() -> int:
+    """Summary와 동일: Kiwi only → 규모 커지면 Spark. RECALL_SEEDS_SPARK_THRESHOLD 사용."""
+    try:
+        from .config import Config
+        return getattr(Config, "RECALL_SEEDS_SPARK_THRESHOLD", 2000)
+    except Exception:
+        return 2000
+
+
 def calculate_single_restaurant_ratios(
     reviews: List[str],
     stopwords: Optional[List[str]] = None,
 ) -> Dict[str, float]:
     """
-    단일 음식점의 카테고리별 긍정 비율 계산. SPARK_SERVICE_URL 설정 시 로컬 Spark 미사용(Python만).
+    단일 음식점의 카테고리별 긍정 비율 계산.
+    Summary와 동일 전략: 리뷰 수 < RECALL_SEEDS_SPARK_THRESHOLD → Kiwi만, 이상이면 Spark 시도.
+    SPARK_SERVICE_URL 설정 시 로컬 Spark 미사용(단일 음식점은 Python만).
     """
     if not reviews:
         return {"service": 0.0, "price": 0.0}
     texts = [s for s in reviews if s and isinstance(s, str)]
     if not texts:
         return {"service": 0.0, "price": 0.0}
+    threshold = _comparison_spark_threshold()
     # SPARK_SERVICE_URL 설정 시 메인 앱은 Spark API만 쓰므로 단일 음식점은 Python으로만 계산
     if _get_spark_service_url():
+        out = _python_calculate_ratios(texts, stopwords)
+        return {"service": round(out["service"], 2), "price": round(out["price"], 2)}
+    # 규모 미만이면 Kiwi만 (Summary와 동일)
+    if len(texts) < threshold:
         out = _python_calculate_ratios(texts, stopwords)
         return {"service": round(out["service"], 2), "price": round(out["price"], 2)}
     if SPARK_AVAILABLE and not _spark_disabled():
@@ -1033,7 +1049,8 @@ def calculate_all_average_ratios_from_reviews(
     stopwords: Optional[List[str]] = None,
 ) -> Dict[str, float]:
     """
-    전체 리뷰에서 service/price 긍정 비율 계산. SPARK_SERVICE_URL 설정 시 Spark API만 사용, API 실패/미설정 시 로컬 Spark 또는 Python.
+    전체 리뷰에서 service/price 긍정 비율 계산.
+    Summary와 동일 전략: 리뷰 수 < RECALL_SEEDS_SPARK_THRESHOLD → Kiwi만, 이상이면 Spark(또는 Spark 서비스) 시도.
     리뷰: [{"content":"..."} or {"text":"..."}, ...]
     """
     if not reviews:
@@ -1045,6 +1062,11 @@ def calculate_all_average_ratios_from_reviews(
     texts = [t for t in texts if t and isinstance(t, str)]
     if not texts:
         return {"service": 0.0, "price": 0.0}
+
+    threshold = _comparison_spark_threshold()
+    # 규모 미만이면 Kiwi만 (Summary와 동일)
+    if len(texts) < threshold:
+        return _python_calculate_ratios(texts, stopwords)
 
     # SPARK_SERVICE_URL 설정 시 Spark API만 사용, API 실패 시 Python 폴백만 (로컬 Spark 미사용)
     if _get_spark_service_url():
