@@ -169,6 +169,8 @@
 - **Summary**는 요약만, **Sentiment**는 긍정/부정/중립 비율.
 - **Comparison**은 Vector 리뷰 + Kiwi(±Spark) 비율 → 전체 평균 대비 lift → LLM 해석.
 
+**DeepFM ML 파이프라인** (별도 서비스, §16): `ml/deepfm_pipeline` — 학습 트리거·배치 스코어링·모델/버전 조회·활성화 Admin API. 포트 8000, 메인 앱(8001)과 독립 배포.
+
 ---
 
 ## Part II. 파이프라인 상세
@@ -675,6 +677,90 @@ GET /api/v1/batch/status/{job_id} → 결과 조회
 | **Batch (큐)** | api/routers/batch.py | POST /batch/enqueue, GET /batch/status/{job_id} | queue_tasks.py(run_*_batch_job, run_all_batch_job), scripts/rq_worker.py, scripts/trigger_offline_batch.py |
 
 **공통**: api/main.py, api/dependencies.py, config.py, models.py, cache.py(acquire_lock), metrics_collector.py, metrics_db.py.
+
+---
+
+## 16. DeepFM ML 파이프라인
+
+**위치**: `ml/deepfm_pipeline/` — 메인 FastAPI 앱(new_async)과 **별도 서비스**로, 추천(DeepFM) 학습·배치 스코어링·모델/버전 관리를 담당합니다.
+
+### 16.1 역할·개요
+
+| 항목 | 내용 |
+|------|------|
+| **프레임워크** | FastAPI (Python 3.11) |
+| **역할** | Admin API: 학습 트리거, 배치 스코어링/추천 생성, 모델 목록 조회, 서빙용 pipeline_version 활성화 |
+| **진입점** | `uvicorn api.main:app --host 0.0.0.0 --port 8000` (기본 8000) |
+| **문서** | `ml/deepfm_pipeline/docs/design/api/api_design.md`, `ML_API_DTO.md` |
+
+**전체 흐름 (개념)**
+
+```
+[Admin/ETL]
+    │
+    ▼
+[DeepFM API :8000]  FastAPI  ─┬─ POST /admin/deepfm/train        → Prefect 플로우(전처리→학습) → output/<run>/ model.pt, run_manifest.json, pipeline_version
+    │                          ├─ POST /admin/deepfm/score-batch  → run_dir + 후보 CSV → recommendation CSV (INSERT는 호출 측)
+    │                          ├─ GET  /admin/deepfm/models      → output/ 하위 run 목록 + active_version
+    │                          └─ POST /admin/deepfm/activate     → output/active_pipeline_version.txt 갱신
+    │
+    ▼
+[output/]  run 디렉터리별 model.pt, feature_sizes.txt, pipeline_version.txt, run_manifest.json
+```
+
+### 16.2 디렉터리 구조
+
+| 경로 | 설명 |
+|------|------|
+| `api/main.py` | FastAPI 앱, CORS, 라우터 등록, `GET /health` |
+| `api/schemas.py` | TrainRequestDto, TrainResponseDto, ScoreBatchRequestDto/ResponseDto, ModelInfoDto, ModelsResponseDto, ActivateRequestDto/ResponseDto |
+| `api/routers/deepfm.py` | `/admin/deepfm` 하위 엔드포인트 구현 |
+| `training_flow.py` | Prefect flow: 전처리 → 학습 → run_manifest·pipeline_version 산출 |
+| `model/`, `data/`, `utils/` | DeepFM 모델, 데이터셋, 전처리·score_batch·wandb 등 |
+| `output/` | run별 디렉터리(`model.pt`, `feature_sizes.txt`, `pipeline_version.txt`, `run_manifest.json`), `active_pipeline_version.txt` |
+
+### 16.3 API 엔드포인트
+
+| 메서드 | 경로 | 역할 |
+|--------|------|------|
+| POST | `/admin/deepfm/train` | 학습 트리거. Prefect `deepfm_training_flow` 동기 실행 → pipeline_version, model_path, run_manifest_path, metrics 반환 |
+| POST | `/admin/deepfm/score-batch` | 배치 스코어링. `pipeline_version`(또는 run_dir) + candidates_path → recommendation CSV 출력. DB INSERT는 호출 측(ETL) |
+| GET | `/admin/deepfm/models` | output 하위 run 목록 + 현재 활성 `active_version` |
+| POST | `/admin/deepfm/activate` | 서빙용 pipeline_version 활성화 → `output/active_pipeline_version.txt` 기록 |
+
+- **Health**: `GET /health` → `{"status": "ok"}`  
+- DTO 상세: `ml/deepfm_pipeline/docs/design/api/ML_API_DTO.md`
+
+### 16.4 학습 플로우
+
+1. **전처리** (`preprocess_task`): raw_data_dir → processed_data_dir (train/valid/test split, feature_sizes 등). 선택 시 W&B artifact 로깅.
+2. **학습** (`train_task`): DeepFM 학습 → `output/<run>/model.pt`, `feature_sizes.txt` 저장.
+3. **run 산출**: `pipeline_version` 발급(예: `deepfm-1.0.YYYYMMDDHHMMSS`), `run_manifest.json`(pipeline_version, model_path, metrics, timestamp_utc) 기록.
+4. 학습은 **동기** 실행(같은 프로세스에서 `training_flow.deepfm_training_flow` 호출).
+
+### 16.5 스코어링
+
+- **진입**: `POST /admin/deepfm/score-batch` (pipeline_version, candidates_path, output_path 필수; run_dir 없으면 pipeline_version으로 output 하위에서 run 디렉터리 탐색).
+- **실행**: `utils.score_batch.run(run_dir, candidates_path, output_path, meta_path, ttl_hours, batch_size)` — run_dir에서 model.pt·feature_sizes 로드 후 배치 추론 → recommendation 형식 CSV 출력.
+- **recommendation 테이블 INSERT**는 API가 하지 않으며, ETL/DB 측에서 수행.
+
+### 16.6 활성 버전
+
+- **활성 pipeline_version**: `output/active_pipeline_version.txt`에 한 줄로 저장.
+- `GET /admin/deepfm/models`의 `active_version`, 추천 API 등에서 이 값을 참조해 서빙 모델로 사용.
+
+### 16.7 Docker
+
+- **이미지**: `ml/deepfm_pipeline/Dockerfile` — `python:3.11-slim`, `ml-requirements.txt` 설치, `PYTHONPATH=/app`, `uvicorn api.main:app --host 0.0.0.0 --port 8000`.
+- **빌드 컨텍스트**: `ml/deepfm_pipeline/`. `.dockerignore`로 output/data 등 제외 권장.
+
+### 16.8 참고 문서
+
+| 문서 | 설명 |
+|------|------|
+| `ml/deepfm_pipeline/docs/design/api/api_design.md` | API 설계(필수 엔드포인트) |
+| `ml/deepfm_pipeline/docs/design/api/ML_API_DTO.md` | Request/Response DTO 명세 |
+| `ml/deepfm_pipeline/docs/design/deepfm/deepfm_design.md` | DeepFM 파이프라인 설계 |
 
 ---
 
