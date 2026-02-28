@@ -5,6 +5,8 @@
 # Docker: Dockerfile.train-llm (PyTorch CUDA 베이스)
 
 # LLM / 학습 (버전 고정: transformers/peft/trl 호환성)
+# PyTorch 2.2+ 필요: transformers bitsandbytes 4bit 양자화가 nn.Module.set_submodule 사용
+torch>=2.2.0
 # trl 0.12.0 요구: transformers>=4.46.0
 transformers>=4.46.0
 accelerate>=0.20.0
