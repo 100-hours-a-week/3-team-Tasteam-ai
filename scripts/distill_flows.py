@@ -51,11 +51,11 @@ import argparse
 import json
 import logging
 import os
-import re
 import subprocess
 import sys
 import tempfile
 import time
+import yaml
 from datetime import datetime
 from pathlib import Path
 
@@ -573,45 +573,24 @@ def ensure_wandb_project_task(
 
 @task(name="register-sweep-task", log_prints=True)
 def register_sweep_task(sweep_yaml_path: str | Path) -> str:
-    """wandb sweep <yaml> 를 subprocess로 실행하고 stdout에서 sweep id를 파싱해 반환."""
+    """wandb.sweep()로 sweep 등록 후 sweep id를 반환 (stdout 파싱 없음)."""
+    import wandb
+
     path = Path(sweep_yaml_path)
     if not path.is_absolute():
         path = _PROJECT_ROOT / path
     if not path.exists():
         raise FileNotFoundError(f"sweep yaml not found: {path}")
-    cmd = ["wandb", "sweep", str(path)]
-    logger.info("Registering sweep: %s", " ".join(cmd))
-    result = subprocess.run(
-        cmd,
-        cwd=str(_PROJECT_ROOT),
-        env=os.environ.copy(),
-        capture_output=True,
-        text=True,
-    )
-    out = (result.stdout or "") + (result.stderr or "")
-    if result.returncode != 0:
-        raise RuntimeError(f"wandb sweep failed (code={result.returncode}): {out}")
-    # wandb 출력 예: "Create sweep with ID: entity/project/xxxx". 경로(Users/... 등)는 제외
-    _PATH_LIKE_ENTITIES = frozenset({"users", "home", "tmp", "opt", "var", "root"})
-
-    def _is_path_like(s: str) -> bool:
-        if not s or s.startswith("/"):
-            return True
-        parts = s.split("/")
-        return len(parts) < 3 or parts[0].lower() in _PATH_LIKE_ENTITIES
-
-    for pattern in [
-        r"(?:sweep with )?ID:\s*(\S+/\S+/\S+)",
-        r"(\w+/\w+/[a-zA-Z0-9]+)",
-    ]:
-        for m in re.finditer(pattern, out, re.IGNORECASE if "ID:" in pattern else 0):
-            sweep_id = m.group(1).strip()
-            if not _is_path_like(sweep_id):
-                logger.info("Parsed sweep_id: %s", sweep_id)
-                return sweep_id
-    raise RuntimeError(
-        f"Could not parse wandb sweep id from wandb output (path-like matches excluded). Output: {out[:500]}"
-    )
+    with open(path, encoding="utf-8") as f:
+        sweep_config = yaml.safe_load(f)
+    if not sweep_config:
+        raise ValueError(f"Empty or invalid sweep yaml: {path}")
+    project = os.environ.get("WANDB_PROJECT", DEFAULT_WANDB_PROJECT)
+    entity = os.environ.get("WANDB_ENTITY") or None
+    logger.info("Registering sweep via wandb.sweep (project=%s, entity=%s)", project, entity)
+    sweep_id = wandb.sweep(sweep=sweep_config, project=project, entity=entity)
+    logger.info("Registered sweep_id: %s", sweep_id)
+    return sweep_id
 
 
 @task(name="run-sweep-agent-task", log_prints=True)

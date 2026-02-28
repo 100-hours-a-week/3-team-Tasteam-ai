@@ -171,3 +171,89 @@ PUBLIC_KEY=""
 이렇게 하면 “Users/js/tasteam”이 들어와도 Pod env가 `WANDB_PROJECT=tasteam-distill`, `WANDB_ENTITY=jin-soo-none`처럼 올바르게 설정되고, sweep_id가 진짜 wandb id일 때만 파싱해서 쓸 수 있습니다.
 
 지금은 **Ask 모드**라 제가 직접 수정은 못 하니, Agent 모드로 바꿔 주시면 위 검증/파싱 로직을 코드에 반영해 드릴 수 있습니다.
+
+---
+
+WANDB_SWEEP_LABELED_PATH=/workspace/labeled/20260226_051037/train_labeled.json
+WANDB_SWEEP_OUTPUT_DIR=/workspace/distill_pipeline_output
+WANDB_SWEEP_ID=async/scripts/wandb
+WANDB_PROJECT=scripts
+WANDB_ENTITY=async
+
+---
+
+
+반영했습니다.
+
+**원인**  
+`sweep_id`가 `async/scripts/wandb`처럼 **경로 조각**(`tasteam-new-async/scripts/wandb`에서 잘린 형태)으로 파싱되어, `WANDB_ENTITY=async`, `WANDB_PROJECT=scripts`로 잘못 들어가고 있었습니다.
+
+**수정**  
+`entity/project/run_id` 세 부분 중 **project나 run_id가 흔한 폴더/도구 이름**이면 sweep id 후보에서 제외하도록 했습니다.
+
+- **제외 세그먼트**: `scripts`, `wandb`, `src`, `lib`, `train`, `output`, `workspace`
+- 따라서 `async/scripts/wandb`는 `scripts`, `wandb` 때문에 path-like로 판단되어 **사용하지 않고**, 그대로 두면 “Could not parse wandb sweep id ...” 예외가 나서 잘못된 값이 Pod로 넘어가지 않습니다.
+
+실제 sweep id는 wandb가 출력하는 `entity/project/알파벳숫자_runid` 형태만 쓰이게 됩니다.
+
+
+정리해서 말씀드리면 다음과 같습니다.
+
+**1. `wandb/` 디렉터리에서 파싱하는지**
+
+- 공식 문서에는 **“sweep id를 `wandb/` 아래 파일에 쓴다”**는 내용이 없습니다.
+- `wandb sweep config.yaml`은 **sweep id를 터미널에 출력(print)**하는 방식만 설명되어 있고, 그 id를 로컬 파일로 저장한다는 말은 없습니다.
+- `wandb/` 디렉터리는 보통 **run 로그·메타데이터**용이고, `.gitignore`에 `wandb/`가 있는 것도 그런 로그를 제외하기 위함입니다.
+- 그래서 “sweep id를 `wandb/` 디렉터리에서 파싱해야 한다”는 동작은 **문서상/일반적인 사용법으로는 지원되지 않는 방식**에 가깝습니다.
+
+**2. 더 안정적인 방법: wandb SDK에서 직접 받기**
+
+sweep id를 **출력 문자열에서 파싱하지 않고** 쓰려면, **CLI subprocess 대신 Python SDK**를 쓰는 편이 좋습니다.
+
+- 문서: [Initialize a sweep](https://docs.wandb.ai/guides/sweeps/initialize-sweeps/)
+- 예시:
+  ```python
+  import wandb
+  sweep_id = wandb.sweep(sweep=sweep_configuration, project="project-name")
+  ```
+- `wandb.sweep()`는 **sweep id를 반환값**으로 주기 때문에, `entity/project/scripts/wandb` 같은 경로 조각을 정규식으로 잘못 잡는 문제를 아예 피할 수 있습니다.
+
+지금 코드는 **CLI**를 쓰고 있습니다:
+
+```576:582:scripts/distill_flows.py
+    """wandb sweep <yaml> 를 subprocess로 실행하고 stdout에서 sweep id를 파싱해 반환."""
+    ...
+    cmd = ["wandb", "sweep", str(path)]
+```
+
+**요약**
+
+- **`wandb/`에서 파싱**: 공식 문서상 그런 방식은 없고, sweep id는 CLI가 **stdout에만** 뿌립니다.
+- **권장**: stdout 파싱 대신 **`wandb.sweep(sweep=..., project=...)`를 Python에서 호출해 반환값을 `sweep_id`로 쓰는 방식**이 더 안정적입니다.  
+  (원하시면 Agent 모드에서 `register_sweep_task`를 subprocess+파싱 대신 `wandb.sweep()` 호출로 바꾸는 예시까지 구체적으로 적어 드리겠습니다.)
+
+  ---
+
+
+반영했습니다.
+
+**변경 요약**
+
+1. **`register_sweep_task`**
+   - **이전**: `wandb sweep <yaml>` subprocess 실행 후 stdout에서 sweep id 정규식 파싱.
+   - **이후**: YAML을 `yaml.safe_load`로 읽어 `wandb.sweep(sweep=config, project=..., entity=...)`를 호출하고, **반환값**을 그대로 sweep id로 사용.
+
+2. **제거**
+   - subprocess 호출 및 stdout/stderr 처리.
+   - 경로/폴더명 제외용 정규식·`_is_path_like` 등 파싱 로직.
+   - 사용처가 없어진 `import re`.
+
+3. **추가**
+   - `import yaml` (YAML 설정 로드용).
+   - task 내부에서 `import wandb` (SDK 호출용).
+
+4. **project/entity**
+   - `WANDB_PROJECT`가 있으면 사용, 없으면 `DEFAULT_WANDB_PROJECT` (`tasteam-distill`).
+   - `WANDB_ENTITY`가 있으면 entity로 전달, 없으면 `None` (wandb 기본 계정).
+
+이제 sweep id는 항상 wandb가 준 문자열만 쓰이므로, `async/scripts/wandb` 같은 경로 조각이 들어가는 일은 없습니다.
