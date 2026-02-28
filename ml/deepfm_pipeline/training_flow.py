@@ -1,0 +1,388 @@
+"""
+Prefect 기반 DeepFM 학습 파이프라인 (deepfm_design.md §6-2).
+
+- 전처리 → 학습 → 모델 저장 + pipeline_version 발급 → 오프라인 지표 기록
+
+실행 (프로젝트 루트에서):
+  python deepfm_training/training_flow.py
+
+또는 deepfm_training 디렉터리에서:
+  python training_flow.py
+"""
+from __future__ import annotations
+
+import json
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+# deepfm_training 루트를 path에 넣어 model/data/utils import 가능하게 함 (repo root에서 실행 시)
+_deepfm_root = Path(__file__).resolve().parent
+if str(_deepfm_root) not in sys.path:
+    sys.path.insert(0, str(_deepfm_root))
+
+import numpy as np
+import torch
+import torch.optim as optim
+from torch.utils.data import DataLoader
+from torch.utils.data import sampler
+
+from prefect import flow, task
+from prefect.context import get_run_context
+
+from model.DeepFM import DeepFM
+from data.dataset import CriteoDataset
+
+
+# --- 기본 경로 (deepfm_training 기준) ---
+def _default_raw_data_dir() -> str:
+    return str(_deepfm_root / "data" / "raw")
+
+
+def _default_processed_data_dir() -> str:
+    return str(_deepfm_root / "data")
+
+
+def _default_output_dir() -> str:
+    return str(_deepfm_root / "output")
+
+
+def _generate_pipeline_version() -> str:
+    """deepfm_design §6-2: pipeline_version 발급 (예: deepfm-1.0.20260227120000)."""
+    now = datetime.now(timezone.utc)
+    return f"deepfm-1.0.{now.strftime('%Y%m%d%H%M%S')}"
+
+
+@task(name="deepfm-preprocess", log_prints=True)
+def preprocess_task(
+    raw_data_dir: str,
+    processed_data_dir: str,
+    num_train_sample: int | None = 9000,
+    num_test_sample: int | None = 1000,
+    use_sample_weight: bool = True,
+    time_column: str | None = None,
+    train_end: str | None = None,
+    valid_end: str | None = None,
+    test_end: str | None = None,
+    group_column: str | None = None,
+    use_wandb: bool = True,
+) -> str:
+    """
+    전처리 + (wandb_design) split 메타·feature_sizes·dataset 스냅샷 artifact 로깅.
+    """
+    from utils.dataPreprocess import preprocess
+    from utils import wandb_logger
+
+    raw = Path(raw_data_dir)
+    out = Path(processed_data_dir)
+    if not raw.exists():
+        raise FileNotFoundError(f"Raw data directory not found: {raw_data_dir}")
+    out.mkdir(parents=True, exist_ok=True)
+
+    preprocess(
+        datadir=str(raw),
+        outdir=str(out),
+        num_train_sample=num_train_sample,
+        num_test_sample=num_test_sample,
+        use_sample_weight=use_sample_weight,
+        time_column=time_column,
+        train_end=train_end,
+        valid_end=valid_end,
+        test_end=test_end,
+        group_column=group_column,
+    )
+    print(f"Preprocess done: {processed_data_dir}")
+
+    if use_wandb and wandb_logger.is_available():
+        stats = wandb_logger.dataset_stats_from_processed_dir(out)
+        (out / "dataset_stats.json").write_text(
+            json.dumps(stats, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        if (out / "split_meta.json").exists():
+            wandb_logger.log_artifact("split_metadata", "split_metadata", out / "split_meta.json")
+        if (out / "feature_sizes.txt").exists():
+            wandb_logger.log_artifact("feature_sizes", "feature_sizes", out / "feature_sizes.txt")
+        wandb_logger.log_artifact("dataset_stats", "dataset_stats", out / "dataset_stats.json")
+    return processed_data_dir
+
+
+@task(name="deepfm-train", log_prints=True)
+def train_task(
+    processed_data_dir: str,
+    num_train: int = 9000,
+    num_val: int = 1000,
+    epochs: int = 5,
+    batch_size: int = 100,
+    lr: float = 1e-4,
+    output_dir: str | None = None,
+    use_cuda: bool = False,
+    verbose: bool = True,
+    use_wandb: bool = True,
+) -> dict:
+    """
+    전처리된 데이터로 DeepFM 학습 후 모델 저장.
+    (wandb_design) checkpoint·evaluation report artifact, metrics 로깅, pipeline_version 매핑.
+    """
+    from utils import wandb_logger
+
+    data_path = Path(processed_data_dir)
+    if not (data_path / "train.txt").exists():
+        raise FileNotFoundError(f"Processed train.txt not found in {processed_data_dir}")
+
+    out_path = Path(output_dir or _default_output_dir())
+    run_ctx = get_run_context()
+    run_id = getattr(run_ctx, "flow_run", None) and getattr(run_ctx.flow_run, "id", None)
+    run_name = str(run_id) if run_id else "manual"
+    out_run = out_path / run_name
+    out_run.mkdir(parents=True, exist_ok=True)
+
+    train_config = {
+        "num_train": num_train,
+        "num_val": num_val,
+        "epochs": epochs,
+        "batch_size": batch_size,
+        "lr": lr,
+        "use_cuda": use_cuda,
+    }
+
+    # 데이터 로드: 시간 기준 split 시 val.txt 사용, 없으면 train 뒤쪽을 val로 (랜덤 row split 아님)
+    train_data = CriteoDataset(str(data_path), train=True)
+    val_path = data_path / "val.txt"
+    if val_path.exists():
+        val_data = CriteoDataset(str(data_path), train=False, use_val_file=True)
+        loader_train = DataLoader(
+            train_data, batch_size=batch_size, shuffle=True
+        )
+        loader_val = DataLoader(
+            val_data, batch_size=batch_size, shuffle=False
+        )
+    else:
+        num_total = len(train_data)
+        val_start = max(0, num_total - num_val)
+        train_indices = list(range(0, val_start))
+        val_indices = list(range(val_start, num_total))
+        loader_train = DataLoader(
+            train_data,
+            batch_size=batch_size,
+            sampler=sampler.SubsetRandomSampler(train_indices),
+        )
+        loader_val = DataLoader(
+            train_data,
+            batch_size=batch_size,
+            sampler=sampler.SubsetRandomSampler(val_indices),
+        )
+
+    feature_sizes_path = data_path / "feature_sizes.txt"
+    feature_sizes = np.loadtxt(str(feature_sizes_path), delimiter=",")
+    feature_sizes = [int(x) for x in feature_sizes]
+
+    model = DeepFM(feature_sizes, use_cuda=use_cuda)
+    optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=0.0)
+    model.fit(loader_train, loader_val, optimizer, epochs=epochs, verbose=verbose)
+
+    # §6-2: pipeline_version 발급
+    pipeline_version = _generate_pipeline_version()
+    version_path = out_run / "pipeline_version.txt"
+    version_path.write_text(pipeline_version, encoding="utf-8")
+
+    # 모델 및 메타 저장
+    model_path = out_run / "model.pt"
+    torch.save(model.state_dict(), model_path)
+    meta_path = out_run / "feature_sizes.txt"
+    np.savetxt(str(meta_path), feature_sizes, fmt="%d", delimiter=",")
+    print(f"Model saved: {model_path}, pipeline_version: {pipeline_version}")
+
+    # §6-2: 오프라인 지표 산출(NDCG@K / Recall@K / AUC) 기록
+    run_metrics = {}
+    test_path = data_path / "test.txt"
+    if test_path.exists():
+        from utils.evaluate import run_evaluation
+        run_metrics = run_evaluation(
+            processed_data_dir=str(data_path),
+            model_path=str(model_path),
+            feature_sizes=feature_sizes,
+            k_list=[5, 10],
+            use_cuda=use_cuda,
+        )
+        if "error" not in run_metrics:
+            metrics_path = out_run / "run_metrics.json"
+            with open(metrics_path, "w", encoding="utf-8") as f:
+                json.dump(run_metrics, f, ensure_ascii=False, indent=2)
+            print(f"Offline metrics saved: {metrics_path}")
+
+    run_manifest = {
+        "pipeline_version": pipeline_version,
+        "model_path": str(model_path),
+        "feature_sizes_path": str(meta_path),
+        "processed_data_dir": processed_data_dir,
+        "metrics": run_metrics,
+        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+    }
+    manifest_path = out_run / "run_manifest.json"
+    with open(manifest_path, "w", encoding="utf-8") as f:
+        json.dump(run_manifest, f, ensure_ascii=False, indent=2)
+    print(f"Run manifest: {manifest_path}")
+
+    if use_wandb and wandb_logger.is_available():
+        wandb_logger.log_artifact(
+            "model_checkpoint",
+            "model",
+            out_run,
+            metadata={"pipeline_version": pipeline_version, **train_config},
+        )
+        if run_metrics and "error" not in run_metrics:
+            wandb_logger.log_metrics(run_metrics)
+            wandb_logger.log_artifact(
+                "evaluation_report",
+                "evaluation",
+                out_run / "run_metrics.json",
+                metadata={"pipeline_version": pipeline_version},
+            )
+        wandb_logger.set_summary("pipeline_version", pipeline_version)
+        wid = wandb_logger.get_run_id()
+        if wid:
+            wandb_logger.set_summary("wandb_run_id", wid)
+            run_manifest["wandb_run_id"] = wid
+            with open(manifest_path, "w", encoding="utf-8") as f:
+                json.dump(run_manifest, f, ensure_ascii=False, indent=2)
+
+    return {
+        "model_path": str(model_path),
+        "feature_sizes_path": str(meta_path),
+        "processed_data_dir": processed_data_dir,
+        "pipeline_version": pipeline_version,
+        "run_manifest_path": str(manifest_path),
+        "metrics": run_metrics,
+    }
+
+
+@flow(name="DeepFM Training Pipeline", log_prints=True)
+def deepfm_training_flow(
+    raw_data_dir: str | None = None,
+    processed_data_dir: str | None = None,
+    num_train_sample: int | None = 9000,
+    num_test_sample: int | None = 1000,
+    num_val: int = 1000,
+    epochs: int = 5,
+    batch_size: int = 100,
+    lr: float = 1e-4,
+    output_dir: str | None = None,
+    use_cuda: bool = False,
+    skip_preprocess: bool = False,
+    use_sample_weight: bool = True,
+    time_column: str | None = None,
+    train_end: str | None = None,
+    valid_end: str | None = None,
+    test_end: str | None = None,
+    group_column: str | None = None,
+    use_wandb: bool = True,
+) -> dict:
+    """
+    전처리 → 학습을 순서대로 실행하는 DeepFM 파이프라인.
+    (wandb_design) use_wandb=True 시 Artifacts·메트릭 로깅, pipeline_version 매핑.
+    """
+    from utils import wandb_logger
+
+    raw = raw_data_dir or _default_raw_data_dir()
+    processed = processed_data_dir or _default_processed_data_dir()
+    out = output_dir or _default_output_dir()
+
+    if use_wandb and wandb_logger.is_available():
+        run_ctx = get_run_context()
+        run_id = getattr(run_ctx, "flow_run", None) and getattr(run_ctx.flow_run, "id", None)
+        run_name = str(run_id) if run_id else "manual"
+        wandb_logger.init_run(
+            project="deepfm-pipeline",
+            config={
+                "raw_data_dir": raw,
+                "processed_data_dir": processed,
+                "num_train_sample": num_train_sample,
+                "num_test_sample": num_test_sample,
+                "num_val": num_val,
+                "epochs": epochs,
+                "batch_size": batch_size,
+                "lr": lr,
+                "time_column": time_column,
+                "train_end": train_end,
+                "valid_end": valid_end,
+                "test_end": test_end,
+                "group_column": group_column,
+            },
+            run_name=run_name,
+        )
+
+    if not skip_preprocess:
+        preprocess_task(
+            raw_data_dir=raw,
+            processed_data_dir=processed,
+            num_train_sample=num_train_sample,
+            num_test_sample=num_test_sample,
+            use_sample_weight=use_sample_weight,
+            time_column=time_column,
+            train_end=train_end,
+            valid_end=valid_end,
+            test_end=test_end,
+            group_column=group_column,
+            use_wandb=use_wandb,
+        )
+
+    result = train_task(
+        processed_data_dir=processed,
+        num_train=num_train_sample,
+        num_val=num_val,
+        epochs=epochs,
+        batch_size=batch_size,
+        lr=lr,
+        output_dir=out,
+        use_cuda=use_cuda,
+        verbose=True,
+        use_wandb=use_wandb,
+    )
+    if use_wandb and wandb_logger.is_available():
+        wandb_logger.finish_run()
+    return result
+
+
+@task(name="deepfm-score-batch", log_prints=True)
+def score_batch_task(
+    run_dir: str,
+    candidates_path: str,
+    output_path: str,
+    meta_path: str | None = None,
+    ttl_hours: float = 24.0,
+    batch_size: int = 256,
+    use_wandb: bool = True,
+) -> dict:
+    """
+    배치 스코어링 실행 후 recommendation 형식 CSV 출력.
+    (wandb_design) scoring_output artifact + pipeline_version 매핑.
+    """
+    from utils.score_batch import run as score_batch_run
+    from utils import wandb_logger
+
+    score_batch_run(
+        run_dir=Path(run_dir),
+        candidates_path=Path(candidates_path),
+        output_path=Path(output_path),
+        meta_path=Path(meta_path) if meta_path else None,
+        ttl_hours=ttl_hours,
+        batch_size=batch_size,
+    )
+    pipeline_version = "unknown"
+    pv_path = Path(run_dir) / "pipeline_version.txt"
+    if pv_path.exists():
+        pipeline_version = pv_path.read_text(encoding="utf-8").strip()
+
+    if use_wandb and wandb_logger.is_available():
+        wandb_logger.log_artifact(
+            "scoring_output",
+            "scoring",
+            output_path,
+            metadata={"pipeline_version": pipeline_version},
+        )
+    return {"output_path": output_path, "pipeline_version": pipeline_version}
+
+
+if __name__ == "__main__":
+    # 기본 인자로 한 번 실행 (전처리 포함)
+    deepfm_training_flow()

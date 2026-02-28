@@ -1,0 +1,12 @@
+# 빌드 제외
+output/
+data/raw/
+*.pyc
+__pycache__/
+.git
+.gitignore
+*.md
+docs/
+.env
+.venv
+venv/
