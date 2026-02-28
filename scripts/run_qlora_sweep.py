@@ -58,6 +58,10 @@ def train() -> None:
         batch_size=int(cfg.get("batch_size", 2)),
         grad_accum=int(cfg.get("grad_accum", 4)),
         learning_rate=float(cfg.get("learning_rate", 2e-5)),
+        eval_ratio=float(cfg.get("eval_ratio", 0.1)),
+        warmup_ratio=float(cfg.get("warmup_ratio", 0.03)),
+        weight_decay=float(cfg.get("weight_decay", 0.0)),
+        early_stopping_patience=int(cfg.get("early_stopping_patience", 3)),
     )
     run_train(args)
 

@@ -85,6 +85,10 @@ def main() -> None:
     parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
     parser.add_argument("--grad-accum", type=int, default=DEFAULT_GRAD_ACCUM)
     parser.add_argument("--learning-rate", type=float, default=2e-5, help="Peak learning rate")
+    parser.add_argument("--eval-ratio", type=float, default=0.1, help="Fraction of data for eval (0 = no eval)")
+    parser.add_argument("--warmup-ratio", type=float, default=0.03)
+    parser.add_argument("--weight-decay", type=float, default=0.0)
+    parser.add_argument("--early-stopping-patience", type=int, default=3, help="Stop after N evals without improvement")
     args = parser.parse_args()
     run_train(args)
 
@@ -95,7 +99,7 @@ def run_train(args: argparse.Namespace) -> None:
     args.output_dir = Path(args.output_dir)
     try:
         from datasets import Dataset
-        from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+        from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, EarlyStoppingCallback
         from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
         from trl import SFTConfig, SFTTrainer
     except ImportError as e:
@@ -147,11 +151,22 @@ def run_train(args: argparse.Namespace) -> None:
     ds = Dataset.from_list([{"instruction": s["instruction"], "output": s["output"]} for s in samples])
     ds = ds.map(lambda ex: fmt(ex), remove_columns=ds.column_names, desc="formatting")
 
+    eval_dataset = None
+    if getattr(args, "eval_ratio", 0) > 0 and len(ds) >= 20:
+        split = ds.train_test_split(test_size=args.eval_ratio, seed=42)
+        ds = split["train"]
+        eval_dataset = split["test"]
+        logger.info("Eval split: train=%d eval=%d", len(ds), len(eval_dataset))
+
     run_id = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
     out_path = args.output_dir / "runs" / run_id
     out_path.mkdir(parents=True, exist_ok=True)
 
     learning_rate = getattr(args, "learning_rate", 2e-5)
+    warmup_ratio = getattr(args, "warmup_ratio", 0.03)
+    weight_decay = getattr(args, "weight_decay", 0.0)
+    early_stopping_patience = getattr(args, "early_stopping_patience", 3)
+
     training_args = SFTConfig(
         output_dir=str(out_path),
         per_device_train_batch_size=args.batch_size,
@@ -159,7 +174,8 @@ def run_train(args: argparse.Namespace) -> None:
         num_train_epochs=args.num_epochs,
         learning_rate=learning_rate,
         max_seq_length=args.max_seq_length,
-        warmup_ratio=0.03,
+        warmup_ratio=warmup_ratio,
+        weight_decay=weight_decay,
         logging_steps=10,
         save_strategy="steps",
         save_steps=100,
@@ -167,15 +183,26 @@ def run_train(args: argparse.Namespace) -> None:
         bf16=True,
         report_to="wandb" if flow_run_id else "none",
         run_name=flow_run_id or run_id,
+        evaluation_strategy="steps" if eval_dataset is not None else "no",
+        eval_steps=100 if eval_dataset is not None else None,
+        load_best_model_at_end=eval_dataset is not None,
+        metric_for_best_model="eval_loss" if eval_dataset is not None else None,
+        greater_is_better=False,
     )
+
+    callbacks = []
+    if eval_dataset is not None and early_stopping_patience > 0:
+        callbacks.append(EarlyStoppingCallback(early_stopping_patience=early_stopping_patience))
 
     trainer = SFTTrainer(
         model=model,
         args=training_args,
         train_dataset=ds,
+        eval_dataset=eval_dataset,
         dataset_text_field="text",
         max_seq_length=args.max_seq_length,
         tokenizer=tokenizer,
+        callbacks=callbacks,
     )
     trainer.train()
     trainer.save_model(str(out_path / "adapter"))

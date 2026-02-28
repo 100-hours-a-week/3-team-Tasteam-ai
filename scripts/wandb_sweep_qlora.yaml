@@ -1,37 +1,47 @@
-# wandb Sweep 설정: QLoRA SFT 하이퍼파라미터 탐색
+# wandb Sweep 설정: QLoRA SFT 하이퍼파라미터 탐색 (cap_strategy.md 반영)
 # 사용: wandb sweep scripts/wandb_sweep_qlora.yaml
 # 실행: WANDB_SWEEP_LABELED_PATH=... WANDB_SWEEP_OUTPUT_DIR=... wandb agent <sweep_id>
 # 환경변수(필수): WANDB_SWEEP_LABELED_PATH, WANDB_SWEEP_OUTPUT_DIR, WANDB_API_KEY, WANDB_PROJECT
 
 program: scripts/run_qlora_sweep.py
-method: bayes   # bayes | random | grid
+method: bayes
 metric:
-  name: train/loss
+  name: eval_loss
   goal: minimize
 
+run_cap: 50
+
 parameters:
-  # 탐색 대상
+  # 핵심 하이퍼 6개 (cap_strategy §3)
   learning_rate:
     distribution: log_uniform_values
     min: 1.0e-5
     max: 5.0e-5
-  num_epochs:
-    values: [1, 2, 3]
   batch_size:
     values: [2, 4]
-  r:
-    values: [4, 8, 16]
-  alpha:
-    values: [8, 16, 32]
+  grad_accum:
+    values: [1, 2, 4, 8]
+  num_epochs:
+    values: [1, 2, 3]
+  warmup_ratio:
+    distribution: uniform
+    min: 0.0
+    max: 0.1
+  weight_decay:
+    distribution: log_uniform_values
+    min: 1.0e-7
+    max: 1.0e-3
   max_seq_length:
-    values: [1024, 2048]
+    values: [512, 1024, 2048]
 
-  # 고정값 (sweep에서 변경하지 않음)
+  # 고정 (탐색 공간 축소)
   student_model:
     value: "Qwen/Qwen2.5-0.5B-Instruct"
   gold_oversample_ratio:
     value: 0.25
   target_modules:
     value: "q_proj,v_proj,k_proj,o_proj,gate_proj,up_proj,down_proj"
-  grad_accum:
-    value: 4
+  r:
+    value: 8
+  alpha:
+    value: 16

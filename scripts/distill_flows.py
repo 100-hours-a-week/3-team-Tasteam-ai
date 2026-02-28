@@ -714,7 +714,7 @@ def run_sweep_flow(
 def get_best_adapter_path_from_sweep_task(
     sweep_id: str,
     output_dir: str,
-    metric_name: str = "train/loss",
+    metric_name: str = "eval_loss",
 ) -> str | None:
     """wandb API로 sweep의 best run 조회 후 로컬 adapter 경로 반환 (run name = run_id). 로컬 디스크에 이미 있을 때만 유효."""
     try:
@@ -746,7 +746,7 @@ def get_best_adapter_path_from_sweep_task(
 def get_best_adapter_from_artifact_task(
     sweep_id: str,
     download_dir: str | Path,
-    metric_name: str = "train/loss",
+    metric_name: str = "eval_loss",
 ) -> str | None:
     """
     wandb API로 sweep의 best run 조회 후, 해당 run의 adapter artifact(qlora-adapter-{run_id})를
@@ -810,7 +810,7 @@ def run_sweep_and_evaluate_flow(
     best_adapter = get_best_adapter_from_artifact_task(
         sweep_id=sweep_id,
         download_dir=out_dir,
-        metric_name="train/loss",
+        metric_name="eval_loss",
     )
     if not best_adapter:
         return {"sweep_id": sweep_id, "best_adapter_path": None, "evaluate": None}
