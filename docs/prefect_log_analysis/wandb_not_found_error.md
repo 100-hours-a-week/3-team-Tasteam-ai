@@ -35,3 +35,139 @@
   를 실행해, wandb 웹에서 해당 계정/팀에 `tasteam-distill` 프로젝트가 생겼는지 확인합니다.
 
 정리하면, 이 로그는 “Pod에서 sweep에 붙을 때 쓰는 project가 W&B에 없다”는 뜻이므로, **최신 코드로 재실행**하고, **sweep_id에 들어 있는 entity/project와 실제 생성된 프로젝트가 일치하는지** 확인하면 원인을 좁힐 수 있습니다.
+
+---
+
+
+이 터미널 로그만 보면 **로컬에서 하는 부분은 정상 동작**한 상태입니다.
+
+### 로그 요약
+- **로그인**: `jin-soo (jin-soo-none)` / `https://api.wandb.ai`
+- **ensure_wandb_project_task**: 완료 → 프로젝트 `tasteam-distill`이 **jin-soo-none** entity 아래에 생성/노출됨  
+  - https://wandb.ai/jin-soo-none/tasteam-distill
+- **register_sweep_task**: 완료 → sweep이 같은 entity/project에 등록됨
+
+즉, sweep_id는 `jin-soo-none/tasteam-distill/<sweep_run_id>` 형태일 것이고, `run_sweep_on_pod_task`에서 이걸 파싱해 Pod env에 `WANDB_ENTITY=jin-soo-none`, `WANDB_PROJECT=tasteam-distill`을 넣어주면, Pod에서도 같은 프로젝트로 agent가 붙어야 합니다.
+
+### 다음 단계
+- 이어서 **run-sweep-on-pod-task**가 실행되면 Pod가 뜨고, 그 Pod에 동일한 `WANDB_API_KEY`와 위 env가 넘어가는지 확인하면 됩니다.
+- 이전에 보이던 “project not found”는 **jin-soo-none/tasteam-distill**가 없을 때 발생한 것이므로, 지금처럼 ensure로 프로젝트가 생겼고 sweep도 같은 entity/project에 등록됐다면, Pod에서도 404가 나지 않을 가능성이 높습니다.
+
+추가로, Pod 로그에서 다시 “project not found”가 나오면 그 시점의 sweep_id와 Pod env(`WANDB_ENTITY`, `WANDB_PROJECT`)를 같이 보면 원인 파악이 쉽습니다.
+
+---
+
+
+Pod env는 **두 군데**에서 정해집니다.
+
+---
+
+### 1. 기본 env (모든 Pod 공통)
+
+**`scripts/runpod_cli/pod_create_delete_cli.py`** 174행:
+
+```174:174:scripts/runpod_cli/pod_create_delete_cli.py
+            "env": {"ENV_VAR": "value",**({"WANDB_API_KEY": os.environ["WANDB_API_KEY"]} if os.environ.get("WANDB_API_KEY") else {}),},
+```
+
+- `RunPodClient.get_default_pod_payload(use="train"|"labeling"|"merge")` 할 때 들어가는 기본값.
+- 항상: `ENV_VAR=value`
+- 로컬에 `WANDB_API_KEY`가 있으면: `WANDB_API_KEY`도 포함.
+
+---
+
+### 2. Sweep Pod에서 덮어쓰는 env
+
+**`scripts/distill_flows.py`** 657–674행, `run_sweep_on_pod_task` 안:
+
+```657:674:scripts/distill_flows.py
+    # sweep_id = entity/project/sweep_run_id → Pod에 동일 project/entity 전달해 404 방지
+    parts = sweep_id.split("/")
+    wandb_project = parts[1] if len(parts) >= 2 else DEFAULT_WANDB_PROJECT
+    wandb_entity = parts[0] if len(parts) >= 2 else os.environ.get("WANDB_ENTITY", "")
+    payload = RunPodClient.get_default_pod_payload(use="train", docker_start_cmd=[sweep_id])
+    ...
+    base_env = payload.get("env") or {}
+    payload["env"] = {
+        **base_env,
+        "WANDB_SWEEP_LABELED_PATH": path_on_volume,
+        "WANDB_SWEEP_OUTPUT_DIR": "/workspace/distill_pipeline_output",
+        "WANDB_SWEEP_ID": sweep_id,
+        "WANDB_PROJECT": wandb_project,
+    }
+    if wandb_entity:
+        payload["env"]["WANDB_ENTITY"] = wandb_entity
+```
+
+- `base_env` = 위 1번 기본 env.
+- 그 위에 sweep용으로 **추가/덮어쓰기**:  
+  `WANDB_SWEEP_LABELED_PATH`, `WANDB_SWEEP_OUTPUT_DIR`, `WANDB_SWEEP_ID`, `WANDB_PROJECT`,  
+  그리고 `wandb_entity`가 있으면 `WANDB_ENTITY`.
+
+---
+
+### 정리
+
+| 설정 위치 | 파일 | 내용 |
+|-----------|------|------|
+| 기본 Pod env | `runpod_cli/pod_create_delete_cli.py` 174행 | `ENV_VAR`, (선택) `WANDB_API_KEY` |
+| Sweep Pod env | `distill_flows.py` 665–674행 | `base_env` + `WANDB_SWEEP_*`, `WANDB_PROJECT`, (선택) `WANDB_ENTITY` |
+
+그래서 **Pod env는**  
+1) 공통은 `pod_create_delete_cli.py`의 `get_default_pod_payload`의 `"env"`,  
+2) sweep 전용은 `distill_flows.py`의 `run_sweep_on_pod_task`에서 `payload["env"]`를 위처럼 갱신하는 곳에서 설정됩니다.
+
+---
+
+pod env
+
+WANDB_SWEEP_LABELED_PATH=/workspace/labeled/20260226_051037/train_labeled.json
+WANDB_SWEEP_OUTPUT_DIR=/workspace/distill_pipeline_output
+WANDB_SWEEP_ID=Users/js/tasteam
+WANDB_PROJECT=js
+WANDB_ENTITY=Users
+ENV_VAR=value
+WANDB_API_KEY=""
+PUBLIC_KEY=""
+
+---
+
+
+원인: **sweep_id가 wandb sweep id가 아니라 로컬 경로처럼 넘어가고 있습니다.**
+
+지금 Pod에 들어간 값:
+- `WANDB_SWEEP_ID=Users/js/tasteam` → **경로** (예: `/Users/js/tasteam...` 의 일부)
+- `WANDB_PROJECT=js` → `sweep_id.split("/")[1]`
+- `WANDB_ENTITY=Users` → `sweep_id.split("/")[0]`
+
+즉 `sweep_id`가 `"Users/js/tasteam"` 같은 문자열로 전달되면서, `entity/project/sweep_run_id` 대신 **경로를 슬래시로 나눈 결과**가 entity/project로 쓰이고 있습니다.
+
+---
+
+### 원인 후보
+
+1. **`register_sweep_task` 파싱**
+   - `wandb sweep` 출력에서 sweep id를 정규식으로 뽑을 때,  
+     `(\S+/\S+/\S+)` 가 **sweep id가 아닌 다른 슬래시 구분 문자열**(예: 경로, URL 일부)에 매칭된 경우.
+2. **다른 환경에서의 wandb 출력**
+   - Prefect worker 등 다른 머신에서 실행될 때, wandb가 sweep id 대신 경로나 다른 문구를 출력하고, 그게 그대로 파싱된 경우.
+
+그래서 **sweep_id가 실제로는 “entity/project/sweep_run_id”가 아니라 “Users/js/tasteam”으로 들어가고 있고**, 그걸 그대로 `split("/")` 해서 Pod env가 잘못 설정되는 상황입니다.
+
+---
+
+### 수정 제안 (코드 레벨)
+
+1. **sweep_id 검증**
+   - `run_sweep_on_pod_task`에서 `sweep_id`를 받은 뒤,  
+     경로처럼 보이면 파싱해서 쓰지 않고, **기본값만** 쓰기:
+   - 예: `sweep_id`에 `"Users"`가 들어가거나 `/`로 나눈 첫 부분이 경로 스타일(예: `Users`, `home` 등)이면  
+     `wandb_project = DEFAULT_WANDB_PROJECT`, `wandb_entity = os.environ.get("WANDB_ENTITY", "")` 로 고정.
+2. **register_sweep_task 파싱 강화**
+   - sweep id 패턴만 허용하도록 정규식을 좁히기:  
+     예를 들어 entity/project가 **wandb 스타일**(영문, 숫자, 하이픈 등)일 때만 매칭하고,  
+     `Users`, `home` 같은 경로 세그먼트는 제외.
+
+이렇게 하면 “Users/js/tasteam”이 들어와도 Pod env가 `WANDB_PROJECT=tasteam-distill`, `WANDB_ENTITY=jin-soo-none`처럼 올바르게 설정되고, sweep_id가 진짜 wandb id일 때만 파싱해서 쓸 수 있습니다.
+
+지금은 **Ask 모드**라 제가 직접 수정은 못 하니, Agent 모드로 바꿔 주시면 위 검증/파싱 로직을 코드에 반영해 드릴 수 있습니다.

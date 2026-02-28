@@ -591,15 +591,27 @@ def register_sweep_task(sweep_yaml_path: str | Path) -> str:
     out = (result.stdout or "") + (result.stderr or "")
     if result.returncode != 0:
         raise RuntimeError(f"wandb sweep failed (code={result.returncode}): {out}")
-    # wandb 출력 예: "Create sweep with ID: entity/project/xxxx" 또는 "Sweep ID: entity/project/xxxx"
-    match = re.search(r"(?:sweep with )?ID:\s*(\S+/\S+/\S+)", out, re.IGNORECASE)
-    if not match:
-        match = re.search(r"(\w+/\w+/[a-zA-Z0-9]+)", out)
-    if not match:
-        raise RuntimeError(f"Could not parse sweep id from wandb output: {out}")
-    sweep_id = match.group(1).strip()
-    logger.info("Parsed sweep_id: %s", sweep_id)
-    return sweep_id
+    # wandb 출력 예: "Create sweep with ID: entity/project/xxxx". 경로(Users/... 등)는 제외
+    _PATH_LIKE_ENTITIES = frozenset({"users", "home", "tmp", "opt", "var", "root"})
+
+    def _is_path_like(s: str) -> bool:
+        if not s or s.startswith("/"):
+            return True
+        parts = s.split("/")
+        return len(parts) < 3 or parts[0].lower() in _PATH_LIKE_ENTITIES
+
+    for pattern in [
+        r"(?:sweep with )?ID:\s*(\S+/\S+/\S+)",
+        r"(\w+/\w+/[a-zA-Z0-9]+)",
+    ]:
+        for m in re.finditer(pattern, out, re.IGNORECASE if "ID:" in pattern else 0):
+            sweep_id = m.group(1).strip()
+            if not _is_path_like(sweep_id):
+                logger.info("Parsed sweep_id: %s", sweep_id)
+                return sweep_id
+    raise RuntimeError(
+        f"Could not parse wandb sweep id from wandb output (path-like matches excluded). Output: {out[:500]}"
+    )
 
 
 @task(name="run-sweep-agent-task", log_prints=True)
@@ -655,9 +667,19 @@ def run_sweep_on_pod_task(
         raise RuntimeError(f"Upload labeled dir to volume failed: {e}") from e
 
     # sweep_id = entity/project/sweep_run_id → Pod에 동일 project/entity 전달해 404 방지
+    # 경로(Users/js/tasteam 등)가 넘어오면 파싱하지 않고 env/기본값 사용
+    _PATH_LIKE_ENTITIES = frozenset({"users", "home", "tmp", "opt", "var", "root"})
     parts = sweep_id.split("/")
-    wandb_project = parts[1] if len(parts) >= 2 else DEFAULT_WANDB_PROJECT
-    wandb_entity = parts[0] if len(parts) >= 2 else os.environ.get("WANDB_ENTITY", "")
+    if (
+        len(parts) >= 3
+        and not sweep_id.startswith("/")
+        and parts[0].lower() not in _PATH_LIKE_ENTITIES
+    ):
+        wandb_project = parts[1]
+        wandb_entity = parts[0]
+    else:
+        wandb_project = DEFAULT_WANDB_PROJECT
+        wandb_entity = os.environ.get("WANDB_ENTITY", "")
     payload = RunPodClient.get_default_pod_payload(use="train", docker_start_cmd=[sweep_id])
     payload["name"] = "sweep-pod"
     payload["dockerEntrypoint"] = ["python", "/app/scripts/run_qlora_sweep.py"]
