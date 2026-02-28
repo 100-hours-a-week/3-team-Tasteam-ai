@@ -99,7 +99,7 @@ def run_train(args: argparse.Namespace) -> None:
         from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
         from trl import SFTConfig, SFTTrainer
     except ImportError as e:
-        logger.error("Required: pip install datasets transformers peft bitsandbytes trl")
+        logger.error("Required: pip install datasets transformers peft bitsandbytes trl: %s", e)
         raise SystemExit(1) from e
 
     flow_run_id = os.environ.get("WANDB_RUN_ID") or os.environ.get("PREFECT_FLOW_RUN_ID", "")
