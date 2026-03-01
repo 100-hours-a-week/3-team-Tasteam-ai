@@ -781,7 +781,7 @@ def run_sweep_on_pod_task(
     sweep_id: str,
     labeled_path: str,
     output_dir: str,
-    pod_wait_timeout_sec: int = 600,
+    pod_wait_timeout_sec: int = 3600,
     sweep_timeout_sec: int = 90000,
     sweep_poll_interval_sec: int = 60,
     pod_index: int | None = None,
