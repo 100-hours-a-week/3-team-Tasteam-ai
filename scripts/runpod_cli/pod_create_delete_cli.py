@@ -174,7 +174,7 @@ class RunPodClient:
             "env": {"ENV_VAR": "value",**({"WANDB_API_KEY": os.environ["WANDB_API_KEY"]} if os.environ.get("WANDB_API_KEY") else {}),},
             "globalNetworking": False,
             "gpuCount": 1,
-            "gpuTypeIds": ["NVIDIA GeForce RTX 4090","NVIDIA GeForce RTX A5000"],
+            "gpuTypeIds": ["NVIDIA GeForce RTX 4090","NVIDIA RTX A5000"],
             "gpuTypePriority": "availability",
             "imageName": image_name,
             "interruptible": False,
