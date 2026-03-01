@@ -13,6 +13,7 @@ kd_qlora_prefect_wandb_strategy.md: report_to=wandb, WANDB_RUN_ID=flow_run_id.
 from __future__ import annotations
 
 import argparse
+import gc
 import json
 import logging
 import os
@@ -97,6 +98,16 @@ def run_train(args: argparse.Namespace) -> None:
     """QLoRA 학습 실행. CLI 인자 또는 sweep용 wandb.config에서 넘긴 args 사용."""
     args.labeled_path = Path(args.labeled_path)
     args.output_dir = Path(args.output_dir)
+
+    # 이전 run OOM 후 같은 프로세스에서 재시작 시 GPU 정리 (연쇄 실패 완화)
+    gc.collect()
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except ImportError:
+        pass
+
     try:
         from datasets import Dataset
         from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, EarlyStoppingCallback
@@ -185,6 +196,7 @@ def run_train(args: argparse.Namespace) -> None:
         run_name=flow_run_id or run_id,
         evaluation_strategy="steps" if eval_dataset is not None else "no",
         eval_steps=100 if eval_dataset is not None else None,
+        per_device_eval_batch_size=1 if eval_dataset is not None else None,
         load_best_model_at_end=eval_dataset is not None,
         metric_for_best_model="eval_loss" if eval_dataset is not None else None,
         greater_is_better=False,
