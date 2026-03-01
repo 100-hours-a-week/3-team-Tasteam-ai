@@ -86,7 +86,8 @@ def main() -> None:
     parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
     parser.add_argument("--grad-accum", type=int, default=DEFAULT_GRAD_ACCUM)
     parser.add_argument("--learning-rate", type=float, default=2e-5, help="Peak learning rate")
-    parser.add_argument("--eval-ratio", type=float, default=0.1, help="Fraction of data for eval (0 = no eval)")
+    parser.add_argument("--val-labeled-path", type=Path, default=None, help="val_labeled.json for eval (same dir as train_labeled). If absent, fall back to train split")
+    parser.add_argument("--eval-ratio", type=float, default=0.1, help="Fallback: fraction of train for eval when val_labeled.json absent (0 = no eval)")
     parser.add_argument("--warmup-ratio", type=float, default=0.03)
     parser.add_argument("--weight-decay", type=float, default=0.0)
     parser.add_argument("--early-stopping-patience", type=int, default=3, help="Stop after N evals without improvement")
@@ -163,11 +164,22 @@ def run_train(args: argparse.Namespace) -> None:
     ds = ds.map(lambda ex: fmt(ex), remove_columns=ds.column_names, desc="formatting")
 
     eval_dataset = None
-    if getattr(args, "eval_ratio", 0) > 0 and len(ds) >= 20:
+    val_labeled_path = getattr(args, "val_labeled_path", None)
+    if val_labeled_path is None:
+        val_labeled_path = args.labeled_path.parent / "val_labeled.json"
+    if val_labeled_path is not None:
+        val_path = Path(val_labeled_path)
+        if val_path.exists():
+            val_samples = _load_labeled(val_path)
+            if val_samples:
+                eval_dataset = Dataset.from_list([{"instruction": s["instruction"], "output": s["output"]} for s in val_samples])
+                eval_dataset = eval_dataset.map(lambda ex: fmt(ex), remove_columns=eval_dataset.column_names, desc="formatting val")
+                logger.info("Eval from val_labeled: %d samples", len(eval_dataset))
+    if eval_dataset is None and getattr(args, "eval_ratio", 0) > 0 and len(ds) >= 20:
         split = ds.train_test_split(test_size=args.eval_ratio, seed=42)
         ds = split["train"]
         eval_dataset = split["test"]
-        logger.info("Eval split: train=%d eval=%d", len(ds), len(eval_dataset))
+        logger.info("Eval split (fallback): train=%d eval=%d", len(ds), len(eval_dataset))
 
     run_id = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
     out_path = args.output_dir / "runs" / run_id

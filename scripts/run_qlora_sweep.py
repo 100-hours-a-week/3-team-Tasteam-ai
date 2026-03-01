@@ -44,10 +44,14 @@ def train() -> None:
             "WANDB_SWEEP_OUTPUT_DIR=distill_pipeline_output"
         )
 
+    labeled_dir = Path(labeled_path).parent
+    val_labeled_path = labeled_dir / "val_labeled.json"
+
     cfg = wandb.config
     args = SimpleNamespace(
         labeled_path=Path(labeled_path),
         output_dir=Path(output_dir),
+        val_labeled_path=val_labeled_path,
         student_model=cfg.get("student_model", "Qwen/Qwen2.5-0.5B-Instruct"),
         gold_oversample_ratio=float(cfg.get("gold_oversample_ratio", 0.25)),
         target_modules=cfg.get("target_modules", "q_proj,v_proj,k_proj,o_proj,gate_proj,up_proj,down_proj"),
