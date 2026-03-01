@@ -53,9 +53,11 @@ import argparse
 import json
 import logging
 import os
+import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import yaml
 from datetime import datetime
@@ -100,6 +102,64 @@ except ImportError:
     DEFAULT_VOLUME_ID = "v3i546pkrz"
 
 logger = logging.getLogger(__name__)
+
+# Ctrl+C/SIGTERM 시 생성된 RunPod Pod 정리 (control_c_not_shutdown_error.md)
+_CREATED_POD_IDS: list[str] = []
+_POD_IDS_LOCK = threading.Lock()
+_old_sigint_handler = None
+_old_sigterm_handler = None
+
+
+def _cleanup_pods_on_signal(signum, frame):
+    """SIGINT/SIGTERM 수신 시 이번 프로세스에서 생성한 Pod 일괄 삭제 후 기존 핸들러 호출."""
+    with _POD_IDS_LOCK:
+        ids = _CREATED_POD_IDS[:]
+        _CREATED_POD_IDS.clear()
+    if ids:
+        token = os.environ.get("RUNPOD_API_KEY")
+        if token and RunPodClient is not None:
+            client = RunPodClient(token=token)
+            for pod_id in ids:
+                try:
+                    client.delete_pod(pod_id)
+                    logger.info("Cleaned up pod %s (signal)", pod_id)
+                except Exception as e:
+                    logger.warning("Failed to delete pod %s: %s", pod_id, e)
+    if signum == signal.SIGINT:
+        if callable(_old_sigint_handler):
+            _old_sigint_handler(signum, frame)
+        else:
+            raise KeyboardInterrupt()
+    elif signum == signal.SIGTERM:
+        if callable(_old_sigterm_handler):
+            _old_sigterm_handler(signum, frame)
+        else:
+            raise SystemExit(128 + signum)
+
+
+def _register_pod_signal_handlers() -> None:
+    global _old_sigint_handler, _old_sigterm_handler
+    if RunPodClient is None:
+        return
+    _old_sigint_handler = signal.signal(signal.SIGINT, _cleanup_pods_on_signal)
+    try:
+        _old_sigterm_handler = signal.signal(signal.SIGTERM, _cleanup_pods_on_signal)
+    except (ValueError, OSError):
+        pass  # Windows 등에서 SIGTERM 미지원
+
+
+_register_pod_signal_handlers()
+
+
+def _track_pod_created(pod_id: str) -> None:
+    with _POD_IDS_LOCK:
+        _CREATED_POD_IDS.append(pod_id)
+
+
+def _untrack_pod(pod_id: str) -> None:
+    with _POD_IDS_LOCK:
+        if pod_id in _CREATED_POD_IDS:
+            _CREATED_POD_IDS.remove(pod_id)
 
 
 @task(name="build-dataset-task", log_prints=True)
@@ -283,6 +343,7 @@ def labeling_with_pod_task(
     payload = RunPodClient.get_default_pod_payload(use="labeling")
     pod = client.create_pod(payload)
     pod_id = pod["id"]
+    _track_pod_created(pod_id)
     print("Pod created:", pod_id)
 
     try:
@@ -331,6 +392,7 @@ def labeling_with_pod_task(
     finally:
         print("Cleaning up pod:", pod_id)
         client.delete_pod(pod_id)
+        _untrack_pod(pod_id)
 
 
 @flow(name="labeling_with_pod_flow", log_prints=True)
@@ -389,6 +451,7 @@ def labeling_pod_only_task(
     payload = RunPodClient.get_default_pod_payload(use="labeling")
     pod = client.create_pod(payload)
     pod_id = pod["id"]
+    _track_pod_created(pod_id)
     print("Pod created:", pod_id)
 
     try:
@@ -435,6 +498,7 @@ def labeling_pod_only_task(
     finally:
         print("Cleaning up pod:", pod_id)
         client.delete_pod(pod_id)
+        _untrack_pod(pod_id)
 
 
 @flow(name="labeling_pod_only_flow", log_prints=True)
@@ -511,6 +575,7 @@ def train_student_with_pod_task(
     client = RunPodClient(token=token)
     pod = client.create_pod(payload)
     pod_id = pod["id"]
+    _track_pod_created(pod_id)
     print("Train Pod created:", pod_id)
 
     try:
@@ -546,6 +611,7 @@ def train_student_with_pod_task(
     finally:
         print("Cleaning up train pod:", pod_id)
         client.delete_pod(pod_id)
+        _untrack_pod(pod_id)
 
 
 @flow(name="train_student_with_pod_flow", log_prints=True)
@@ -842,6 +908,7 @@ def run_sweep_on_pod_task(
     client = RunPodClient(token=token)
     pod = client.create_pod(payload)
     pod_id = pod["id"]
+    _track_pod_created(pod_id)
     logger.info("Sweep Pod created: %s (sweep_id=%s)", pod_id, sweep_id)
     try:
         client.wait_until_running(pod_id, timeout_sec=pod_wait_timeout_sec)
@@ -854,6 +921,7 @@ def run_sweep_on_pod_task(
     finally:
         logger.info("Cleaning up sweep pod: %s", pod_id)
         client.delete_pod(pod_id)
+        _untrack_pod(pod_id)
     return {"sweep_id": sweep_id, "labeled_path": labeled_path, "output_dir": output_dir}
 
 
@@ -1206,6 +1274,7 @@ def merge_adapter_with_pod_task(
     runpod_client = RunPodClient(token=token)
     pod = runpod_client.create_pod(payload)
     pod_id = pod["id"]
+    _track_pod_created(pod_id)
     logger.info("Merge Pod created: %s", pod_id)
 
     try:
@@ -1245,6 +1314,7 @@ def merge_adapter_with_pod_task(
     finally:
         logger.info("Cleaning up merge pod: %s", pod_id)
         runpod_client.delete_pod(pod_id)
+        _untrack_pod(pod_id)
 
 
 @flow(name="merge_for_serving_with_pod_flow", log_prints=True)
