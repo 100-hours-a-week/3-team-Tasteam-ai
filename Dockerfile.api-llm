@@ -1,0 +1,16 @@
+# API 추론용 RunPod Pod vLLM 이미지 (모델 없음, S3→네트워크 볼륨 사용)
+# - 볼륨 /workspace/merged 에 merged 모델이 있어야 기동. 없으면 엔트리포인트에서 exit 1.
+# - 빌드: docker build -f Dockerfile.api-llm -t <your-registry>/api-llm:latest .
+# - 실행 예: docker run --gpus all -p 8000:8000 --ipc=host -v /path/to/volume:/workspace <image>
+#
+FROM vllm/vllm-openai:v0.11.0
+
+ENV MODEL_PATH=/workspace/merged
+
+COPY scripts/runpod_api_inference_entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["--host", "0.0.0.0", "--port", "8000", "--max-model-len", "4096", "--tensor-parallel-size", "1", "--gpu-memory-utilization", "0.90"]
+
+EXPOSE 8000

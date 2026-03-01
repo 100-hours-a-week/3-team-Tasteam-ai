@@ -77,8 +77,9 @@
 |--------|------|------------------|
 | **Qdrant** | 벡터 저장·하이브리드 검색, 리뷰 조회. 로컬 경로 또는 원격 URL. | `QDRANT_URL`, `COLLECTION_NAME`, `QDRANT_VECTORS_ON_DISK` |
 | **Redis** | 캐시(LLM·감성·임베딩 결과), 분산 락, **RQ 작업 큐**(`BATCH_USE_QUEUE=true` 시). 미연결 시 캐시·락·큐 비활성. | `REDIS_HOST`, `REDIS_PORT`, `REDIS_DB`, `REDIS_PASSWORD` |
-| **OpenAI** | 요약·감성 재판정·비교 해석용 LLM (gpt-4o-mini 등). 429 시 RunPod vLLM 폴백 가능(`ENABLE_VLLM_FALLBACK_ON_RATE_LIMIT`). | `OPENAI_API_KEY`, `OPENAI_MODEL` |
-| **RunPod Pod vLLM** | LLM 1차 백엔드. `VLLM_POD_BASE_URL`로 직접 호출 (OpenAI 호환 /v1). 기본: `http://213.173.108.29:16366/v1`. **Pod만 사용** (Serverless 미사용). | `VLLM_POD_BASE_URL` |
+| **OpenAI** | 요약·감성 재판정·비교 해석용 LLM (gpt-4o-mini 등). 429/5xx 시 벤더 API 페일오버(Gemini) 가능(`GEMINI_API_KEY`). | `OPENAI_API_KEY`, `OPENAI_MODEL`, `GEMINI_API_KEY` |
+| **LLM 제공자** | `LLM_PROVIDER`: `openai`(API 전용), `runpod`(Pod vLLM), `local`(로컬 모델). 미설정 시 기본 `openai`. RunPod 사용 시 `VLLM_POD_BASE_URL`로 직접 호출. | `LLM_PROVIDER`, `VLLM_POD_BASE_URL` |
+| **RunPod Pod vLLM** | LLM 1차 백엔드(Provider=runpod 시). `VLLM_POD_BASE_URL`로 직접 호출 (OpenAI 호환 /v1). 기본 예: `http://213.173.108.70:17517/v1`. **Pod만 사용** (Serverless 미사용). | `VLLM_POD_BASE_URL` |
 
 **RunPod Serverless 미사용 이유** (`docs/runpod/why_dont_use_runpod_serverless.md`): Serverless는 요청 없을 때 워커가 종료되어 Ephemeral이며, Prometheus pull 기반 스크래핑 대상이 불안정함. Pod는 항상 떠 있어 고정 IP·지속적 메트릭 수집에 적합.
 
@@ -270,7 +271,7 @@
 
 ### 8.5 배치 실행 주체 분리 (오프라인 배치)
 
-배치 작업이 API 프로세스를 과부하시키지 않도록, **실행 주체를 분리**합니다. **RQ 방식만** 사용합니다.
+배치 작업이 API 프로세스를 과부하시키지 않도록, **실행 주체를 분리**합니다. **RQ 방식만** 사용합니다. 배치 처리 시 LLM 추론에는 **훈련이 끝난(서빙용) 모델**을 사용하며, 해당 vLLM Pod는 **GPU A40**을 사용하도록 명시한다(§6.1 GPU 용도별 지정 참고).
 
 | 방식 | 설명 | 사용 |
 |------|------|------|
@@ -625,6 +626,61 @@ GET /api/v1/batch/status/{job_id} → 결과 조회
 - **Summary**는 긍정/부정 비율을 세지 않고 **요약만** 생성하며, **Sentiment**가 비율을 담당합니다.
 - **Comparison**은 Vector에 적재된 리뷰를 조회한 뒤 Kiwi(+Spark)로 service/price 긍정 비율을 구하고, 전체 평균과 비교해 lift와 LLM 설명을 만듭니다.
 
+### 6.1 디스틸·학습 파이프라인 (RunPod, API 외부)
+
+요약 KD·QLoRA 학습은 **Prefect flows**와 **RunPod Pod**로 실행되며, 메인 FastAPI API와는 별도 스크립트입니다.
+
+| 항목 | 내용 |
+|------|------|
+| **오케스트레이션** | Prefect (`scripts/distill_flows.py`): **all** = build_dataset → labeling(Pod) → train_student(Pod, 단일 run) → evaluate → merge. **all_sweep** = 동일하되 학습은 Pod에서 sweep(여러 run) 실행 후 best adapter는 wandb artifact에서 수급. §6.1.1·6.1.2 참고. `docs/easydistill/distill_with_prefect.md` |
+| **학습 실행** | RunPod Pod에서 Docker 이미지(`Dockerfile.train-llm`, `jinsoo1218/train-llm`)로 `train_qlora.py` 실행. Network Volume `/workspace`에 데이터·어댑터 저장. |
+| **스토리지** | RunPod Network Volume. Pod 없이 파일 접근은 **S3 호환 API**(`aws s3 --endpoint-url https://s3api-eu-ro-1.runpod.io`) 사용. 학습용: `v3i546pkrz`(distill_train_net_vol.md), 라벨링 vLLM용: `b4zdzi0haz`(labelling_net_vol.md). |
+| **관련 문서** | `docs/runpod_cli/runpod_net_vol_s3_api.md`, `docs/runpod_cli/distill_train_net_vol.md`, `docs/runpod_cli/vllm_net_vol.md`, `docs/easydistill/distill_strategy.md` |
+
+**GPU 용도별 지정**
+
+| 용도 | GPU | 비고 |
+|------|-----|------|
+| **훈련** (train Pod, sweep Pod) | **RTX 4090** | QLoRA 등 학습 전용 Pod. |
+| **라벨링** (labeling Pod) | **RTX 5090** | Teacher vLLM 추론. |
+| **배치 처리** (vLLM 추론 Pod) | **A40** | 배치 작업 시 사용하는 LLM은 **훈련이 끝난(서빙용) 모델**이다. |
+
+#### 6.1.1 파이프라인 종류: all vs all_sweep
+
+| 플로우 | 단계 | 학습 실행 위치 |
+|--------|------|----------------|
+| **all** | build_dataset → labeling(Pod) → **train_student_with_pod**(단일 run) → evaluate → merge | 학습용 Pod에서 **한 번** QLoRA 학습 (`train_qlora.py`). adapter는 Pod 볼륨에서 다운로드. |
+| **all_sweep** | build_dataset → labeling(Pod) → **run_sweep_and_evaluate**(use_pod=True) → merge | 학습용 Pod에서 **sweep** 실행. 아래 §6.1.2 참고. |
+
+실행 예: `python scripts/distill_flows.py all`, `python scripts/distill_flows.py all_sweep [--sweep-id ...]`.
+
+#### 6.1.2 Sweep on Pod (all_sweep)
+
+**Sweep**이란 wandb에서 정의한 하이퍼파라미터 조합들에 대해 **여러 번의 학습(run)**을 수행하는 단위입니다. **Pod에서 sweep을 한다** = **한 Pod 안에서 wandb agent가 run 1 → run 2 → … 순서대로 여러 번 학습**을 진행하는 것을 의미합니다.
+
+| 항목 | 내용 |
+|------|------|
+| **등록** | `register_sweep_task(sweep_yaml)`로 wandb에 sweep 등록 후 `sweep_id` 획득. |
+| **실행** | `run_sweep_on_pod_task(sweep_id, labeled_path, output_dir)`: 라벨 디렉터리를 학습용 Network Volume에 업로드 → 학습용 이미지로 Pod 생성 (`dockerEntrypoint`: `python /app/scripts/run_qlora_sweep.py`, `dockerStartCmd`: `[sweep_id]`) → Pod RUNNING 대기 → **Pod가 종료될 때까지** 대기(`wait_until_stopped`, 기본 4시간) → Pod 삭제. |
+| **Pod 내 동작** | 컨테이너 진입점은 `run_qlora_sweep.py`(wandb agent). 동일 Pod에서 sweep에 할당된 여러 run을 **순차 실행**. 각 run은 QLoRA 학습 후 adapter를 wandb artifact로 업로드. |
+| **Best adapter** | Pod 디스크가 아닌 **wandb artifact**에서 수급. `get_best_adapter_from_artifact_task(sweep_id, download_dir, metric_name="train/loss")`로 sweep의 best run을 조회한 뒤 해당 run의 `qlora-adapter-{run_id}` artifact를 다운로드. |
+| **이어지는 단계** | `run_sweep_and_evaluate_flow(use_pod=True)`는 sweep(Pod) 완료 후 위 task로 best adapter를 받아 로컬에서 `evaluate_flow` 실행. `distill_pipeline_all_sweep`은 이 flow를 `use_pod=True`로 호출한 뒤, best adapter가 있으면 `merge_for_serving_flow`까지 수행. |
+
+요약: **all_sweep**은 로컬이 아닌 **한 대의 학습용 Pod**에서 sweep 전체(여러 run)를 실행하고, best adapter는 wandb artifact로 받아 로컬에서 평가·merge 합니다.
+
+### 6.2 DeepFM 파이프라인 (추천/CTR, API 외부)
+
+**CTR 예측·개인화 랭킹**용 DeepFM 학습은 메인 FastAPI API·디스틸 파이프라인과 **독립**적으로 동작합니다. 생성형 LLM이 아니며 EasyDistill KD와는 부적합합니다.
+
+| 항목 | 내용 |
+|------|------|
+| **역할** | 사용자·아이템·컨텍스트 피처 → **스칼라 점수(클릭률 등)** 예측. 주변 맛집 후보를 **개인화 랭킹**하는 스코어러로 사용. |
+| **오케스트레이션** | Prefect (`deepfm_training/training_flow.py`): `deepfm_training_flow` — 전처리 → 학습 → 모델 저장. |
+| **모델** | PyTorch DeepFM (FM + DNN). Criteo 형식 데이터. `deepfm_training/model/DeepFM.py`. |
+| **데이터** | `deepfm_training/data/raw/` (train.txt, test.txt). 전처리 결과는 `data/`에 생성. 학습 결과는 `output/<run_id>/model.pt`. |
+| **실행** | 로컬: `python deepfm_training/training_flow.py`. Docker: `Dockerfile.deepfm` → `deepfm-training` 이미지. |
+| **관련 문서** | `docs/prefect/deepfm_training_pipeline.md`, `docs/prefect/prefect_designe.md`, `deepfm_training/deepfm_tasteam.md`(tasteam 서비스 관점·피처 설계·랭킹 역할), `docs/easydistill/learning_method_fit.md`(DeepFM은 LLM 증류 부적합 명시). |
+
 ---
 
 ## 14. 설정(Config) 전체 요약
@@ -675,6 +731,7 @@ GET /api/v1/batch/status/{job_id} → 결과 조회
 | **Summary** | api/routers/llm.py | _get_seed_list_for_restaurant(음식점별 recall seed), _retrieve_category_hits_accuracy_first, _process_one_restaurant_async, _batch_summarize_async | summary_pipeline.py(summarize_aspects_new, _async), comparison_pipeline(compute_recall_seeds_from_reviews, recall_seeds_to_seed_lists), vector_search, config, models |
 | **Comparison** | api/routers/llm.py | ComparisonPipeline.compare, compare_batch | comparison.py, comparison_pipeline.py(calculate_single_restaurant_ratios, calculate_comparison_lift, calculate_all_average_ratios_from_file/from_reviews, format_comparison_display, _spark_calculate_ratios, _python_calculate_ratios), vector_search, llm_utils, config, models |
 | **Batch (큐)** | api/routers/batch.py | POST /batch/enqueue, GET /batch/status/{job_id} | queue_tasks.py(run_*_batch_job, run_all_batch_job), scripts/rq_worker.py, scripts/trigger_offline_batch.py |
+| **DeepFM (API 외부)** | — | Prefect flow. `deepfm_training/training_flow.py`(deepfm_training_flow), `main.py` | model/DeepFM.py, data/raw, output. §6.2 참고. |
 
 **공통**: api/main.py, api/dependencies.py, config.py, models.py, cache.py(acquire_lock), metrics_collector.py, metrics_db.py.
 
@@ -771,3 +828,4 @@ GET /api/v1/batch/status/{job_id} → 결과 조회
 - **RunPod Pod vs Serverless**: [why_dont_use_runpod_serverless.md](../runpod/why_dont_use_runpod_serverless.md) — Serverless 미사용 이유 (Ephemeral, Prometheus 스크래핑 불안정 등). Pod만 사용.
 - **오프라인 배치 전략**: [offline_batch_strategy.md](../batch/offline_batch_strategy.md) — RQ 워커, 작업 큐·재시도·DLQ, 버전별 SKIP.
 - **오프라인 배치 사용법**: [offline_batch_processing.md](../batch/offline_batch_processing.md) — 트리거, ingestion, 단일 레스토랑, enqueue 예시.
+- **DeepFM 학습 파이프라인**: [deepfm_training_pipeline.md](../prefect/deepfm_training_pipeline.md) — Prefect flow, 실행·배포. [deepfm_tasteam.md](../../deepfm_training/deepfm_tasteam.md) — tasteam 서비스 관점·랭킹·피처 설계.

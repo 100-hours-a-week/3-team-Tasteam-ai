@@ -17,6 +17,11 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from .config import Config
 from .json_parse_utils import parse_json_relaxed
+from .llm_failover_router import (
+    LLMFailoverRouter,
+    build_gemini_provider,
+    build_openai_provider,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -76,10 +81,8 @@ class LLMUtils:
         self.openai_client = None
         self.openai_model = None
         self.use_openai_as_fallback = False
-        # 429 폴백을 RunPod GPU(vLLM 엔드포인트)로 할 경우 사용 (인프로세스 vLLM 제거됨)
-        self._vllm_fallback_via_runpod = False
-        self._vllm_fallback_endpoint_id: Optional[str] = None
-        self._vllm_fallback_api_key: Optional[str] = None
+        # 벤더 API 페일오버: OpenAI 429/5xx 시 Gemini로 전환 (self-hosted RunPod Serverless 폴백은 제거됨)
+        self._failover_router = None
 
         # LLM_PROVIDER 우선순위 적용
         if self.llm_provider == "openai":
@@ -113,22 +116,7 @@ class LLMUtils:
             logger.warning("ENABLE_OPENAI_FALLBACK이 활성화되었지만 OPENAI_API_KEY가 설정되지 않았습니다.")
         
         if self.use_openai:
-            # OpenAI 429 폴백을 RunPod GPU로 할 경우: 인프로세스 vLLM 대신 RunPod Serverless 사용
-            if (
-                Config.ENABLE_VLLM_FALLBACK_ON_RATE_LIMIT
-                and getattr(Config, "VLLM_USE_RUNPOD_GPU", False)
-                and Config.RUNPOD_API_KEY
-            ):
-                self._vllm_fallback_via_runpod = True
-                self._vllm_fallback_endpoint_id = (
-                    getattr(Config, "RUNPOD_VLLM_ENDPOINT_ID", None) or Config.RUNPOD_ENDPOINT_ID
-                )
-                self._vllm_fallback_api_key = Config.RUNPOD_API_KEY
-                logger.info(
-                    "OpenAI 429 폴백: RunPod GPU(vLLM) 사용, endpoint=%s",
-                    self._vllm_fallback_endpoint_id,
-                )
-            # OpenAI API 사용
+            # OpenAI API 사용 (페일오버: Config.LLM_FAILOVER_ENABLED + GEMINI_API_KEY 시 LLMFailoverRouter 사용)
             if not Config.OPENAI_API_KEY:
                 raise ValueError(
                     "OPENAI_API_KEY 환경변수가 설정되지 않았습니다. "
@@ -255,6 +243,20 @@ class LLMUtils:
             self.model.eval()
             logger.info(f"✅ 로컬 Qwen 모델 로딩 완료: {model_name}")
     
+    def _get_failover_router(self) -> Optional[LLMFailoverRouter]:
+        """페일오버 라우터 지연 초기화. GEMINI_API_KEY 있으면 OpenAI+Gemini 구성."""
+        if self._failover_router is not None:
+            return self._failover_router
+        if not Config.LLM_FAILOVER_ENABLED or not Config.GEMINI_API_KEY or not Config.OPENAI_API_KEY:
+            return None
+        providers = [
+            build_openai_provider(Config.OPENAI_API_KEY, self.openai_model),
+            build_gemini_provider(Config.GEMINI_API_KEY, Config.GEMINI_MODEL),
+        ]
+        self._failover_router = LLMFailoverRouter(providers=providers)
+        logger.info("벤더 API 페일오버 활성화: OpenAI → Gemini")
+        return self._failover_router
+
     def _is_openai_rate_limit(self, e: Exception) -> bool:
         """OpenAI 429 Rate limit 예외 여부."""
         if e is None:
@@ -613,17 +615,28 @@ class LLMUtils:
         """
         # Router: OpenAI 전용 모드
         if self.use_openai:
-            # OpenAI API 사용 (빠른 검증용)
+            router = self._get_failover_router()
+            if router:
+                try:
+                    out = router.chat(
+                        messages=messages,
+                        temperature=temperature,
+                        max_tokens=max_new_tokens,
+                        response_format={"type": "json_object"},
+                    )
+                    self.last_tokens_used = None
+                    return out
+                except Exception as e:
+                    self.last_tokens_used = None
+                    raise
             try:
-                # JSON 스키마 강제 (OpenAI API 지원)
                 response = self.openai_client.chat.completions.create(
                     model=self.openai_model,
                     messages=messages,
                     temperature=temperature,
                     max_tokens=max_new_tokens,
-                    response_format={"type": "json_object"},  # JSON 출력 강제
+                    response_format={"type": "json_object"},
                 )
-                # 토큰 사용량 추출 및 저장
                 if hasattr(response, 'usage') and response.usage:
                     self.last_tokens_used = response.usage.total_tokens
                 else:
@@ -687,6 +700,21 @@ class LLMUtils:
         OpenAI: AsyncOpenAI 사용. RunPod: httpx.AsyncClient 사용.
         """
         if self.use_openai:
+            router = self._get_failover_router()
+            if router:
+                try:
+                    out = await router.chat_async(
+                        messages=messages,
+                        temperature=temperature,
+                        max_tokens=max_new_tokens,
+                        response_format={"type": "json_object"},
+                        top_p=top_p,
+                    )
+                    self.last_tokens_used = None
+                    return out
+                except Exception as e:
+                    self.last_tokens_used = None
+                    raise
             try:
                 from openai import AsyncOpenAI
                 client = AsyncOpenAI(api_key=Config.OPENAI_API_KEY)
@@ -707,21 +735,6 @@ class LLMUtils:
                 return response.choices[0].message.content.strip()
             except Exception as e:
                 self.last_tokens_used = None
-                if self._is_openai_rate_limit(e) and Config.ENABLE_VLLM_FALLBACK_ON_RATE_LIMIT:
-                    if getattr(self, "_vllm_fallback_via_runpod", False):
-                        logger.warning("OpenAI rate limit (429), RunPod vLLM 폴백 시도: %s", e)
-                        try:
-                            return await self._call_runpod_openai_async(
-                                messages,
-                                temperature=temperature,
-                                max_new_tokens=max_new_tokens,
-                                endpoint_id=self._vllm_fallback_endpoint_id,
-                                api_key=self._vllm_fallback_api_key,
-                            )
-                        except Exception as fallback_e:
-                            logger.error("RunPod vLLM 폴백 실패: %s", fallback_e)
-                            raise e
-                    raise
                 raise
         else:
             try:

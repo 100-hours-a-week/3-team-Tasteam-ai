@@ -72,14 +72,22 @@ class _InferenceConfig:
     # credentials (비밀은 .env)
     OPENAI_API_KEY: Optional[str] = os.getenv("OPENAI_API_KEY")
     ENABLE_OPENAI_FALLBACK: bool = os.getenv("ENABLE_OPENAI_FALLBACK", "false").lower() == "true"
-    # OpenAI 429 시 vLLM(Qwen2.5-7B 등)으로 폴백. true면 429 발생 시 vLLM 단일 요청 생성 시도(지연 초기화).
+    # 벤더 API 페일오버 (failover_router_strategy.md): OpenAI 429/5xx 시 Gemini 등 다른 벤더로 전환
+    GEMINI_API_KEY: Optional[str] = os.getenv("GEMINI_API_KEY")
+    GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+    LLM_FAILOVER_ENABLED: bool = bool(os.getenv("GEMINI_API_KEY", "").strip())
+    
+    # [Deprecated] OpenAI 429 시 self-hosted vLLM 폴백 → 현재는 벤더 API(LLMFailoverRouter) 페일오버로 대체됨
     ENABLE_VLLM_FALLBACK_ON_RATE_LIMIT: bool = os.getenv("ENABLE_VLLM_FALLBACK_ON_RATE_LIMIT", "false").lower() == "true"
-    # vLLM(폴백·1차) 사용 시 RunPod Serverless GPU 사용. true면 요청 시 GPU 기동·유휴 시 스케일다운(비용 절감). 대상: RunPod.
-    VLLM_USE_RUNPOD_GPU: bool = os.getenv("VLLM_USE_RUNPOD_GPU", "false").lower() == "true"
+    
+    # runpod serverless
+    # [Deprecated] vLLM 폴백 시 RunPod Serverless 사용 → 벤더 API 페일오버(GEMINI_API_KEY)로 대체됨
+    #VLLM_USE_RUNPOD_GPU: bool = os.getenv("VLLM_USE_RUNPOD_GPU", "false").lower() == "true"
     # RunPod vLLM 전용 엔드포인트 ID. 미설정 시 RUNPOD_ENDPOINT_ID 사용.
-    RUNPOD_VLLM_ENDPOINT_ID: Optional[str] = (os.getenv("RUNPOD_VLLM_ENDPOINT_ID", "2mpd5y6lvccfk1") or "").strip() or None
+    #RUNPOD_VLLM_ENDPOINT_ID: Optional[str] = (os.getenv("RUNPOD_VLLM_ENDPOINT_ID", "2mpd5y6lvccfk1") or "").strip() or None
+    #RUNPOD_ENDPOINT_ID: str = (os.getenv("RUNPOD_ENDPOINT_ID", "2mpd5y6lvccfk1") or "").strip() or "2mpd5y6lvccfk1"
+
     RUNPOD_API_KEY: Optional[str] = os.getenv("RUNPOD_API_KEY")
-    RUNPOD_ENDPOINT_ID: str = (os.getenv("RUNPOD_ENDPOINT_ID", "2mpd5y6lvccfk1") or "").strip() or "2mpd5y6lvccfk1"
     USE_RUNPOD: bool = os.getenv("USE_RUNPOD", "true").lower() == "true"
     RUNPOD_POLL_INTERVAL: int = int(os.getenv("RUNPOD_POLL_INTERVAL", "2"))
     RUNPOD_MAX_WAIT_TIME: int = int(os.getenv("RUNPOD_MAX_WAIT_TIME", "300"))

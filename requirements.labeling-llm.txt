@@ -1,0 +1,18 @@
+# 라벨링 전용 의존성 (scripts/label_for_distill.py)
+# CPU 환경 가능. LLM 호출은 OpenAI API 또는 RunPod vLLM HTTP 사용.
+# LLMUtils import를 위해 torch/transformers 필요 (실제 추론은 HTTP).
+#
+# 사용: pip install -r requirements.labeling-llm.txt
+# Docker: Dockerfile.labeling-llm
+
+# PyTorch CPU (LLMUtils import용, Dockerfile에서 --index-url https://download.pytorch.org/whl/cpu)
+# torch>=2.0.0
+
+# LLM API / src.llm_utils
+transformers>=4.30.0
+openai>=1.0.0
+requests>=2.31.0
+httpx>=0.25.0
+
+# 유틸
+python-dotenv>=1.0.0
