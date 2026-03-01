@@ -68,3 +68,46 @@ create pod: Something went wrong. Please try again later or contact support.
 RunPod 대시보드
 해당 계정/리전에서 GPU/인스턴스 한도, 에러 메시지가 있는지 확인.
 필요하면 RunPod 지원에 500 응답과 요청 시각을 알려 문의.
+
+---
+
+no instace error
+
+---
+
+
+터미널 로그 기준으로 정리하면 아래와 같습니다.
+
+## 실행 요약
+
+- **명령**: `sweep_eval_merge --num-pods 2`
+- **진행**: sweep 등록(6iabx68i) → 라벨 볼륨 업로드 → **Pod 2개 생성 시도** → 둘 다 실패
+
+## 원인: RunPod 인스턴스 부족
+
+에러 메시지:
+
+```text
+'error': 'create pod: There are no instances currently available'
+```
+
+즉, **요청한 GPU 타입/리전에 지금 쓸 수 있는 인스턴스가 없다**는 뜻입니다.  
+코드나 Prefect 쪽 문제가 아니라, RunPod 쪽 **용량/가용성** 이슈입니다.
+
+## 참고
+
+- 이전에 봤던 `Something went wrong. Please try again later` 와는 다르게, 이번에는 **“지금 인스턴스 없음”** 이라고 명시돼 있습니다.
+- `num-pods 2`라서 **동시에 2개** 생성 요청이 나갔고, 둘 다 같은 이유로 500을 받은 상태입니다.
+
+## 대응 제안
+
+1. **시간을 두고 재시도**  
+   - 잠시 후(몇 분~몇십 분) 같은 명령 다시 실행.
+2. **RunPod 대시보드 확인**  
+   - 요청한 GPU 타입/리전의 가용량, 대기/예약 옵션 확인.
+3. **GPU 타입/리전 완화**  
+   - `get_default_pod_payload(use="train")` 에서 쓰는 GPU가 너무 인기 있는 타입이면, 다른 타입이나 리전을 쓰도록 payload를 바꿔보기.
+4. **우선 1개만 생성해 보기**  
+   - `--num-pods 1` 로 한 번만 생성되는지 확인해 보면, “동시 2개” 부담을 줄일 수 있습니다.
+
+원하면 `runpod_api_500.md` 같은 문서에 **“There are no instances currently available”** 케이스를 추가하는 문장도 같이 정리해 줄 수 있습니다.
