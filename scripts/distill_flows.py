@@ -744,6 +744,16 @@ def register_sweep_task(sweep_yaml_path: str | Path) -> str:
     return sweep_id
 
 
+@task(name="upload-labeled-to-volume-for-sweep-task", log_prints=True)
+def upload_labeled_to_volume_for_sweep_task(labeled_path: str) -> dict:
+    """멀티 Pod 시 라벨 디렉터리를 볼륨에 한 번만 업로드. run_sweep_on_pod_task(skip_upload=True)와 함께 사용."""
+    if not upload_labeled_dir_to_runpod:
+        raise RuntimeError("upload_labeled_dir_to_runpod required.")
+    labeled_dir = Path(labeled_path).parent
+    upload_labeled_dir_to_runpod(labeled_dir, volume_id=_get_train_volume_id())
+    return {"labeled_path": labeled_path}
+
+
 @task(name="run-sweep-agent-task", log_prints=True)
 def run_sweep_agent_task(
     sweep_id: str,
@@ -772,13 +782,17 @@ def run_sweep_on_pod_task(
     labeled_path: str,
     output_dir: str,
     pod_wait_timeout_sec: int = 600,
-    sweep_timeout_sec: int = 46800,
+    sweep_timeout_sec: int = 90000,
     sweep_poll_interval_sec: int = 60,
+    pod_index: int | None = None,
+    skip_upload: bool = False,
 ) -> dict:
     """
     학습용 Pod에서 wandb sweep 에이전트 실행 (run_qlora_sweep.py).
-    볼륨에 라벨 업로드 → Pod 생성(ENTRYPOINT/CMD 오버라이드) → Pod 종료까지 대기 → Pod 삭제.
+    볼륨에 라벨 업로드(skip_upload=False 시) → Pod 생성(ENTRYPOINT/CMD 오버라이드) → Pod 종료까지 대기 → Pod 삭제.
     완료 후 adapter는 wandb artifact에서 get_best_adapter_from_artifact_task로 수급.
+    pod_index: 멀티 Pod 시 Pod 이름 고유화용 (sweep-pod-0, sweep-pod-1, ...).
+    skip_upload: True면 업로드 생략 (멀티 Pod에서 업로드는 flow에서 한 번만 수행).
     """
     if RunPodClient is None:
         raise RuntimeError("RunPodClient not available.")
@@ -791,10 +805,11 @@ def run_sweep_on_pod_task(
     labeled_dir = Path(labeled_path).parent
     version = labeled_dir.name
     path_on_volume = f"/workspace/labeled/{version}/train_labeled.json"
-    try:
-        upload_labeled_dir_to_runpod(labeled_dir, volume_id=_get_train_volume_id())
-    except Exception as e:
-        raise RuntimeError(f"Upload labeled dir to volume failed: {e}") from e
+    if not skip_upload:
+        try:
+            upload_labeled_dir_to_runpod(labeled_dir, volume_id=_get_train_volume_id())
+        except Exception as e:
+            raise RuntimeError(f"Upload labeled dir to volume failed: {e}") from e
 
     # sweep_id = entity/project/sweep_run_id → Pod에 동일 project/entity 전달해 404 방지
     # 경로(Users/js/tasteam 등)가 넘어오면 파싱하지 않고 env/기본값 사용
@@ -811,7 +826,7 @@ def run_sweep_on_pod_task(
         wandb_project = DEFAULT_WANDB_PROJECT
         wandb_entity = os.environ.get("WANDB_ENTITY", "")
     payload = RunPodClient.get_default_pod_payload(use="train", docker_start_cmd=[sweep_id])
-    payload["name"] = "sweep-pod"
+    payload["name"] = f"sweep-pod-{pod_index}" if pod_index is not None else "sweep-pod"
     payload["dockerEntrypoint"] = ["python", "/app/scripts/run_qlora_sweep.py"]
     payload["dockerStartCmd"] = [sweep_id]
     base_env = payload.get("env") or {}
@@ -947,15 +962,32 @@ def run_sweep_and_evaluate_flow(
     test_labeled_path: str | None = None,
     base_model: str = "Qwen/Qwen2.5-0.5B-Instruct",
     use_pod: bool = True,
+    num_pods: int = 1,
 ) -> dict:
-    """sweep 실행(use_pod=True 시 Pod에서, False 시 로컬 subprocess) → best adapter를 wandb artifact에서 다운로드 → evaluate. sweep_id 없으면 sweep_yaml으로 등록."""
+    """sweep 실행(use_pod=True 시 Pod에서, False 시 로컬 subprocess) → best adapter를 wandb artifact에서 다운로드 → evaluate. sweep_id 없으면 sweep_yaml으로 등록. num_pods>1이면 동일 sweep_id로 N개 Pod 동시 실행(멀티 Pod)."""
     if sweep_id is None:
         ensure_wandb_project_task(project=DEFAULT_WANDB_PROJECT, entity=os.environ.get("WANDB_ENTITY"))
         yaml_path = sweep_yaml if sweep_yaml is not None else DEFAULT_SWEEP_YAML
         sweep_id = register_sweep_task(yaml_path)
     out_dir = str(output_dir) if output_dir else str(_PROJECT_ROOT / "distill_pipeline_output")
     if use_pod:
-        run_sweep_on_pod_task(sweep_id=sweep_id, labeled_path=labeled_path, output_dir=out_dir)
+        if num_pods > 1:
+            # 멀티 Pod: 라벨 한 번만 업로드 후 N개 Pod 동시 생성·대기 (gpu_parallel.md 권장 2~3)
+            upload_labeled_to_volume_for_sweep_task(labeled_path)
+            futures = [
+                run_sweep_on_pod_task.submit(
+                    sweep_id=sweep_id,
+                    labeled_path=labeled_path,
+                    output_dir=out_dir,
+                    pod_index=i,
+                    skip_upload=True,
+                )
+                for i in range(num_pods)
+            ]
+            for f in futures:
+                f.result()
+        else:
+            run_sweep_on_pod_task(sweep_id=sweep_id, labeled_path=labeled_path, output_dir=out_dir)
     else:
         run_sweep_agent_task(sweep_id=sweep_id, labeled_path=labeled_path, output_dir=out_dir)
     best_adapter = get_best_adapter_from_artifact_task(
@@ -1288,8 +1320,9 @@ def distill_pipeline_all_sweep(
     public_ip_wait_timeout_sec: int = 180,
     vllm_ready_timeout_sec: int = 180,
     student_model: str = "Qwen/Qwen2.5-0.5B-Instruct",
+    num_pods: int = 1,
 ) -> dict:
-    """build_dataset → labeling(Pod) → run_sweep → best run adapter로 evaluate. sweep_id 없으면 sweep_yaml으로 등록 후 실행."""
+    """build_dataset → labeling(Pod) → run_sweep → best run adapter로 evaluate. sweep_id 없으면 sweep_yaml으로 등록 후 실행. num_pods>1이면 멀티 Pod."""
     out_dir = Path(out_dir or _PROJECT_ROOT / "distill_pipeline_output")
     input_path = Path(input_path or _PROJECT_ROOT / "tasteam_app_all_review_data.json")
 
@@ -1312,6 +1345,7 @@ def distill_pipeline_all_sweep(
         test_labeled_path=lb.get("test_labeled_path"),
         base_model=student_model,
         use_pod=True,
+        num_pods=num_pods,
     )
     merge_result = None
     if sweep_ev.get("best_adapter_path"):
@@ -1357,8 +1391,9 @@ def sweep_eval_merge_flow(
     sweep_yaml: str | Path | None = None,
     output_dir: str | Path | None = None,
     student_model: str = "Qwen/Qwen2.5-0.5B-Instruct",
+    num_pods: int = 1,
 ) -> dict:
-    """Pod에서 sweep → best adapter로 evaluate → merge. build_dataset, labeling은 건너뜀."""
+    """Pod에서 sweep → best adapter로 evaluate → merge. build_dataset, labeling은 건너뜀. num_pods>1이면 멀티 Pod."""
     out_dir = Path(output_dir or _PROJECT_ROOT / "distill_pipeline_output")
     sweep_ev = run_sweep_and_evaluate_flow(
         labeled_path=labeled_path,
@@ -1369,6 +1404,7 @@ def sweep_eval_merge_flow(
         test_labeled_path=test_labeled_path,
         base_model=student_model,
         use_pod=True,
+        num_pods=num_pods,
     )
     merge_result = None
     if sweep_ev.get("best_adapter_path"):
@@ -1404,6 +1440,7 @@ def main() -> None:
     parser.add_argument("--public-ip-wait-timeout", type=int, default=180, help="publicIp 할당 대기 초 (labeling_with_pod, labeling_pod_only)")
     parser.add_argument("--vllm-ready-timeout", type=int, default=180, help="vLLM /v1/models 준비 대기 초 (labeling_with_pod, labeling_pod_only)")
     parser.add_argument("--student-model", type=str, default="Qwen/Qwen2.5-0.5B-Instruct", help="Student model")
+    parser.add_argument("--num-pods", type=int, default=1, help="sweep 시 동시 Pod 개수 (sweep_eval_merge, all_sweep; gpu_parallel.md 권장 2~3)")
     args = parser.parse_args()
 
     out_dir = Path(args.out_dir or _PROJECT_ROOT / "distill_pipeline_output")
@@ -1504,6 +1541,7 @@ def main() -> None:
             sweep_yaml=sweep_yaml,
             output_dir=out_dir,
             student_model=args.student_model,
+            num_pods=args.num_pods,
         )
         print("Result keys:", list(result.keys()))
         if result.get("merge_for_serving"):
@@ -1579,6 +1617,7 @@ def main() -> None:
             public_ip_wait_timeout_sec=args.public_ip_wait_timeout,
             vllm_ready_timeout_sec=args.vllm_ready_timeout,
             student_model=args.student_model,
+            num_pods=args.num_pods,
         )
         print("Result keys:", list(result.keys()))
 

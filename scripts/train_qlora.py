@@ -181,7 +181,16 @@ def run_train(args: argparse.Namespace) -> None:
         eval_dataset = split["test"]
         logger.info("Eval split (fallback): train=%d eval=%d", len(ds), len(eval_dataset))
 
-    run_id = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    # 멀티 Pod/sweep 병렬 시 run별 출력 충돌 방지: wandb.run.id 기준 run 디렉터리 사용 (gpu_parallel.md)
+    run_id = None
+    try:
+        import wandb
+        if wandb.run is not None:
+            run_id = getattr(wandb.run, "id", None)
+    except ImportError:
+        pass
+    if not run_id:
+        run_id = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
     out_path = args.output_dir / "runs" / run_id
     out_path.mkdir(parents=True, exist_ok=True)
 
