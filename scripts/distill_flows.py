@@ -23,6 +23,8 @@ Flow (docs/easydistill/distill_by_prefect.md):
   python scripts/distill_flows.py run_sweep [--sweep-id <sweep_id>] --labeled-path .../train_labeled.json [--out-dir ...]
   python scripts/distill_flows.py train_and_evaluate --labeled-path .../train_labeled.json [--val-labeled-path ...] [--test-labeled-path ...]  # 학습(Pod) → 평가만
   python scripts/distill_flows.py sweep_eval_merge --labeled-path .../train_labeled.json [--sweep-id ...]  # Pod sweep → evaluate → merge (build_dataset/labeling 생략)
+  python scripts/distill_flows.py upload_labeled_artifact --labeled-path .../train_labeled.json  # 기존 labeled만 wandb artifact로 업로드
+  python scripts/distill_flows.py upload_dataset_artifact --train-path .../datasets/YYYYMMDD_HHMMSS/train.json  # 기존 dataset만 wandb artifact로 업로드
   python scripts/distill_flows.py all        # build_dataset → labeling(Pod) → train(Pod) → evaluate → merge for serving
   python scripts/distill_flows.py all_sweep [--sweep-id <sweep_id>]  # sweep-id 없으면 flow 내부에서 sweep 등록 후 실행
   python scripts/distill_flows.py merge_for_serving --adapter-path .../adapter [--out-dir ...]  # adapter만 merge하여 서빙 경로 생성
@@ -162,10 +164,10 @@ def build_dataset_flow(
     test_ratio: float = 0.10,
     seed: int = 42,
 ) -> dict:
-    """식당 단위 split, 윈도우/샘플 생성, train/val/test 저장 + 버전 태깅."""
+    """식당 단위 split, 윈도우/샘플 생성, train/val/test 저장 + 버전 태깅 + dataset artifact 업로드."""
     input_path = Path(input_path or _PROJECT_ROOT / "tasteam_app_all_review_data.json")
     out_dir = Path(out_dir or _PROJECT_ROOT / "distill_pipeline_output")
-    return build_dataset_task(
+    result = build_dataset_task(
         input_path=input_path,
         out_dir=out_dir,
         window_configs=window_configs,
@@ -175,6 +177,13 @@ def build_dataset_flow(
         test_ratio=test_ratio,
         seed=seed,
     )
+    art = upload_dataset_to_artifact_task(
+        dataset_dir=result["dataset_dir"],
+        project=os.environ.get("WANDB_PROJECT", DEFAULT_WANDB_PROJECT),
+        entity=os.environ.get("WANDB_ENTITY"),
+    )
+    result["artifact"] = art
+    return result
 
 
 def _vllm_base_url_from_runpod_proxy(pod_id: str, internal_http_port: int = 8000) -> str:
@@ -316,6 +325,8 @@ def labeling_with_pod_task(
             except Exception as e:
                 logger.warning("RunPod S3 upload failed: %s", e)
                 out["runpod_upload"] = {"uploaded": False, "error": str(e)}
+        art = upload_labeled_to_artifact_task(labeled_dir=labeled_dir)
+        out["artifact"] = art
         return out
     finally:
         print("Cleaning up pod:", pod_id)
@@ -418,6 +429,8 @@ def labeling_pod_only_task(
             except Exception as e:
                 logger.warning("RunPod S3 upload failed: %s", e)
                 out["runpod_upload"] = {"uploaded": False, "error": str(e)}
+        art = upload_labeled_to_artifact_task(labeled_dir=labeled_dir)
+        out["artifact"] = art
         return out
     finally:
         print("Cleaning up pod:", pod_id)
@@ -569,6 +582,144 @@ def ensure_wandb_project_task(
     wandb.init(project=project, entity=entity or os.environ.get("WANDB_ENTITY"))
     wandb.finish()
     logger.info("W&B project ensured: %s (entity=%s)", project, entity or "default")
+
+
+@task(name="upload-labeled-to-artifact-task", log_prints=True)
+def upload_labeled_to_artifact_task(
+    labeled_dir: str | Path,
+    project: str = DEFAULT_WANDB_PROJECT,
+    entity: str | None = None,
+    artifact_name: str = "labeled-data",
+) -> dict:
+    """
+    labeled 디렉터리(train_labeled.json, val_labeled.json 등)를 wandb artifact로 업로드해 버전 관리.
+    artifact 이름은 동일하게 두면 wandb가 v0, v1, ... 으로 버저닝.
+    """
+    import wandb
+
+    labeled_dir = Path(labeled_dir)
+    if not labeled_dir.is_dir():
+        raise FileNotFoundError(f"labeled_dir is not a directory: {labeled_dir}")
+    version = labeled_dir.name
+    if not os.environ.get("WANDB_API_KEY"):
+        logger.warning("WANDB_API_KEY not set; skipping artifact upload")
+        return {"skipped": True, "reason": "WANDB_API_KEY not set", "labeled_dir": str(labeled_dir)}
+
+    try:
+        run = wandb.init(
+            project=project,
+            entity=entity or os.environ.get("WANDB_ENTITY"),
+            name=f"upload-labeled-{version}",
+            job_type="data_upload",
+        )
+        artifact = wandb.Artifact(
+            name=artifact_name,
+            type="dataset",
+            metadata={"version": version, "labeled_dir": str(labeled_dir)},
+        )
+        artifact.add_dir(str(labeled_dir), name="labeled")
+        wandb.log_artifact(artifact)
+        wandb.finish()
+        logger.info("Uploaded labeled dir to artifact %s (version=%s)", artifact_name, version)
+        return {
+            "artifact_name": artifact_name,
+            "version": version,
+            "labeled_dir": str(labeled_dir),
+        }
+    except Exception as e:
+        logger.warning("wandb artifact upload failed: %s", e)
+        return {"skipped": True, "reason": str(e), "labeled_dir": str(labeled_dir)}
+
+
+@flow(name="upload_labeled_artifact_flow", log_prints=True)
+def upload_labeled_artifact_flow(
+    labeled_path: str | Path,
+    project: str = DEFAULT_WANDB_PROJECT,
+    entity: str | None = None,
+) -> dict:
+    """
+    기존 labeled 디렉터리를 wandb artifact로만 업로드 (라벨링/학습 없이 올리기만 실행).
+    labeled_path: train_labeled.json 경로 또는 labeled 디렉터리 경로.
+    """
+    path = Path(labeled_path)
+    if path.is_file():
+        labeled_dir = path.parent
+    else:
+        labeled_dir = path
+    return upload_labeled_to_artifact_task(
+        labeled_dir=labeled_dir,
+        project=project,
+        entity=entity,
+    )
+
+
+@task(name="upload-dataset-to-artifact-task", log_prints=True)
+def upload_dataset_to_artifact_task(
+    dataset_dir: str | Path,
+    project: str = DEFAULT_WANDB_PROJECT,
+    entity: str | None = None,
+    artifact_name: str = "dataset",
+) -> dict:
+    """
+    dataset 디렉터리(train.json, val.json, test.json, stats.json)를 wandb artifact로 업로드.
+    분할 전략 변경 시 추적·비교용.
+    """
+    import wandb
+
+    dataset_dir = Path(dataset_dir)
+    if not dataset_dir.is_dir():
+        raise FileNotFoundError(f"dataset_dir is not a directory: {dataset_dir}")
+    version = dataset_dir.name
+    if not os.environ.get("WANDB_API_KEY"):
+        logger.warning("WANDB_API_KEY not set; skipping dataset artifact upload")
+        return {"skipped": True, "reason": "WANDB_API_KEY not set", "dataset_dir": str(dataset_dir)}
+
+    try:
+        run = wandb.init(
+            project=project,
+            entity=entity or os.environ.get("WANDB_ENTITY"),
+            name=f"upload-dataset-{version}",
+            job_type="data_upload",
+        )
+        artifact = wandb.Artifact(
+            name=artifact_name,
+            type="dataset",
+            metadata={"version": version, "dataset_dir": str(dataset_dir)},
+        )
+        artifact.add_dir(str(dataset_dir), name="dataset")
+        wandb.log_artifact(artifact)
+        wandb.finish()
+        logger.info("Uploaded dataset dir to artifact %s (version=%s)", artifact_name, version)
+        return {
+            "artifact_name": artifact_name,
+            "version": version,
+            "dataset_dir": str(dataset_dir),
+        }
+    except Exception as e:
+        logger.warning("wandb dataset artifact upload failed: %s", e)
+        return {"skipped": True, "reason": str(e), "dataset_dir": str(dataset_dir)}
+
+
+@flow(name="upload_dataset_artifact_flow", log_prints=True)
+def upload_dataset_artifact_flow(
+    dataset_path: str | Path,
+    project: str = DEFAULT_WANDB_PROJECT,
+    entity: str | None = None,
+) -> dict:
+    """
+    기존 dataset 디렉터리를 wandb artifact로만 업로드 (build_dataset 없이 올리기만 실행).
+    dataset_path: train.json 경로 또는 datasets/YYYYMMDD_HHMMSS 디렉터리 경로.
+    """
+    path = Path(dataset_path)
+    if path.is_file():
+        dataset_dir = path.parent
+    else:
+        dataset_dir = path
+    return upload_dataset_to_artifact_task(
+        dataset_dir=dataset_dir,
+        project=project,
+        entity=entity,
+    )
 
 
 @task(name="register-sweep-task", log_prints=True)
@@ -1233,8 +1384,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Prefect flows for summary KD pipeline (distill_by_prefect.md)")
     parser.add_argument(
         "flow",
-        choices=["build_dataset", "labeling_with_pod", "labeling_pod_only", "train_student_with_pod", "run_sweep", "train_and_evaluate", "sweep_eval_merge", "evaluate", "merge_for_serving", "merge_for_serving_with_pod", "all", "all_sweep"],
-        help="Flow to run. sweep_eval_merge: Pod sweep→evaluate→merge만. train_and_evaluate: 학습(Pod)→평가만. all/all_sweep: 라벨링·학습 Pod 기준.",
+        choices=["build_dataset", "labeling_with_pod", "labeling_pod_only", "train_student_with_pod", "run_sweep", "train_and_evaluate", "sweep_eval_merge", "evaluate", "merge_for_serving", "merge_for_serving_with_pod", "upload_labeled_artifact", "upload_dataset_artifact", "all", "all_sweep"],
+        help="Flow to run. upload_labeled_artifact/upload_dataset_artifact: 기존 디렉터리만 wandb artifact로 업로드. sweep_eval_merge: Pod sweep→evaluate→merge만. all/all_sweep: 라벨링·학습 Pod 기준.",
     )
     parser.add_argument("--gold-path", type=Path, default=None, help="train_labeled_gold_only.json 경로 (labeling_pod_only 필수)")
     parser.add_argument("--sweep-id", type=str, default=None, help="wandb sweep id (optional; 없으면 --sweep-yaml으로 flow 내부에서 등록)")
@@ -1357,6 +1508,24 @@ def main() -> None:
         print("Result keys:", list(result.keys()))
         if result.get("merge_for_serving"):
             print("API 사용: LLM_MODEL=" + result["merge_for_serving"]["merged_model_path"])
+    elif args.flow == "upload_labeled_artifact":
+        if not args.labeled_path:
+            parser.error("upload_labeled_artifact requires --labeled-path (train_labeled.json or labeled dir)")
+        result = upload_labeled_artifact_flow(
+            labeled_path=args.labeled_path,
+            project=os.environ.get("WANDB_PROJECT", DEFAULT_WANDB_PROJECT),
+            entity=os.environ.get("WANDB_ENTITY"),
+        )
+        print("Result:", result)
+    elif args.flow == "upload_dataset_artifact":
+        if not args.train_path:
+            parser.error("upload_dataset_artifact requires --train-path (e.g. .../datasets/YYYYMMDD_HHMMSS/train.json)")
+        result = upload_dataset_artifact_flow(
+            dataset_path=args.train_path,
+            project=os.environ.get("WANDB_PROJECT", DEFAULT_WANDB_PROJECT),
+            entity=os.environ.get("WANDB_ENTITY"),
+        )
+        print("Result:", result)
     elif args.flow == "evaluate":
         if not args.adapter_path:
             parser.error("evaluate requires --adapter-path")
