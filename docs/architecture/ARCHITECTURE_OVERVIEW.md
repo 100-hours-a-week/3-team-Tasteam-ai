@@ -630,6 +630,53 @@ GET /api/v1/batch/status/{job_id} → 결과 조회
 
 요약 KD·QLoRA 학습은 **Prefect flows**와 **RunPod Pod**로 실행되며, 메인 FastAPI API와는 별도 스크립트입니다.
 
+#### distill_flows.py 개요
+
+| 항목 | 내용 |
+|------|------|
+| **스크립트** | `scripts/distill_flows.py` |
+| **역할** | 요약 KD(Knowledge Distillation) 파이프라인용 **Prefect flow** 오케스트레이션. 전략·수치는 `docs/easydistill/distill_strategy.md` 기준(식당 단위 split, OpenAI 골드 300~800, teacher 품질 필터, 학습 2500~3200 샘플 등). |
+| **의존** | Prefect, `scripts/runpod_cli`(RunPod Pod 생성/삭제), `runpod_s3_upload`(볼륨 업로드/다운로드), `data_augmentation.py`, `label_for_distill.py`, `train_qlora.py`, `run_qlora_sweep.py`, wandb. |
+
+**주요 Flow 목록**
+
+| Flow | 설명 |
+|------|------|
+| `build_dataset_flow` | 식당 단위 split, 윈도우/샘플 생성 → train/val/test JSON 저장 + 버전 태깅 + dataset artifact 업로드. |
+| `labeling_with_pod_flow` | OpenAI 골드 먼저(로컬) → Pod 기동 → self-hosted teacher로 나머지 라벨링 → Pod 삭제. |
+| `labeling_pod_only_flow` | 기존 골드만 있을 때 Pod에서 teacher_rest만 실행(OpenAI 단계 생략). |
+| `train_student_with_pod_flow` | Pod 생성 → 볼륨에 라벨 업로드 → Pod에서 `train_qlora.py` 실행 → adapter 다운로드 → Pod 삭제. |
+| `run_sweep_flow` / `run_sweep_on_pod_task` | wandb sweep 등록 후 Pod에서 wandb agent로 여러 run 순차 학습. |
+| `run_sweep_and_evaluate_flow` | Sweep(Pod) → best adapter(artifact) → evaluate. |
+| `evaluate_flow` | val/test 라벨로 ROUGE·BERTScore·GPT-judge·휴먼 평가. |
+| `merge_for_serving_flow` / `merge_for_serving_with_pod_flow` | adapter + base 모델 merge → 서빙용 모델 경로 생성(로컬 또는 Pod에서 merge). |
+| `distill_pipeline_all` | build_dataset → labeling(Pod) → train_student(Pod) → evaluate → merge 한 번에 실행. |
+| `distill_pipeline_all_sweep` | build_dataset → labeling(Pod) → run_sweep(Pod) → best adapter로 evaluate → merge. |
+| `train_and_evaluate_flow` | 이미 라벨이 있을 때 학습(Pod) → 평가만(build_dataset·labeling·merge 생략). |
+| `sweep_eval_merge_flow` | 이미 라벨이 있을 때 Pod sweep → evaluate → merge만. |
+| `upload_labeled_artifact_flow` / `upload_dataset_artifact_flow` | 기존 labeled/dataset 디렉터리만 wandb artifact로 업로드. |
+
+**CLI 진입점** (`python scripts/distill_flows.py <flow> [옵션]`)
+
+| flow | 대표 옵션 | 설명 |
+|------|-----------|------|
+| `build_dataset` | `--input`, `--out-dir` | 데이터셋 빌드만. |
+| `labeling_with_pod` | `--train-path`, `--openai-cap`, `--out-dir` | OpenAI 골드 + Pod teacher. |
+| `labeling_pod_only` | `--train-path`, `--gold-path`, `--out-dir` | Pod teacher만. |
+| `train_student_with_pod` | `--labeled-path`, `--output-dir` | 단일 run 학습. |
+| `run_sweep` | `--sweep-id`, `--labeled-path`, `--out-dir` | sweep 실행(로컬 또는 Pod). |
+| `train_and_evaluate` | `--labeled-path`, `--val-labeled-path`, `--test-labeled-path` | 학습 → 평가만. |
+| `sweep_eval_merge` | `--labeled-path`, `--sweep-id` | Pod sweep → evaluate → merge. |
+| `evaluate` | `--adapter-path`, `--val-labeled-path`, `--test-labeled-path` | 평가만. |
+| `merge_for_serving` | `--adapter-path`, `--out-dir` | 로컬 merge. |
+| `merge_for_serving_with_pod` | `--adapter-path` 또는 `--run-id` | Pod에서 merge 또는 볼륨 run 기준. |
+| `upload_labeled_artifact` | `--labeled-path` | 기존 labeled만 artifact 업로드. |
+| `upload_dataset_artifact` | `--train-path` | 기존 dataset만 artifact 업로드. |
+| `all` | `--out-dir`, `--openai-cap` | 전체 파이프라인(단일 run). |
+| `all_sweep` | `--sweep-id`, `--sweep-yaml`, `--num-pods` | 전체 파이프라인(sweep). |
+
+- **시그널 처리**: Ctrl+C/SIGTERM 시 이번 프로세스에서 생성한 RunPod Pod를 자동 삭제(`docs/runpod/troubleshooting/control_c_not_shutdown_error.md`).
+
 | 항목 | 내용 |
 |------|------|
 | **오케스트레이션** | Prefect (`scripts/distill_flows.py`): **all** = build_dataset → labeling(Pod) → train_student(Pod, 단일 run) → evaluate → merge. **all_sweep** = 동일하되 학습은 Pod에서 sweep(여러 run) 실행 후 best adapter는 wandb artifact에서 수급. §6.1.1·6.1.2 참고. `docs/easydistill/distill_with_prefect.md` |
@@ -680,6 +727,19 @@ GET /api/v1/batch/status/{job_id} → 결과 조회
 | **데이터** | `deepfm_training/data/raw/` (train.txt, test.txt). 전처리 결과는 `data/`에 생성. 학습 결과는 `output/<run_id>/model.pt`. |
 | **실행** | 로컬: `python deepfm_training/training_flow.py`. Docker: `Dockerfile.deepfm` → `deepfm-training` 이미지. |
 | **관련 문서** | `docs/prefect/deepfm_training_pipeline.md`, `docs/prefect/prefect_designe.md`, `deepfm_training/deepfm_tasteam.md`(tasteam 서비스 관점·피처 설계·랭킹 역할), `docs/easydistill/learning_method_fit.md`(DeepFM은 LLM 증류 부적합 명시). |
+
+#### DeepFM 상세 (Admin API·스코어링)
+
+DeepFM **Admin API**는 메인 앱과 별도 서비스로 제공되며, **§16**에서 상세 기술.
+
+| 항목 | 내용 |
+|------|------|
+| **위치** | `ml/deepfm_pipeline/` (FastAPI 앱: `api/main.py`, 라우터: `api/routers/deepfm.py`) |
+| **포트** | 기본 8000 (메인 API 8001과 독립) |
+| **엔드포인트** | `POST /admin/deepfm/train`(학습 트리거), `POST /admin/deepfm/score-batch`(배치 스코어링 → recommendation CSV), `GET /admin/deepfm/models`(모델 목록·활성 버전), `POST /admin/deepfm/activate`(서빙용 버전 활성화) |
+| **학습** | `training_flow.py`의 Prefect `deepfm_training_flow`: 전처리(raw → train/val/test) → DeepFM 학습 → `output/<pipeline_version>/model.pt`, `feature_sizes.txt`, `run_manifest.json` 산출. |
+| **스코어링** | `utils/score_batch.run`: 후보 CSV(S3 등) + 메타 CSV → 모델 추론 → recommendation 형식 CSV 출력. DB INSERT는 호출 측(ETL)에서 수행. |
+| **경로·DTO** | 입출력·CSV 예시는 `ml/deepfm_pipeline/docs/design/api/ML_API_DTO.md`. 경로는 S3 URL 예시 사용(s3://bucket/...). |
 
 ---
 
