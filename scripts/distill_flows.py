@@ -75,6 +75,10 @@ _PROJECT_ROOT = _SCRIPT_DIR.parent
 if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 try:
+    from runpod_cli import runpod_config
+except ImportError:
+    runpod_config = None
+try:
     from runpod_cli.pod_create_delete_cli import RunPodClient
 except ImportError:
     RunPodClient = None
@@ -87,7 +91,6 @@ try:
         upload_directory,
         get_runpod_s3_client,
         object_exists,
-        DEFAULT_VOLUME_ID,
     )
 except ImportError:
     upload_labeled_dir_to_runpod = None
@@ -97,7 +100,6 @@ except ImportError:
     upload_directory = None
     get_runpod_s3_client = None
     object_exists = None
-    DEFAULT_VOLUME_ID = "v3i546pkrz"
 
 logger = logging.getLogger(__name__)
 
@@ -522,7 +524,9 @@ def labeling_pod_only_flow(
 
 
 def _get_train_volume_id() -> str:
-    return os.environ.get("RUNPOD_NETWORK_VOLUME_ID_TRAIN", os.environ.get("RUNPOD_NETWORK_VOLUME_ID", DEFAULT_VOLUME_ID))
+    if runpod_config is not None:
+        return runpod_config.get_volume_id_train()
+    return os.environ.get("RUNPOD_NETWORK_VOLUME_ID_TRAIN", os.environ.get("RUNPOD_NETWORK_VOLUME_ID", "v3i546pkrz"))
 
 
 @task(name="train-student-with-pod-task", log_prints=True)
