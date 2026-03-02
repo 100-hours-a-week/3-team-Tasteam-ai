@@ -5,7 +5,7 @@ from typing import Any, Dict, Literal, Optional
 
 
 class RunPodClient:
-    def __init__(self, token: str, base_url: str = "https://rest.runpod.io/v1", timeout: int = 60):
+    def __init__(self, token: str, base_url: str = "https://rest.runpod.io/v1", timeout: int = 120):
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
         self.session = requests.Session()
