@@ -21,9 +21,14 @@ class RunPodClient:
         retry_statuses: tuple[int, ...] = (500, 502, 503),
         base_delay_sec: float = 2.0,
     ) -> Dict[str, Any]:
-        """Pod 생성. 500/502/503 시 지수 백오프 재시도."""
+        """Pod 생성. 500/502/503 또는 ConnectionError/ReadTimeout/ChunkedEncodingError 시 지수 백오프 재시도."""
         url = f"{self.base_url}/pods"
         last_exc = None
+        retryable = (
+            requests.exceptions.ConnectionError,
+            requests.exceptions.ReadTimeout,
+            requests.exceptions.ChunkedEncodingError,
+        )
         for attempt in range(max_retries):
             try:
                 resp = self.session.post(url, json=payload, timeout=self.timeout)
@@ -32,8 +37,13 @@ class RunPodClient:
                 last_exc = e
                 status = e.response.status_code if e.response is not None else None
                 if status in retry_statuses and attempt < max_retries - 1:
-                    delay = base_delay_sec * (2**attempt)
-                    time.sleep(delay)
+                    time.sleep(base_delay_sec * (2**attempt))
+                    continue
+                raise
+            except retryable as e:
+                last_exc = e
+                if attempt < max_retries - 1:
+                    time.sleep(base_delay_sec * (2**attempt))
                     continue
                 raise
         if last_exc is not None:

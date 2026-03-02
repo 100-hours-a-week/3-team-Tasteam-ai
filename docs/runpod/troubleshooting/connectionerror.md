@@ -20,11 +20,11 @@ requests.exceptions.ConnectionError: ('Connection aborted.', RemoteDisconnected(
 1. **재시도**  
    같은 명령을 다시 실행해 보기. 일시적인 경우면 그대로 성공할 수 있습니다.
 
-2. **RunPod 클라이언트에 ConnectionError 재시도 추가**  
-   지금은 **HTTP 500**만 재시도하고 있어서, **ConnectionError**는 한 번 나면 바로 실패합니다.  
-   `create_pod` 등 RunPod API 호출 부분에서 `requests.exceptions.ConnectionError`(그리고 필요하면 `ChunkedEncodingError` 등)를 잡아서, 500과 비슷하게 지수 백오프로 몇 번 재시도하도록 넣는 게 좋습니다.
+2. **클라이언트 재시도 (구현됨)**  
+   `scripts/runpod_cli/pod_create_delete_cli.py`의 `create_pod()`는 다음 예외 시 **지수 백오프로 최대 4회 재시도**합니다.  
+   - HTTP 500, 502, 503  
+   - `ConnectionError`, `ReadTimeout`, `ChunkedEncodingError`  
+   대기: 2초 → 4초 → 8초.
 
-3. **타임아웃 증가**  
-   이전에 말한 것처럼 `RunPodClient`의 `timeout`을 120초 등으로 늘려 두면, 서버가 느리게 응답할 때 연결이 덜 끊기도록 도움이 됩니다.
-
-에이전트 모드로 전환해 주시면, `pod_create_delete_cli.py`에 ConnectionError 재시도와(선택으로) timeout 증가까지 코드로 적용해 줄 수 있습니다.
+3. **타임아웃**  
+   `RunPodClient` 기본 `timeout`은 120초입니다. 더 길게 쓰려면 생성 시 `timeout=180` 등으로 지정.
