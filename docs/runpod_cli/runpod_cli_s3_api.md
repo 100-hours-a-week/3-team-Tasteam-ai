@@ -62,6 +62,17 @@ aws s3 cp \
 
 ---
 
+## 6) RunPod 설정 파일 (config/runpod.yaml)
+
+볼륨 ID·S3 리전·엔드포인트·Pod 이미지·GPU 타입·데이터센터 등 **기본값을 한 곳에서 관리**하려면 `config/runpod.yaml`을 사용한다.
+
+* **위치**: `config/runpod.yaml` (또는 환경 변수 `RUNPOD_CONFIG_PATH`로 경로 지정)
+* **시크릿**: API 키(`RUNPOD_API_KEY`), S3 Access/Secret(`RUNPOD_S3_ACCESS_KEY`, `RUNPOD_S3_SECRET_ACCESS_KEY`)는 **설정 파일에 넣지 말고 환경 변수만** 사용한다.
+* **오버라이드**: `RUNPOD_NETWORK_VOLUME_ID_TRAIN`, `RUNPOD_POD_IMAGE_NAME_TRAIN` 등 환경 변수로 파일 값을 덮어쓸 수 있다.
+* **사용처**: `pod_create_delete_cli.py`, `runpod_s3_upload.py`가 이 설정을 로드한다.
+
+---
+
 ### 한 줄 결론
 
 네가 보여준 `aws s3 ls ...` 방식 그대로, **`aws s3 cp` / `aws s3 sync`로 RunPod 네트워크 볼륨에 파일 올릴 수 있어.** ([Runpod Documentation][1])

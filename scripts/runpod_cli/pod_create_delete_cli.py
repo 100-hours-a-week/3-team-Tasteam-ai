@@ -3,11 +3,18 @@ import time
 import requests
 from typing import Any, Dict, Literal, Optional
 
+from . import runpod_config
+
 
 class RunPodClient:
-    def __init__(self, token: str, base_url: str = "https://rest.runpod.io/v1", timeout: int = 120):
-        self.base_url = base_url.rstrip("/")
-        self.timeout = timeout
+    def __init__(
+        self,
+        token: str,
+        base_url: str | None = None,
+        timeout: int | None = None,
+    ):
+        self.base_url = (base_url or runpod_config.get_api_base_url()).rstrip("/")
+        self.timeout = timeout if timeout is not None else runpod_config.get_api_timeout()
         self.session = requests.Session()
         self.session.headers.update({
             "Authorization": f"Bearer {token}",
@@ -174,38 +181,34 @@ class RunPodClient:
         """Pod 생성용 기본 payload.
         use: "labeling" → vLLM 이미지/볼륨, "train" → 학습 이미지/볼륨, "merge" → 학습 이미지/볼륨에서 merge 스크립트 실행.
         docker_start_cmd: 지정 시 컨테이너 CMD 오버라이드 (train 시 --labeled-path 등 전달용, merge 시 merge 스크립트 경로+인자).
+        기본값은 config/runpod.yaml 및 환경 변수에서 로드.
         """
         if use == "train":
-            image_name = os.environ.get("RUNPOD_POD_IMAGE_NAME_TRAIN", "jinsoo1218/train-llm:latest")
-            network_volume_id = os.environ.get("RUNPOD_NETWORK_VOLUME_ID_TRAIN", "v3i546pkrz")
+            image_name = runpod_config.get_pod_image_train()
+            network_volume_id = runpod_config.get_pod_network_volume_id_train()
             name = "train-pod"
         elif use == "merge":
-            image_name = os.environ.get("RUNPOD_POD_IMAGE_NAME_TRAIN", "jinsoo1218/train-llm:latest")
-            network_volume_id = os.environ.get("RUNPOD_NETWORK_VOLUME_ID_TRAIN", "v3i546pkrz")
+            image_name = runpod_config.get_pod_image_train()
+            network_volume_id = runpod_config.get_pod_network_volume_id_merge()
             name = "merge-pod"
         else:
-            image_name = os.environ.get("RUNPOD_POD_IMAGE_NAME_LABELING", "jinsoo1218/runpod-pod-vllm:latest")
-            network_volume_id = os.environ.get("RUNPOD_NETWORK_VOLUME_ID_LABELING", "o3a3ya7flt")
+            image_name = runpod_config.get_pod_image_labeling()
+            network_volume_id = runpod_config.get_pod_network_volume_id_labeling()
             name = "vllm-pod"
         payload = {
-            "allowedCudaVersions": ["13.0"],
+            "allowedCudaVersions": runpod_config.get_pod_allowed_cuda_versions(),
             "cloudType": "SECURE",
             "computeType": "GPU",
-            "containerDiskInGb": 50,
+            "containerDiskInGb": runpod_config.get_pod_common_int("container_disk_in_gb", 50),
             "cpuFlavorPriority": "availability",
-            "dataCenterIds": [
-                "EU-RO-1", "CA-MTL-1", "EU-SE-1", "US-IL-1", "EUR-IS-1", "EU-CZ-1", "US-TX-3", "EUR-IS-2",
-                "US-KS-2", "US-GA-2", "US-WA-1", "US-TX-1", "CA-MTL-3", "EU-NL-1", "US-TX-4", "US-CA-2",
-                "US-NC-1", "OC-AU-1", "US-DE-1", "EUR-IS-3", "CA-MTL-2", "AP-JP-1", "EUR-NO-1", "EU-FR-1",
-                "US-KS-3", "US-GA-1",
-            ],
+            "dataCenterIds": runpod_config.get_pod_data_center_ids(),
             "dataCenterPriority": "availability",
             "dockerEntrypoint": [],
             "dockerStartCmd": docker_start_cmd if docker_start_cmd is not None else [],
             "env": {"ENV_VAR": "value",**({"WANDB_API_KEY": os.environ["WANDB_API_KEY"]} if os.environ.get("WANDB_API_KEY") else {}),},
             "globalNetworking": False,
-            "gpuCount": 1,
-            "gpuTypeIds": ["NVIDIA GeForce RTX 4090","NVIDIA RTX A5000"],
+            "gpuCount": runpod_config.get_pod_common_int("gpu_count", 1),
+            "gpuTypeIds": runpod_config.get_pod_gpu_type_ids(),
             "gpuTypePriority": "availability",
             "imageName": image_name,
             "interruptible": False,
@@ -219,7 +222,7 @@ class RunPodClient:
             "networkVolumeId": network_volume_id,
             "ports": ["8000/http", "22/tcp"],
             "supportPublicIp": True,
-            "vcpuCount": 2,
+            "vcpuCount": runpod_config.get_pod_common_int("vcpu_count", 2),
             "volumeInGb": 20,
             "volumeMountPath": "/workspace",
         }
