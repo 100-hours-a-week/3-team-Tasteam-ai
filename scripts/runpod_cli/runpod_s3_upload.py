@@ -130,12 +130,14 @@ def upload_labeled_dir_to_runpod(
     labeled_dir: str | Path,
     volume_id: str | None = None,
     remote_prefix: str | None = None,
+    skip_if_exists: bool = True,
 ) -> int:
     """
     라벨링 결과 디렉터리를 RunPod 네트워크 볼륨에 업로드.
     RUNPOD_S3_ACCESS_KEY, RUNPOD_S3_SECRET_ACCESS_KEY 필수.
     volume_id 미지정 시 RUNPOD_NETWORK_VOLUME_ID 또는 기본값(v3i546pkrz) 사용.
     remote_prefix 미지정 시 labeled/ 디렉터리 이름(버전) 사용.
+    skip_if_exists: True면 해당 버전(prefix/train_labeled.json)이 이미 볼륨에 있으면 업로드 생략하고 0 반환.
     """
     if not os.environ.get("RUNPOD_S3_ACCESS_KEY") or not os.environ.get("RUNPOD_S3_SECRET_ACCESS_KEY"):
         raise ValueError("RUNPOD_S3_ACCESS_KEY and RUNPOD_S3_SECRET_ACCESS_KEY are required.")
@@ -143,6 +145,10 @@ def upload_labeled_dir_to_runpod(
     bucket = volume_id or os.environ.get("RUNPOD_NETWORK_VOLUME_ID", DEFAULT_VOLUME_ID)
     prefix = remote_prefix if remote_prefix is not None else f"labeled/{labeled_dir.name}"
     client = get_runpod_s3_client()
+    if skip_if_exists:
+        key = f"{prefix}/train_labeled.json"
+        if object_exists(client, bucket, key):
+            return 0
     return upload_directory(client, bucket, labeled_dir, prefix)
 
 

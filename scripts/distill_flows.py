@@ -27,10 +27,8 @@ Flow (docs/easydistill/distill_by_prefect.md):
   python scripts/distill_flows.py upload_dataset_artifact --train-path .../datasets/YYYYMMDD_HHMMSS/train.json  # 기존 dataset만 wandb artifact로 업로드
   python scripts/distill_flows.py all        # build_dataset → labeling(Pod) → train(Pod) → evaluate → merge for serving
   python scripts/distill_flows.py all_sweep [--sweep-id <sweep_id>]  # sweep-id 없으면 flow 내부에서 sweep 등록 후 실행
-  python scripts/distill_flows.py merge_for_serving --adapter-path .../adapter [--out-dir ...]  # adapter만 merge하여 서빙 경로 생성
-  python scripts/distill_flows.py merge_for_serving_with_pod --adapter-path .../adapter  # 로컬 adapter 업로드 후 Pod merge
-  python scripts/distill_flows.py merge_for_serving_with_pod --run-id RUN_ID  # 볼륨의 runs/RUN_ID/adapter로 merge
-  python scripts/distill_flows.py merge_for_serving_with_pod  # 볼륨에서 최신 학습 adapter로 merge
+  python scripts/distill_flows.py merge_for_serving --adapter-path .../adapter [--out-dir ...]  # 로컬 merge (파이프라인 기본)
+  python scripts/distill_flows.py merge_for_serving_with_pod --adapter-path .../adapter  # 수동: Pod에서 merge (볼륨 사용)
 
 예시:
   python scripts/distill_flows.py build_dataset --input tasteam_app_all_review_data.json --out-dir distill_pipeline_output
@@ -533,18 +531,18 @@ def train_student_with_pod_task(
     student_model: str = "Qwen/Qwen2.5-0.5B-Instruct",
     output_dir: str | Path | None = None,
     pod_wait_timeout_sec: int = 600,
-    train_poll_interval_sec: int = 90,
     train_timeout_sec: int = 7200,
 ) -> dict:
     """
-    학습용 Pod 생성 → 볼륨에 라벨 업로드 → Pod에서 train_qlora 실행 →
-    S3로 완료 감지 후 adapter 다운로드 → Pod 삭제.
-    RUNPOD_API_KEY, RUNPOD_S3_ACCESS_KEY, RUNPOD_S3_SECRET_ACCESS_KEY 필요.
+    학습용 Pod 생성 → 볼륨에 라벨 업로드(이미 있으면 스킵) → Pod에서 train_qlora 실행(/tmp에 출력, artifact 업로드) →
+    Pod 종료 대기 → wandb artifact에서 최신 run adapter 다운로드 → Pod 삭제.
+    adapter는 볼륨에 쓰지 않고 artifact만 사용.
+    RUNPOD_API_KEY, RUNPOD_S3_ACCESS_KEY, RUNPOD_S3_SECRET_ACCESS_KEY, WANDB_API_KEY 필요.
     """
     if RunPodClient is None:
         raise RuntimeError("RunPodClient not available.")
-    if not upload_labeled_dir_to_runpod or not list_run_ids_with_adapter or not download_directory_from_runpod:
-        raise RuntimeError("runpod_s3_upload (upload/list/download) required for train_student_with_pod.")
+    if not upload_labeled_dir_to_runpod:
+        raise RuntimeError("runpod_s3_upload (upload_labeled_dir_to_runpod) required for train_student_with_pod.")
     token = os.environ.get("RUNPOD_API_KEY")
     if not token:
         raise ValueError("RUNPOD_API_KEY required for train_student_with_pod")
@@ -561,15 +559,9 @@ def train_student_with_pod_task(
     except Exception as e:
         raise RuntimeError(f"Upload labeled dir to volume failed: {e}") from e
 
-    vol_id = _get_train_volume_id()
-    try:
-        existing_runs = set(list_run_ids_with_adapter(vol_id))
-    except Exception:
-        existing_runs = set()
-
     docker_start_cmd = [
         "--labeled-path", path_on_volume,
-        "--output-dir", "/workspace/distill_pipeline_output",
+        "--output-dir", "/tmp/distill_pipeline_output",
     ]
     payload = RunPodClient.get_default_pod_payload(use="train", docker_start_cmd=docker_start_cmd)
     client = RunPodClient(token=token)
@@ -580,33 +572,21 @@ def train_student_with_pod_task(
 
     try:
         client.wait_until_running(pod_id, timeout_sec=pod_wait_timeout_sec)
-        deadline = time.time() + train_timeout_sec
-        new_run_id: str | None = None
-        while time.time() < deadline:
-            try:
-                runs = list_run_ids_with_adapter(vol_id)
-                for rid in runs:
-                    if rid not in existing_runs:
-                        new_run_id = rid
-                        break
-                if new_run_id:
-                    break
-            except Exception as e:
-                logger.debug("Poll runs: %s", e)
-            time.sleep(train_poll_interval_sec)
-        if not new_run_id:
-            raise TimeoutError(f"Train Pod did not produce adapter within {train_timeout_sec}s. Check Pod logs.")
+        client.wait_until_stopped(pod_id, timeout_sec=train_timeout_sec, poll_interval_sec=120)
+        logger.info("Train Pod finished: %s", pod_id)
 
-        remote_prefix = f"distill_pipeline_output/runs/{new_run_id}/adapter"
-        local_adapter_dir = out_dir / "adapters" / new_run_id / "adapter"
-        local_adapter_dir.mkdir(parents=True, exist_ok=True)
-        n = download_directory_from_runpod(vol_id, remote_prefix, local_adapter_dir)
-        print("Downloaded adapter files:", n)
+        adapter_path = get_latest_run_adapter_from_artifact_task(
+            download_dir=out_dir,
+            project=os.environ.get("WANDB_PROJECT", DEFAULT_WANDB_PROJECT),
+            entity=os.environ.get("WANDB_ENTITY"),
+        )
+        if not adapter_path:
+            raise RuntimeError("Train Pod finished but no adapter artifact found in wandb. Check Pod logs and WANDB_API_KEY.")
 
         return {
-            "adapter_path": str(local_adapter_dir),
-            "run_id": new_run_id,
-            "training_meta_path": str(out_dir / "adapters" / new_run_id / "training_meta.json"),
+            "adapter_path": adapter_path,
+            "run_id": Path(adapter_path).parent.name,
+            "training_meta_path": str(out_dir / "artifacts" / Path(adapter_path).parent.name / "training_meta.json"),
         }
     finally:
         print("Cleaning up train pod:", pod_id)
@@ -899,7 +879,7 @@ def run_sweep_on_pod_task(
     payload["env"] = {
         **base_env,
         "WANDB_SWEEP_LABELED_PATH": path_on_volume,
-        "WANDB_SWEEP_OUTPUT_DIR": "/workspace/distill_pipeline_output",
+        "WANDB_SWEEP_OUTPUT_DIR": "/tmp/distill_pipeline_output",
         "WANDB_SWEEP_ID": sweep_id,
         "WANDB_PROJECT": wandb_project,
     }
@@ -1018,6 +998,48 @@ def get_best_adapter_from_artifact_task(
         return None
     logger.info("sweep best run: %s, adapter_path=%s (from artifact)", run_name, adapter_path)
     return str(adapter_path)
+
+
+@task(name="get-latest-run-adapter-from-artifact-task", log_prints=True)
+def get_latest_run_adapter_from_artifact_task(
+    download_dir: str | Path,
+    project: str | None = None,
+    entity: str | None = None,
+    per_page: int = 20,
+) -> str | None:
+    """
+    wandb 프로젝트에서 가장 최근 run의 adapter artifact를 다운로드해 로컬 경로 반환.
+    단일 run 학습(train_student_with_pod) 후 Pod가 종료되면 artifact만으로 adapter 수급할 때 사용.
+    """
+    try:
+        import wandb
+        api = wandb.Api()
+        project = project or os.environ.get("WANDB_PROJECT", DEFAULT_WANDB_PROJECT)
+        entity = entity or os.environ.get("WANDB_ENTITY") or ""
+        path = f"{entity}/{project}" if entity else project
+        runs = api.runs(path, order="-created_at", per_page=per_page)
+    except Exception as e:
+        logger.warning("wandb runs 조회 실패: %s", e)
+        return None
+    download_dir = Path(download_dir)
+    for run in runs:
+        run_name = run.name or getattr(run, "id", None)
+        if not run_name:
+            continue
+        artifact_name = f"qlora-adapter-{run_name}"
+        try:
+            art = api.artifact(f"{run.entity}/{run.project}/{artifact_name}:latest")
+        except Exception:
+            continue
+        root = download_dir / "artifacts" / run_name
+        root.mkdir(parents=True, exist_ok=True)
+        art.download(root=str(root))
+        adapter_path = root / "adapter"
+        if adapter_path.is_dir():
+            logger.info("latest run adapter: %s -> %s", run_name, adapter_path)
+            return str(adapter_path)
+    logger.warning("프로젝트 %s 에서 adapter artifact를 가진 run이 없음", path)
+    return None
 
 
 @flow(name="run_sweep_and_evaluate_flow", log_prints=True)
@@ -1351,7 +1373,7 @@ def distill_pipeline_all(
     vllm_ready_timeout_sec: int = 180,
     student_model: str = "Qwen/Qwen2.5-0.5B-Instruct",
 ) -> dict:
-    """build_dataset → labeling(Pod) → train_student(Pod) → evaluate 순차 실행."""
+    """build_dataset → labeling(Pod) → train_student(Pod) → evaluate → merge(로컬) 순차 실행."""
     out_dir = Path(out_dir or _PROJECT_ROOT / "distill_pipeline_output")
     input_path = Path(input_path or _PROJECT_ROOT / "tasteam_app_all_review_data.json")
 
@@ -1396,7 +1418,7 @@ def distill_pipeline_all_sweep(
     student_model: str = "Qwen/Qwen2.5-0.5B-Instruct",
     num_pods: int = 1,
 ) -> dict:
-    """build_dataset → labeling(Pod) → run_sweep → best run adapter로 evaluate. sweep_id 없으면 sweep_yaml으로 등록 후 실행. num_pods>1이면 멀티 Pod."""
+    """build_dataset → labeling(Pod) → run_sweep → best run adapter로 evaluate → merge(로컬). sweep_id 없으면 sweep_yaml으로 등록. num_pods>1이면 멀티 Pod."""
     out_dir = Path(out_dir or _PROJECT_ROOT / "distill_pipeline_output")
     input_path = Path(input_path or _PROJECT_ROOT / "tasteam_app_all_review_data.json")
 
@@ -1467,7 +1489,7 @@ def sweep_eval_merge_flow(
     student_model: str = "Qwen/Qwen2.5-0.5B-Instruct",
     num_pods: int = 1,
 ) -> dict:
-    """Pod에서 sweep → best adapter로 evaluate → merge. build_dataset, labeling은 건너뜀. num_pods>1이면 멀티 Pod."""
+    """Pod에서 sweep → best adapter로 evaluate → merge(로컬). build_dataset, labeling은 건너뜀. num_pods>1이면 멀티 Pod."""
     out_dir = Path(output_dir or _PROJECT_ROOT / "distill_pipeline_output")
     sweep_ev = run_sweep_and_evaluate_flow(
         labeled_path=labeled_path,
