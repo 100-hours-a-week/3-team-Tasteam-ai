@@ -28,3 +28,23 @@ requests.exceptions.ConnectionError: ('Connection aborted.', RemoteDisconnected(
 
 3. **타임아웃**  
    `RunPodClient` 기본 `timeout`은 120초입니다. 더 길게 쓰려면 생성 시 `timeout=180` 등으로 지정.
+
+---
+
+
+네. **맥북이 잠금/슬립 상태면 그런 에러가 나기 쉽습니다.**
+
+- **잠금/슬립 시** 네트워크가 끊기거나 절전 모드로 들어가면서, 이미 맺어진 TCP 연결이 끊어질 수 있습니다.
+- **`Connection aborted` / `Remote end closed connection without response`** 는 “연결이 중간에 끊겼다”는 뜻이라,  
+  - (1) 맥북이 슬립되면서 로컬에서 연결이 끊기거나  
+  - (2) 슬립 동안 응답을 못 보내서 상대(예: RunPod API)가 타임아웃으로 연결을 닫은 경우 모두 해당합니다.
+
+그래서 **긴 작업(예: sweep_eval_merge, Pod 생성/대기)** 중에 화면이 꺼지거나 잠금되면 이런 `ConnectionError`가 자주 납니다.
+
+**줄이는 방법:**  
+- 시스템 설정 → 배터리(또는 디스플레이)에서 “디스플레이 끄기 / 절전” 시간을 길게 두거나,  
+- 터미널에서 `caffeinate`으로 슬립 방지 후 실행:  
+  `caffeinate -i python scripts/distill_flows.py sweep_eval_merge ...`  
+  (`-i`는 idle 시에도 시스템이 슬립하지 않게 함)
+
+에러 자체는 RunPod 쪽 재시도 로직(이미 있는 500/ConnectionError 재시도)으로 어느 정도 흡수되지만, 슬립이 원인이면 재시도도 슬립 구간에서는 실패할 수 있으니, 긴 실행 시에는 슬립 방지가 가장 확실합니다.
