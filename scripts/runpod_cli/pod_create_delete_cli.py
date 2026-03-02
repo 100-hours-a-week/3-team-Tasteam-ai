@@ -14,10 +14,31 @@ class RunPodClient:
             "Content-Type": "application/json",
         })
 
-    def create_pod(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+    def create_pod(
+        self,
+        payload: Dict[str, Any],
+        max_retries: int = 4,
+        retry_statuses: tuple[int, ...] = (500, 502, 503),
+        base_delay_sec: float = 2.0,
+    ) -> Dict[str, Any]:
+        """Pod 생성. 500/502/503 시 지수 백오프 재시도."""
         url = f"{self.base_url}/pods"
-        resp = self.session.post(url, json=payload, timeout=self.timeout)
-        return self._handle_json_response(resp)
+        last_exc = None
+        for attempt in range(max_retries):
+            try:
+                resp = self.session.post(url, json=payload, timeout=self.timeout)
+                return self._handle_json_response(resp)
+            except requests.HTTPError as e:
+                last_exc = e
+                status = e.response.status_code if e.response is not None else None
+                if status in retry_statuses and attempt < max_retries - 1:
+                    delay = base_delay_sec * (2**attempt)
+                    time.sleep(delay)
+                    continue
+                raise
+        if last_exc is not None:
+            raise last_exc
+        return {}
 
     def get_pod(self, pod_id: str) -> Dict[str, Any]:
         url = f"{self.base_url}/pods/{pod_id}"

@@ -1040,18 +1040,22 @@ def run_sweep_and_evaluate_flow(
     out_dir = str(output_dir) if output_dir else str(_PROJECT_ROOT / "distill_pipeline_output")
     if use_pod:
         if num_pods > 1:
-            # 멀티 Pod: 라벨 한 번만 업로드 후 N개 Pod 동시 생성·대기 (gpu_parallel.md 권장 2~3)
+            # 멀티 Pod: 라벨 한 번만 업로드 후 Pod 생성 순차화(스태거)로 동시 500 방지 (runpod_api_500.md)
             upload_labeled_to_volume_for_sweep_task(labeled_path)
-            futures = [
-                run_sweep_on_pod_task.submit(
-                    sweep_id=sweep_id,
-                    labeled_path=labeled_path,
-                    output_dir=out_dir,
-                    pod_index=i,
-                    skip_upload=True,
+            _SWEEP_POD_STAGGER_SEC = 15  # Pod 생성 요청 간격(초)
+            futures = []
+            for i in range(num_pods):
+                if i > 0:
+                    time.sleep(_SWEEP_POD_STAGGER_SEC)
+                futures.append(
+                    run_sweep_on_pod_task.submit(
+                        sweep_id=sweep_id,
+                        labeled_path=labeled_path,
+                        output_dir=out_dir,
+                        pod_index=i,
+                        skip_upload=True,
+                    )
                 )
-                for i in range(num_pods)
-            ]
             for f in futures:
                 f.result()
         else:
