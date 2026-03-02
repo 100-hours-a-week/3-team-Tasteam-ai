@@ -10,7 +10,7 @@ s3:
 
 # 용도별 네트워크 볼륨 ID
 volumes:
-  train: "v3i546pkrz"
+  train: "od0ndkn43b"
   labeling: "o3a3ya7flt"
   merge: "v3i546pkrz"
 
@@ -18,7 +18,7 @@ volumes:
 pod:
   train:
     image_name: "jinsoo1218/train-llm:latest"
-    network_volume_id: "v3i546pkrz"
+    network_volume_id: "od0ndkn43b"
   labeling:
     image_name: "jinsoo1218/runpod-pod-vllm:latest"
     network_volume_id: "o3a3ya7flt"
