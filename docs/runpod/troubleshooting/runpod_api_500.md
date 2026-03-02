@@ -1,44 +1,3 @@
-(env_ai) js@jinsoos-MacBook-Pro tasteam-new-async % python scripts/distill_flows.py sweep_eval_merge --labeled-path distill_pipeline_output/labeled/20260226_051037/train_labeled.json --out-dir distill_pipeline_output --num-pods 2
-
-20:47:17.062 | INFO    | prefect - Starting temporary server on http://127.0.0.1:8593
-See https://docs.prefect.io/v3/concepts/server#how-to-guides for more information on running a dedicated Prefect server.
-20:47:19.538 | INFO    | Flow run 'armored-bear' - Beginning flow run 'armored-bear' for flow 'sweep_eval_merge_flow'
-20:47:19.612 | INFO    | Flow run 'classic-aardwark' - Beginning subflow run 'classic-aardwark' for flow 'run_sweep_and_evaluate_flow'
-wandb: [wandb.login()] Loaded credentials for https://api.wandb.ai from WANDB_API_KEY.
-wandb: Currently logged in as: jin-soo (jin-soo-none) to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
-wandb: Tracking run with wandb version 0.25.0
-wandb: Run data is saved locally in /Users/js/tasteam-new-async/wandb/run-20260301_204720-pkwb9j13
-wandb: Run `wandb offline` to turn off syncing.
-wandb: Syncing run fanciful-wind-18
-wandb: ⭐️ View project at https://wandb.ai/jin-soo-none/tasteam-distill
-wandb: 🚀 View run at https://wandb.ai/jin-soo-none/tasteam-distill/runs/pkwb9j13
-wandb: 🚀 View run fanciful-wind-18 at: https://wandb.ai/jin-soo-none/tasteam-distill/runs/pkwb9j13
-wandb: ⭐️ View project at: https://wandb.ai/jin-soo-none/tasteam-distill
-wandb: Synced 4 W&B file(s), 0 media file(s), 0 artifact file(s) and 0 other file(s)
-wandb: Find logs at: ./wandb/run-20260301_204720-pkwb9j13/logs
-20:47:23.416 | INFO    | Task run 'ensure-wandb-project-task-86c' - Finished in state Completed()
-20:47:24.265 | INFO    | Task run 'register-sweep-task-ebc' - Create sweep with ID: ollyx0fg
-20:47:24.266 | INFO    | Task run 'register-sweep-task-ebc' - Sweep URL: https://wandb.ai/jin-soo-none/tasteam-distill/sweeps/ollyx0fg
-20:47:24.268 | INFO    | Task run 'register-sweep-task-ebc' - Finished in state Completed()
-20:47:32.018 | INFO    | Task run 'upload-labeled-to-volume-for-sweep-task-c17' - Finished in state Completed()
-20:47:33.378 | ERROR   | Task run 'run-sweep-on-pod-task-1d8' - Task run failed with exception: HTTPError("HTTP 500 for POST https://rest.runpod.io/v1/pods: {'error': 'create pod: Something went wrong. Please try again later or contact support.', 'status': 500}")
-Traceback (most recent call last):
-  File "/Users/js/miniconda3/envs/env_ai/lib/python3.11/site-packages/prefect/task_engine.py", line 1014, in run_context
-    yield self
-  File "/Users/js/miniconda3/envs/env_ai/lib/python3.11/site-packages/prefect/task_engine.py", line 1673, in run_task_sync
-    engine.call_task_fn(txn)
-  File "/Users/js/miniconda3/envs/env_ai/lib/python3.11/site-packages/prefect/task_engine.py", line 1031, in call_task_fn
-    result = call_with_parameters(self.task.fn, parameters)
-             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/Users/js/miniconda3/envs/env_ai/lib/python3.11/site-packages/prefect/utilities/callables.py", line 210, in call_with_parameters
-    return fn(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^
-  File "/Users/js/tasteam-new-async/scripts/distill_flows.py", line 843, in run_sweep_on_pod_task
-    pod = client.create_pod(payload)
-          ^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/Users/js/tasteam-new-async/scripts/runpod_cli/pod_create_delete_cli.py", line 20, in create_pod
-    return self._handle_json_response(resp)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
   File "/Users/js/tasteam-new-async/scripts/runpod_cli/pod_create_delete_cli.py", line 207, in _handle_json_response
     raise requests.HTTPError(
 requests.exceptions.HTTPError: HTTP 500 for POST https://rest.runpod.io/v1/pods: {'error': 'create pod: Something went wrong. Please try again later or contact support.', 'status': 500}
@@ -301,7 +260,7 @@ RunPod의 “no instance”는 **그 API 요청 조건을 동시에 만족하는
 
 - **원인**: API가 요청하는 **조건 조합**(4090/A5000 + 여러 리전 + CUDA 13.0 + min 스펙)에 맞는 인스턴스가 그 순간 없어서 “no instance”가 났고, 수동 생성은 (리전/옵션/시점이 달라서) 다른 요청으로 인스턴스가 잡힌 것으로 보는 것이 타당합니다.
 - **대응**:  
-  - 나중에 다시 sweep 돌리기(같은 API로 재시도).  
+  - 나중에 다시 sweep 돌리기(같은 API로 재시도).  (pod 2개 생성 성공)
   - 또는 payload를 완화: `allowedCudaVersions`에 `"12.0"` 추가, `dataCenterIds` 확대, `gpuTypeIds`에 다른 4090 표기(있다면) 추가 등으로 “no instance”가 덜 나오게 조정할 수 있습니다.
 
 이 내용을 `runpod_api_500.md`에 “no instance지만 수동 생성은 되는 경우”로 짧게 정리해 두면 나중에 참고하기 좋습니다.
