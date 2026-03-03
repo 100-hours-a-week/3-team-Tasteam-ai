@@ -29,6 +29,8 @@ Flow (docs/easydistill/distill_by_prefect.md):
   python scripts/distill_flows.py all_sweep [--sweep-id <sweep_id>]  # sweep-id 없으면 flow 내부에서 sweep 등록 후 실행
   python scripts/distill_flows.py merge_for_serving --adapter-path .../adapter [--out-dir ...]  # 로컬 merge (파이프라인 기본)
   python scripts/distill_flows.py merge_for_serving_with_pod --adapter-path .../adapter  # 수동: Pod에서 merge (볼륨 사용)
+  python scripts/distill_flows.py evaluate_on_pod --adapter-path .../adapter --val-labeled-path .../val_labeled.json [--test-labeled-path ...]  # Pod에서 평가 후 artifact 업로드·로컬 다운로드
+  python scripts/distill_flows.py download_eval_artifact --artifact-version v1 [--out-dir ...]  # 평가 artifact를 지정 버전으로 다운로드
 
 예시:
   python scripts/distill_flows.py build_dataset --input tasteam_app_all_review_data.json --out-dir distill_pipeline_output
@@ -1220,6 +1222,210 @@ def evaluate_flow(
     )
 
 
+EVAL_ARTIFACT_NAME_DEFAULT = "distill-eval-report"
+
+
+@task(name="download-eval-artifact-task", log_prints=True)
+def download_eval_artifact_task(
+    artifact_version: str,
+    output_dir: str | Path,
+    project: str = DEFAULT_WANDB_PROJECT,
+    entity: str | None = None,
+    artifact_name: str = EVAL_ARTIFACT_NAME_DEFAULT,
+) -> dict:
+    """wandb artifact에서 평가 결과를 지정 버전으로 다운로드. artifact_version 예: latest, v0, v1."""
+    import wandb
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    if not os.environ.get("WANDB_API_KEY"):
+        raise ValueError("WANDB_API_KEY required for download_eval_artifact_task")
+    api = wandb.Api()
+    qualified = f"{entity or os.environ.get('WANDB_ENTITY', '')}/{project}/{artifact_name}:{artifact_version}"
+    qualified = qualified.lstrip("/")
+    art = api.artifact(qualified)
+    art.download_root(str(output_dir))
+    # artifact는 add_dir(..., name="eval")로 올렸으므로 report는 output_dir/eval/report.json
+    report_path = output_dir / "eval" / "report.json"
+    human_path = output_dir / "eval" / "human_eval_samples.json"
+    return {
+        "report_path": str(report_path) if report_path.exists() else None,
+        "human_eval_sample_path": str(human_path) if human_path.exists() else None,
+        "artifact_version": artifact_version,
+        "qualified_name": qualified,
+        "download_root": str(output_dir),
+    }
+
+
+@task(name="evaluate-on-pod-task", log_prints=True)
+def evaluate_on_pod_task(
+    adapter_path: str,
+    val_labeled_path: str | None = None,
+    test_labeled_path: str | None = None,
+    output_dir: str | Path | None = None,
+    base_model: str = "Qwen/Qwen2.5-0.5B-Instruct",
+    artifact_name: str = EVAL_ARTIFACT_NAME_DEFAULT,
+    project: str = DEFAULT_WANDB_PROJECT,
+    entity: str | None = None,
+    volume_id: str | None = None,
+    eval_poll_interval_sec: int = 60,
+    eval_timeout_sec: int = 7200,
+    pod_wait_timeout_sec: int = 600,
+) -> dict:
+    """
+    Pod에서 eval_distill 실행 → 결과를 wandb artifact로 업로드 → 로컬에서 해당 버전으로 다운로드.
+    adapter_path, val_labeled_path, test_labeled_path 필수(평가 입력). output_dir는 다운로드 받을 로컬 경로.
+    """
+    if RunPodClient is None:
+        raise RuntimeError("RunPodClient not available.")
+    if not upload_file_to_volume or not upload_directory or not get_runpod_s3_client or not object_exists:
+        raise RuntimeError("runpod_s3_upload (upload_file_to_volume, upload_directory, object_exists) required.")
+    token = os.environ.get("RUNPOD_API_KEY")
+    if not token:
+        raise ValueError("RUNPOD_API_KEY required for evaluate_on_pod_task")
+    if not os.environ.get("RUNPOD_S3_ACCESS_KEY") or not os.environ.get("RUNPOD_S3_SECRET_ACCESS_KEY"):
+        raise ValueError("RUNPOD_S3_ACCESS_KEY and RUNPOD_S3_SECRET_ACCESS_KEY required.")
+    if not os.environ.get("WANDB_API_KEY"):
+        raise ValueError("WANDB_API_KEY required for Pod to upload eval result artifact")
+
+    vol_id = volume_id or (runpod_config.get_volume_id_train() if runpod_config else None) or os.environ.get("RUNPOD_NETWORK_VOLUME_ID")
+    if not vol_id:
+        raise ValueError("volume_id or RUNPOD_NETWORK_VOLUME_ID required")
+    version = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    prefix = f"distill_pipeline_output/eval_input/{version}"
+    eval_output_on_volume = "/workspace/distill_pipeline_output/eval_output"
+    client = get_runpod_s3_client()
+
+    adapter_dir = Path(adapter_path).resolve()
+    if not adapter_dir.is_dir():
+        raise FileNotFoundError(f"adapter path is not a directory: {adapter_dir}")
+    upload_directory(client, vol_id, adapter_dir, f"{prefix}/adapter")
+    adapter_on_volume = f"/workspace/{prefix}/adapter"
+
+    val_path = Path(val_labeled_path) if val_labeled_path else None
+    test_path = Path(test_labeled_path) if test_labeled_path else None
+    if not val_path or not val_path.exists():
+        raise ValueError("val_labeled_path is required and must exist for evaluate_on_pod_task")
+    upload_file_to_volume(val_path, volume_id=vol_id, object_key=f"{prefix}/val_labeled.json")
+    if test_path and test_path.exists():
+        upload_file_to_volume(test_path, volume_id=vol_id, object_key=f"{prefix}/test_labeled.json")
+    val_on_volume = f"/workspace/{prefix}/val_labeled.json"
+    test_on_volume = f"/workspace/{prefix}/test_labeled.json" if (test_path and test_path.exists()) else None
+
+    eval_script = _SCRIPT_DIR / "eval_distill.py"
+    wrapper_script = _SCRIPT_DIR / "run_eval_and_upload_artifact.py"
+    if not eval_script.is_file() or not wrapper_script.is_file():
+        raise FileNotFoundError("eval_distill.py and run_eval_and_upload_artifact.py must exist in scripts/")
+    upload_file_to_volume(eval_script, volume_id=vol_id, object_key="distill_pipeline_output/eval_scripts/eval_distill.py")
+    upload_file_to_volume(wrapper_script, volume_id=vol_id, object_key="distill_pipeline_output/eval_scripts/run_eval_and_upload_artifact.py")
+
+    cmd = [
+        "/workspace/distill_pipeline_output/eval_scripts/run_eval_and_upload_artifact.py",
+        "--adapter-path", adapter_on_volume,
+        "--val-labeled", val_on_volume,
+        "--output-dir", eval_output_on_volume,
+        "--base-model", base_model,
+        "--artifact-name", artifact_name,
+        "--wandb-project", project,
+    ]
+    if test_on_volume:
+        cmd.extend(["--test-labeled", test_on_volume])
+    if entity:
+        cmd.extend(["--wandb-entity", entity])
+
+    payload = RunPodClient.get_default_pod_payload(use="eval", docker_start_cmd=cmd)
+    runpod_client = RunPodClient(token=token)
+    pod = runpod_client.create_pod(payload)
+    pod_id = pod["id"]
+    _track_pod_created(pod_id)
+    logger.info("Eval Pod created: %s", pod_id)
+
+    try:
+        runpod_client.wait_until_running(pod_id, timeout_sec=pod_wait_timeout_sec)
+        done_key = "distill_pipeline_output/eval_output/eval_done.json"
+        deadline = time.time() + eval_timeout_sec
+        while time.time() < deadline:
+            if object_exists(client, vol_id, done_key):
+                break
+            time.sleep(eval_poll_interval_sec)
+        else:
+            raise TimeoutError(f"Eval Pod did not produce eval_done.json within {eval_timeout_sec}s. Check Pod logs.")
+
+        resp = client.get_object(Bucket=vol_id, Key=done_key)
+        done = json.loads(resp["Body"].read().decode("utf-8"))
+        qualified_name = done.get("qualified_name")
+        artifact_version_str = done.get("version") or "latest"
+        if not qualified_name:
+            logger.warning("eval_done.json has no qualified_name; cannot download artifact")
+            return {"report_path": None, "artifact_version": artifact_version_str, "eval_done": done}
+
+        out_dir = Path(output_dir or _PROJECT_ROOT / "distill_pipeline_output" / "eval_from_pod")
+        out_dir.mkdir(parents=True, exist_ok=True)
+        import wandb as _wandb
+        _api = _wandb.Api()
+        _art = _api.artifact(qualified_name)
+        _art.download_root(str(out_dir))
+        report_path = out_dir / "eval" / "report.json"
+        human_path = out_dir / "eval" / "human_eval_samples.json"
+        return {
+            "report_path": str(report_path) if report_path.exists() else None,
+            "human_eval_sample_path": str(human_path) if human_path.exists() else None,
+            "artifact_version": artifact_version_str,
+            "qualified_name": qualified_name,
+            "download_root": str(out_dir),
+        }
+    finally:
+        logger.info("Cleaning up eval pod: %s", pod_id)
+        runpod_client.delete_pod(pod_id)
+        _untrack_pod(pod_id)
+
+
+@flow(name="evaluate_on_pod_flow", log_prints=True)
+def evaluate_on_pod_flow(
+    adapter_path: str,
+    val_labeled_path: str,
+    test_labeled_path: str | None = None,
+    output_dir: str | Path | None = None,
+    base_model: str = "Qwen/Qwen2.5-0.5B-Instruct",
+    artifact_name: str = EVAL_ARTIFACT_NAME_DEFAULT,
+    project: str = DEFAULT_WANDB_PROJECT,
+    entity: str | None = None,
+    volume_id: str | None = None,
+    eval_timeout_sec: int = 7200,
+) -> dict:
+    """Pod에서 평가 실행 후 결과를 artifact로 올리고, 로컬에서 해당 버전으로 다운로드."""
+    return evaluate_on_pod_task(
+        adapter_path=adapter_path,
+        val_labeled_path=val_labeled_path,
+        test_labeled_path=test_labeled_path,
+        output_dir=str(output_dir) if output_dir else None,
+        base_model=base_model,
+        artifact_name=artifact_name,
+        project=project,
+        entity=entity,
+        volume_id=volume_id,
+        eval_timeout_sec=eval_timeout_sec,
+    )
+
+
+@flow(name="download_eval_artifact_flow", log_prints=True)
+def download_eval_artifact_flow(
+    artifact_version: str,
+    output_dir: str | Path,
+    project: str = DEFAULT_WANDB_PROJECT,
+    entity: str | None = None,
+    artifact_name: str = EVAL_ARTIFACT_NAME_DEFAULT,
+) -> dict:
+    """기존 평가 artifact를 지정 버전(예: latest, v0, v1)으로 다운로드."""
+    return download_eval_artifact_task(
+        artifact_version=artifact_version,
+        output_dir=output_dir,
+        project=project,
+        entity=entity,
+        artifact_name=artifact_name,
+    )
+
+
 @task(name="merge-adapter-for-serving-task", log_prints=True)
 def merge_adapter_for_serving_task(
     adapter_path: str,
@@ -1568,8 +1774,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Prefect flows for summary KD pipeline (distill_by_prefect.md)")
     parser.add_argument(
         "flow",
-        choices=["build_dataset", "labeling_with_pod", "labeling_pod_only", "train_student_with_pod", "run_sweep", "train_and_evaluate", "sweep_eval_merge", "evaluate", "merge_for_serving", "merge_for_serving_with_pod", "upload_labeled_artifact", "upload_dataset_artifact", "all", "all_sweep"],
-        help="Flow to run. upload_labeled_artifact/upload_dataset_artifact: 기존 디렉터리만 wandb artifact로 업로드. sweep_eval_merge: Pod sweep→evaluate→merge만. all/all_sweep: 라벨링·학습 Pod 기준.",
+        choices=["build_dataset", "labeling_with_pod", "labeling_pod_only", "train_student_with_pod", "run_sweep", "train_and_evaluate", "sweep_eval_merge", "evaluate", "evaluate_on_pod", "download_eval_artifact", "merge_for_serving", "merge_for_serving_with_pod", "upload_labeled_artifact", "upload_dataset_artifact", "all", "all_sweep"],
+        help="Flow to run. evaluate_on_pod: Pod에서 평가 후 결과를 wandb artifact로 올리고 로컬에 다운로드. download_eval_artifact: 평가 artifact를 지정 버전으로 다운로드.",
     )
     parser.add_argument("--gold-path", type=Path, default=None, help="train_labeled_gold_only.json 경로 (labeling_pod_only 필수)")
     parser.add_argument("--sweep-id", type=str, default=None, help="wandb sweep id (optional; 없으면 --sweep-yaml으로 flow 내부에서 등록)")
@@ -1582,8 +1788,9 @@ def main() -> None:
     parser.add_argument("--labeled-path", type=Path, default=None, help="train_labeled.json (for train_student_with_pod, run_sweep)")
     parser.add_argument("--adapter-path", type=Path, default=None, help="adapter path (for evaluate, merge_for_serving; merge_for_serving_with_pod 시 로컬 adapter)")
     parser.add_argument("--run-id", type=str, default=None, help="볼륨 상의 학습 run id (merge_for_serving_with_pod 시 --adapter-path 대신 사용)")
-    parser.add_argument("--val-labeled-path", type=Path, default=None, help="val_labeled.json (for evaluate)")
-    parser.add_argument("--test-labeled-path", type=Path, default=None, help="test_labeled.json (for evaluate)")
+    parser.add_argument("--val-labeled-path", type=Path, default=None, help="val_labeled.json (for evaluate, evaluate_on_pod)")
+    parser.add_argument("--test-labeled-path", type=Path, default=None, help="test_labeled.json (for evaluate, evaluate_on_pod)")
+    parser.add_argument("--artifact-version", type=str, default="latest", help="For download_eval_artifact: artifact version (latest, v0, v1, ...)")
     parser.add_argument("--openai-cap", type=int, default=500, help="OpenAI labeling cap (for labeling_with_pod/all)")
     parser.add_argument("--public-ip-wait-timeout", type=int, default=180, help="publicIp 할당 대기 초 (labeling_with_pod, labeling_pod_only)")
     parser.add_argument("--vllm-ready-timeout", type=int, default=180, help="vLLM /v1/models 준비 대기 초 (labeling_with_pod, labeling_pod_only)")
@@ -1721,6 +1928,27 @@ def main() -> None:
             test_labeled_path=str(args.test_labeled_path) if args.test_labeled_path else None,
             output_dir=out_dir,
             base_model=args.student_model,
+        )
+        print("Result:", result)
+    elif args.flow == "evaluate_on_pod":
+        if not args.adapter_path:
+            parser.error("evaluate_on_pod requires --adapter-path")
+        if not args.val_labeled_path or not args.val_labeled_path.exists():
+            parser.error("evaluate_on_pod requires --val-labeled-path (path to val_labeled.json)")
+        result = evaluate_on_pod_flow(
+            adapter_path=str(args.adapter_path),
+            val_labeled_path=str(args.val_labeled_path),
+            test_labeled_path=str(args.test_labeled_path) if args.test_labeled_path else None,
+            output_dir=out_dir,
+            base_model=args.student_model,
+        )
+        print("Result:", result)
+    elif args.flow == "download_eval_artifact":
+        result = download_eval_artifact_flow(
+            artifact_version=args.artifact_version,
+            output_dir=out_dir,
+            project=os.environ.get("WANDB_PROJECT", DEFAULT_WANDB_PROJECT),
+            entity=os.environ.get("WANDB_ENTITY"),
         )
         print("Result:", result)
     elif args.flow == "merge_for_serving":
