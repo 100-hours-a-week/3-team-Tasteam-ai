@@ -164,11 +164,12 @@ class RunPodClient:
         while time.time() < deadline:
             pod = self.get_pod(pod_id)
             last = pod
-            if pod.get("status") == "already_deleted":
+            pod_status = (pod.get("status") or "").upper()
+            if pod_status in ("ALREADY_DELETED", "DELETED"):
                 return pod
             desired = (pod.get("desiredStatus") or "").upper()
             status = (pod.get("status") or pod.get("runtimeStatus") or "").upper()
-            if desired != "RUNNING" or ("EXIT" in status or "STOP" in status or status == "COMPLETED"):
+            if desired != "RUNNING" or ("EXIT" in status or "STOP" in status or status == "COMPLETED" or status == "DELETED"):
                 return pod
             time.sleep(poll_interval_sec)
         raise TimeoutError(f"Pod {pod_id} did not stop within {timeout_sec}s. Last: {last}")
