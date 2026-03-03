@@ -254,3 +254,92 @@
   JSON 문자열 그대로 말고, 요약만 뽑아서(예: `overall_summary.summary` 필드만) ROUGE/BERTScore에 넣으면 점수가 나오는지 비교.
 
 지금 첨부해 주신 구조만 보면 **output은 문자열**이므로, “ref가 리스트/비어 있음”보다는 **형식/토크나이저/환경( Pod vs 로컬)** 쪽을 의심하는 게 맞습니다.
+
+---
+
+1) 모델/로딩/device/OOM 예외 → 0으로 fallback
+코드:
+_load_model_and_tokenizer, _generate_one, _rouge, _bertscore 호출부에 try/except 없음.
+예외 나면 그대로 전파되고, report 쓰기 전에 스크립트가 죽음.
+정리:
+report까지 나왔다는 건 모델 로드 + 944/1277번 generate가 끝까지 돌았다는 뜻이라,
+“로딩 실패/OOM으로 예외 났는데 0으로 fallback” 가능성은 낮음.
+(그런 예외면 report.json이 안 쓰였을 가능성이 큼.)
+2) NaN이 나와서 평균/후처리에서 0으로 덮음
+코드:
+_bertscore: float(P.mean()), float(R.mean()), float(F1.mean()) 그대로 반환 (108–110행).
+NaN이 있으면 float(nan) → nan.
+report[split] = { ..., **bs } 에 그대로 들어가고,
+json.dump(report, ...) 시 표준 라이브러리 json은 NaN을 지원하지 않아
+ValueError: Out of range float values are not JSON serializable 로 저장 단계에서 터짐.
+정리:
+“NaN이 생겼는데 평균/후처리에서 0으로 덮어써서 report에 0이 들어갔다”는 코드 경로는 없음.
+NaN이 한 번이라도 들어가면 report 저장이 실패하는 구조라,
+“길이/특수문자/이상 입력 → NaN → 0으로 덮음” 가능성은 낮음.
+(다만 환경에 따라 NaN을 0으로 바꿔주는 커스텀 JSON 인코더가 있다면 그때는 가능.)
+3) 실제로는 스코어가 있는데, 집계/저장 로직에서 0 초기화만 하고 업데이트가 안 됨
+코드:
+report[split] 은 한 번만 할당 (164–169행):
+r1, r2, rl = 이미 계산된 평균, bs = _bertscore 반환값을 그대로 넣음.
+“0으로 초기화해 두고, 나중에 업데이트”하는 패턴은 없음.
+정리:
+“집계/로그 저장 로직에서 0으로 초기화된 채 업데이트가 안 됨” 가능성은 낮음.
+지금 구조는 “계산한 값으로 한 번에 dict 만든 뒤 report에 넣는” 방식이라,
+스코어가 제대로 계산됐다면 그대로 report에 들어가야 함.
+추가로 의심할 만한 것: import 실패로 인한 0
+코드 (31–41행):
+rouge_score import 실패 → ROUGE_AVAILABLE = False → 93행에서 항상 {"rouge1": 0.0, "rouge2": 0.0, "rougeL": 0.0} 반환.
+bert_score import 실패 → BERTSCORE_AVAILABLE = False → 104행에서 not BERTSCORE_AVAILABLE 이 True가 되어 104행에서 {"bertscore_p": 0.0, ...} 반환.
+정리:
+Pod 이미지에 rouge_score / bert_score가 없거나 import가 실패하면,
+예외 없이 전부 0으로 나오는 경로가 실제로 존재함.
+이 경우 “모델/OOM/device 예외 → 0 fallback”이 아니라 의도된 fallback(미설치) 에 가깝고,
+report는 정상적으로 쓰이므로 가능성 있음.
+요약
+가능성	결론
+(1) 모델/로딩/device/OOM 예외 → 0 fallback	낮음 (예외면 report 자체가 안 나옴)
+(2) NaN → 평균/후처리에서 0으로 덮음	낮음 (NaN이면 json.dump 단계에서 에러)
+(3) 집계/저장 로직에서 0 초기화만 하고 미업데이트	낮음 (0 초기화 후 업데이트하는 코드 없음)
+보너스 Pod에서 rouge_score/bert_score 미설치·import 실패	가능성 있음 (예외 없이 전부 0 반환하는 경로 있음)
+추천 확인:
+Pod(또는 eval 돌린 환경)에서
+python -c "from rouge_score import rouge_scorer; from bert_score import score; print('ok')"
+으로 import 가능 여부 확인해 보는 것이 좋습니다.
+
+---
+
+
+터미널에서 **로컬(env_ai)에 `bert_score`가 없어** import가 실패하는 걸 확인하셨네요.
+
+이 상황이 **eval을 돌린 환경(Pod 포함)** 에도 그대로라면:
+
+- `eval_distill.py` 39행 근처에서 `bert_score` import 실패 → `BERTSCORE_AVAILABLE = False`
+- 104행 `if not BERTSCORE_AVAILABLE or ...` 에 걸려서  
+  **bertscore_p/r/f1 이 항상 0.0으로 반환**하는 경로를 타게 됩니다.
+
+report에서 **ROUGE까지 전부 0**이라면, Pod 이미지에 `rouge_score`도 없거나 import가 실패했을 가능성(즉 `ROUGE_AVAILABLE = False`)도 같이 의심하는 게 좋습니다.
+
+**정리:**  
+로컬에서 `bert_score`가 없다는 건, “미설치/import 실패 시 0으로 fallback”하는 코드 경로가 실제로 존재한다는 걸 보여줍니다. Pod에서 eval 돌릴 때 쓰는 이미지/환경에 `rouge_score`, `bert_score`가 둘 다 들어가 있는지, 그리고 그 환경에서 위 한 줄 import 테스트가 통과하는지 확인해 보시면 원인 좁히는 데 도움이 됩니다.
+
+---
+
+env_ai) js@jinsoos-MacBook-Pro tasteam-new-async % python -c "from rouge_score import rouge_scorer; from bert_score import score; print('ok')"
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+ModuleNotFoundError: No module named 'bert_score'
+
+---
+
+터미널에서 **로컬(env_ai)에 `bert_score`가 없어** import가 실패하는 걸 확인하셨네요.
+
+이 상황이 **eval을 돌린 환경(Pod 포함)** 에도 그대로라면:
+
+- `eval_distill.py` 39행 근처에서 `bert_score` import 실패 → `BERTSCORE_AVAILABLE = False`
+- 104행 `if not BERTSCORE_AVAILABLE or ...` 에 걸려서  
+  **bertscore_p/r/f1 이 항상 0.0으로 반환**하는 경로를 타게 됩니다.
+
+report에서 **ROUGE까지 전부 0**이라면, Pod 이미지에 `rouge_score`도 없거나 import가 실패했을 가능성(즉 `ROUGE_AVAILABLE = False`)도 같이 의심하는 게 좋습니다.
+
+**정리:**  
+로컬에서 `bert_score`가 없다는 건, “미설치/import 실패 시 0으로 fallback”하는 코드 경로가 실제로 존재한다는 걸 보여줍니다. Pod에서 eval 돌릴 때 쓰는 이미지/환경에 `rouge_score`, `bert_score`가 둘 다 들어가 있는지, 그리고 그 환경에서 위 한 줄 import 테스트가 통과하는지 확인해 보시면 원인 좁히는 데 도움이 됩니다.
