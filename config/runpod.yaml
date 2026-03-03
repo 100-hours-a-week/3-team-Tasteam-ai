@@ -6,13 +6,13 @@ s3:
   region: "eu-ro-1"
   endpoint_url: "https://s3api-eu-ro-1.runpod.io"
   # 기본 볼륨 ID (train용). RUNPOD_NETWORK_VOLUME_ID 또는 RUNPOD_NETWORK_VOLUME_ID_TRAIN으로 오버라이드
-  volume_id: "v3i546pkrz"
+  volume_id: "qzd1kj7t7t"
 
 # 용도별 네트워크 볼륨 ID
 volumes:
   train: "od0ndkn43b"
   labeling: "o3a3ya7flt"
-  merge: "v3i546pkrz"
+  eval: "qzd1kj7t7t"
 
 # Pod 기본값 (get_default_pod_payload)
 pod:
@@ -22,9 +22,9 @@ pod:
   labeling:
     image_name: "jinsoo1218/runpod-pod-vllm:latest"
     network_volume_id: "o3a3ya7flt"
-  merge:
+  eval:
     image_name: "jinsoo1218/train-llm:latest"
-    network_volume_id: "v3i546pkrz"
+    network_volume_id: "qzd1kj7t7t"
   # 공통 payload 옵션
   gpu_type_ids:
     - "NVIDIA GeForce RTX 4090"
