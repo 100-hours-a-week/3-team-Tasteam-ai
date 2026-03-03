@@ -60,6 +60,7 @@ import time
 import yaml
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 try:
     from prefect import flow, task
@@ -928,6 +929,24 @@ def run_sweep_flow(
     return run_sweep_agent_task(sweep_id=sweep_id, labeled_path=labeled_path, output_dir=out_dir)
 
 
+def _get_run_metric_value(run: Any, metric_name: str = "eval_loss") -> float | None:
+    """run.summary에서 메트릭 값 반환. eval_loss / eval/loss 둘 다 시도."""
+    summary = getattr(run, "summary", None) or {}
+    candidates = [metric_name]
+    if metric_name == "eval_loss":
+        candidates.append("eval/loss")
+    elif metric_name == "eval/loss":
+        candidates.append("eval_loss")
+    for key in candidates:
+        try:
+            v = summary.get(key)
+            if v is not None:
+                return float(v)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
 @task(name="get-best-adapter-from-sweep-task", log_prints=True)
 def get_best_adapter_path_from_sweep_task(
     sweep_id: str,
@@ -943,11 +962,11 @@ def get_best_adapter_path_from_sweep_task(
     except Exception as e:
         logger.warning("wandb sweep best run 조회 실패: %s", e)
         return None
-    runs_with_metric = [r for r in runs if r.summary.get(metric_name) is not None]
+    runs_with_metric = [r for r in runs if _get_run_metric_value(r, metric_name) is not None]
     if not runs_with_metric:
-        logger.warning("sweep에 메트릭 %s가 있는 run이 없음", metric_name)
+        logger.warning("sweep에 메트릭 %s(또는 eval/loss)가 있는 run이 없음", metric_name)
         return None
-    best = min(runs_with_metric, key=lambda r: float(r.summary[metric_name]))
+    best = min(runs_with_metric, key=lambda r: _get_run_metric_value(r, metric_name))
     run_name = best.name or getattr(best, "id", None)
     if not run_name:
         logger.warning("best run에 name 없음")
@@ -1005,11 +1024,11 @@ def get_best_adapter_from_artifact_task(
     except Exception as e:
         logger.warning("wandb sweep best run 조회 실패: %s", e)
         return None
-    runs_with_metric = [r for r in runs if r.summary.get(metric_name) is not None]
+    runs_with_metric = [r for r in runs if _get_run_metric_value(r, metric_name) is not None]
     if not runs_with_metric:
-        logger.warning("sweep에 메트릭 %s가 있는 run이 없음", metric_name)
+        logger.warning("sweep에 메트릭 %s(또는 eval/loss)가 있는 run이 없음", metric_name)
         return None
-    best = min(runs_with_metric, key=lambda r: float(r.summary[metric_name]))
+    best = min(runs_with_metric, key=lambda r: _get_run_metric_value(r, metric_name))
     run_name = best.name or getattr(best, "id", None)
     if not run_name:
         logger.warning("best run에 name 없음")
