@@ -1288,9 +1288,9 @@ def evaluate_on_pod_task(
     if not os.environ.get("WANDB_API_KEY"):
         raise ValueError("WANDB_API_KEY required for Pod to upload eval result artifact")
 
-    vol_id = volume_id or (runpod_config.get_volume_id_train() if runpod_config else None) or os.environ.get("RUNPOD_NETWORK_VOLUME_ID")
+    vol_id = volume_id or (runpod_config.get_volume_id_eval() if runpod_config else None) or os.environ.get("RUNPOD_NETWORK_VOLUME_ID")
     if not vol_id:
-        raise ValueError("volume_id or RUNPOD_NETWORK_VOLUME_ID required")
+        raise ValueError("volume_id or RUNPOD_NETWORK_VOLUME_ID required (eval uses volumes.eval / pod.eval from runpod.yaml)")
     version = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
     prefix = f"distill_pipeline_output/eval_input/{version}"
     eval_output_on_volume = "/workspace/distill_pipeline_output/eval_output"

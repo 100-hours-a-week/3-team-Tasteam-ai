@@ -193,8 +193,8 @@ class RunPodClient:
             network_volume_id = runpod_config.get_pod_network_volume_id_merge()
             name = "merge-pod"
         elif use == "eval":
-            image_name = runpod_config.get_pod_image_train()
-            network_volume_id = runpod_config.get_pod_network_volume_id_merge()
+            image_name = runpod_config.get_pod_image_eval()
+            network_volume_id = runpod_config.get_pod_network_volume_id_eval()
             name = "eval-pod"
         else:
             image_name = runpod_config.get_pod_image_labeling()

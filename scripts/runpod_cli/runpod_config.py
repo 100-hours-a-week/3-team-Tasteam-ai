@@ -75,6 +75,10 @@ def get_volume_id_merge() -> str:
     return os.environ.get("RUNPOD_NETWORK_VOLUME_ID_TRAIN") or os.environ.get("RUNPOD_NETWORK_VOLUME_ID") or _get("volumes", "merge") or "v3i546pkrz"
 
 
+def get_volume_id_eval() -> str:
+    return os.environ.get("RUNPOD_NETWORK_VOLUME_ID_EVAL") or os.environ.get("RUNPOD_NETWORK_VOLUME_ID") or _get("volumes", "eval") or _get("pod", "eval", "network_volume_id") or "v3i546pkrz"
+
+
 # --- Pod (이미지, 볼륨, payload 공통) ---
 def get_pod_image_train() -> str:
     return os.environ.get("RUNPOD_POD_IMAGE_NAME_TRAIN") or _get("pod", "train", "image_name") or "jinsoo1218/train-llm:latest"
@@ -94,6 +98,14 @@ def get_pod_network_volume_id_labeling() -> str:
 
 def get_pod_network_volume_id_merge() -> str:
     return os.environ.get("RUNPOD_NETWORK_VOLUME_ID_TRAIN") or os.environ.get("RUNPOD_NETWORK_VOLUME_ID") or _get("pod", "merge", "network_volume_id") or "v3i546pkrz"
+
+
+def get_pod_network_volume_id_eval() -> str:
+    return os.environ.get("RUNPOD_NETWORK_VOLUME_ID_EVAL") or os.environ.get("RUNPOD_NETWORK_VOLUME_ID") or _get("pod", "eval", "network_volume_id") or _get("volumes", "eval") or "v3i546pkrz"
+
+
+def get_pod_image_eval() -> str:
+    return os.environ.get("RUNPOD_POD_IMAGE_NAME_EVAL") or _get("pod", "eval", "image_name") or get_pod_image_train()
 
 
 def get_pod_gpu_type_ids() -> list[str]:
