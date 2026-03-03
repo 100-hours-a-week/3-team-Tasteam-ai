@@ -1244,7 +1244,7 @@ def download_eval_artifact_task(
     qualified = f"{entity or os.environ.get('WANDB_ENTITY', '')}/{project}/{artifact_name}:{artifact_version}"
     qualified = qualified.lstrip("/")
     art = api.artifact(qualified)
-    art.download_root(str(output_dir))
+    art.download(root=str(output_dir))
     # artifact는 add_dir(..., name="eval")로 올렸으므로 report는 output_dir/eval/report.json
     report_path = output_dir / "eval" / "report.json"
     human_path = output_dir / "eval" / "human_eval_samples.json"
@@ -1364,7 +1364,7 @@ def evaluate_on_pod_task(
         import wandb as _wandb
         _api = _wandb.Api()
         _art = _api.artifact(qualified_name)
-        _art.download_root(str(out_dir))
+        _art.download(root=str(out_dir))
         report_path = out_dir / "eval" / "report.json"
         human_path = out_dir / "eval" / "human_eval_samples.json"
         return {
