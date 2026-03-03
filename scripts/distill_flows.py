@@ -826,7 +826,7 @@ def run_sweep_agent_task(
     return {"sweep_id": sweep_id, "labeled_path": labeled_path, "output_dir": output_dir}
 
 
-@task(name="run-sweep-on-pod-task", log_prints=True)
+@task(name="run-sweep-on-pod-task", log_prints=True, retries=0)
 def run_sweep_on_pod_task(
     sweep_id: str,
     labeled_path: str,
