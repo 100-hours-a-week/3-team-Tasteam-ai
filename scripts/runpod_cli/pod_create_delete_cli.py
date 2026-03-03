@@ -169,7 +169,7 @@ class RunPodClient:
                 return pod
             desired = (pod.get("desiredStatus") or "").upper()
             status = (pod.get("status") or pod.get("runtimeStatus") or "").upper()
-            if desired != "RUNNING" or ("EXIT" in status or "STOP" in status or status == "COMPLETED" or status == "DELETED"):
+            if desired != "RUNNING" or status == "DELETED":
                 return pod
             time.sleep(poll_interval_sec)
         raise TimeoutError(f"Pod {pod_id} did not stop within {timeout_sec}s. Last: {last}")
