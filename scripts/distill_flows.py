@@ -960,6 +960,33 @@ def get_best_adapter_path_from_sweep_task(
     return adapter_path
 
 
+@task(name="check-sweep-complete-task", log_prints=True)
+def check_sweep_complete_task(sweep_id: str) -> bool:
+    """wandb sweep가 이미 완료(Finished)였는지 확인. run_cap 도달 또는 state=Finished."""
+    try:
+        import wandb
+        api = wandb.Api()
+        sweep = api.sweep(sweep_id)
+        state = (getattr(sweep, "state", None) or "").lower()
+        if state == "finished":
+            logger.info("sweep %s 이미 완료(state=%s), Pod 생성 건너뜀", sweep_id, state)
+            return True
+        run_cap = 50
+        try:
+            cfg = getattr(sweep, "config", None) or {}
+            run_cap = int(cfg.get("run_cap", 50))
+        except (TypeError, ValueError):
+            pass
+        runs = list(sweep.runs)
+        if len(runs) >= run_cap:
+            logger.info("sweep %s run %d/%d 도달, Pod 생성 건너뜀", sweep_id, len(runs), run_cap)
+            return True
+        return False
+    except Exception as e:
+        logger.warning("sweep 완료 여부 조회 실패 (%s), Pod 생성 진행: %s", sweep_id, e)
+        return False
+
+
 @task(name="get-best-adapter-from-artifact-task", log_prints=True)
 def get_best_adapter_from_artifact_task(
     sweep_id: str,
@@ -1064,30 +1091,32 @@ def run_sweep_and_evaluate_flow(
         yaml_path = sweep_yaml if sweep_yaml is not None else DEFAULT_SWEEP_YAML
         sweep_id = register_sweep_task(yaml_path)
     out_dir = str(output_dir) if output_dir else str(_PROJECT_ROOT / "distill_pipeline_output")
-    if use_pod:
-        if num_pods > 1:
-            # 멀티 Pod: 라벨 한 번만 업로드 후 Pod 생성 순차화(스태거)로 동시 500 방지 (runpod_api_500.md)
-            upload_labeled_to_volume_for_sweep_task(labeled_path)
-            _SWEEP_POD_STAGGER_SEC = 15  # Pod 생성 요청 간격(초)
-            futures = []
-            for i in range(num_pods):
-                if i > 0:
-                    time.sleep(_SWEEP_POD_STAGGER_SEC)
-                futures.append(
-                    run_sweep_on_pod_task.submit(
-                        sweep_id=sweep_id,
-                        labeled_path=labeled_path,
-                        output_dir=out_dir,
-                        pod_index=i,
-                        skip_upload=True,
+    sweep_complete = check_sweep_complete_task(sweep_id)
+    if not sweep_complete:
+        if use_pod:
+            if num_pods > 1:
+                # 멀티 Pod: 라벨 한 번만 업로드 후 Pod 생성 순차화(스태거)로 동시 500 방지 (runpod_api_500.md)
+                upload_labeled_to_volume_for_sweep_task(labeled_path)
+                _SWEEP_POD_STAGGER_SEC = 15  # Pod 생성 요청 간격(초)
+                futures = []
+                for i in range(num_pods):
+                    if i > 0:
+                        time.sleep(_SWEEP_POD_STAGGER_SEC)
+                    futures.append(
+                        run_sweep_on_pod_task.submit(
+                            sweep_id=sweep_id,
+                            labeled_path=labeled_path,
+                            output_dir=out_dir,
+                            pod_index=i,
+                            skip_upload=True,
+                        )
                     )
-                )
-            for f in futures:
-                f.result()
+                for f in futures:
+                    f.result()
+            else:
+                run_sweep_on_pod_task(sweep_id=sweep_id, labeled_path=labeled_path, output_dir=out_dir)
         else:
-            run_sweep_on_pod_task(sweep_id=sweep_id, labeled_path=labeled_path, output_dir=out_dir)
-    else:
-        run_sweep_agent_task(sweep_id=sweep_id, labeled_path=labeled_path, output_dir=out_dir)
+            run_sweep_agent_task(sweep_id=sweep_id, labeled_path=labeled_path, output_dir=out_dir)
     best_adapter = get_best_adapter_from_artifact_task(
         sweep_id=sweep_id,
         download_dir=out_dir,
