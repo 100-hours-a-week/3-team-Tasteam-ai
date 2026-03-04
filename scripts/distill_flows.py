@@ -1293,7 +1293,7 @@ def evaluate_on_pod_task(
         raise ValueError("volume_id or RUNPOD_NETWORK_VOLUME_ID required (eval uses volumes.eval / pod.eval from runpod.yaml)")
     version = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
     prefix = f"distill_pipeline_output/eval_input/{version}"
-    eval_output_on_volume = "/workspace/distill_pipeline_output/eval_output"
+    eval_output_on_volume = f"/workspace/distill_pipeline_output/eval_output/{version}"
     client = get_runpod_s3_client()
 
     adapter_dir = Path(adapter_path).resolve()
@@ -1342,14 +1342,14 @@ def evaluate_on_pod_task(
 
     try:
         runpod_client.wait_until_running(pod_id, timeout_sec=pod_wait_timeout_sec)
-        done_key = "distill_pipeline_output/eval_output/eval_done.json"
+        done_key = f"distill_pipeline_output/eval_output/{version}/eval_done.json"
         deadline = time.time() + eval_timeout_sec
         while time.time() < deadline:
             if object_exists(client, vol_id, done_key):
                 break
             time.sleep(eval_poll_interval_sec)
         else:
-            raise TimeoutError(f"Eval Pod did not produce eval_done.json within {eval_timeout_sec}s. Check Pod logs.")
+            raise TimeoutError(f"Eval Pod did not produce {done_key} within {eval_timeout_sec}s. Check Pod logs.")
 
         resp = client.get_object(Bucket=vol_id, Key=done_key)
         done = json.loads(resp["Body"].read().decode("utf-8"))
