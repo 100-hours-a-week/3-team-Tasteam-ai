@@ -40,6 +40,26 @@
 
 loss보다 이게 훨씬 “진짜 성능”을 말해줘.
 
+### 3가지 확인 실행 방법 및 예시 결과
+
+스크립트 `scripts/kd_sft_analysis.py` 로 위 3가지를 한 번에 계산할 수 있다.
+
+```bash
+python scripts/kd_sft_analysis.py --input distill_pipeline_output/eval/YYYYMMDD_HHMMSS/llm_as_a_judge_results.json
+```
+
+**실행 결과 예시** (eval 50샘플 기준, `distill_pipeline_output/eval/20260303_053420`):
+
+| 항목 | 결과 |
+|------|------|
+| **1. JSON 파싱 성공률** | 6% (3/50) — 대부분 예측이 JSON이 아닌 산문(영어 요약)으로 나옴. |
+| **2. 스키마 정확도** | 0% — 파싱된 3건도 요구 스키마(service/price/food 내 summary, bullets, evidence)와 불일치. |
+| **3. 길이/포맷 drift** | 평균 pred 860자 vs ref 496자, 비율 1.73; pred 길이 214~1570으로 변동 큼. |
+
+→ 문서에서 지적한 "loss는 괜찮은데 출력 불안정"과 일치: **포맷 이탈(JSON 미준수)** 과 **길이 폭주** 가 확인됨. teacher 단일화 + JSON 스키마 강제가 우선이다.
+
+상세 보고서: `distill_pipeline_output/eval/20260303_053420/kd_sft_analysis_report.json`
+
 ## 5) 결론: loss가 저 정도면 “모델 크기(0.5B)가 너무 작아서”라고 단정하긴 어려움
 
 오히려 지금은 우선순위가:
