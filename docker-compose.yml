@@ -1,121 +1,19 @@
+# docker-compose.yaml
+version: "3"
+
 services:
-  redis:
-    image: redis:7-alpine
-    ports: ["6379:6379"]
-    volumes: ["redis_data:/data"]
-    command: redis-server --appendonly yes
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
-
-  new_async:
-    image: tasteam-new-async:latest
-    ports:
-      - "8001:8001"
-    env_file: [.env]
-    environment:
-      PORT: "8001"
-      PIPELINE: "new_async"
-      REDIS_HOST: "redis"
-      REDIS_PORT: "6379"
-      REDIS_DB: "0"
-      SPARK_SERVICE_URL: "http://spark-service:8002"
-    depends_on:
-      redis:
-        condition: service_healthy
-      spark-service:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8001/ready"]
-      interval: 15s
-      timeout: 10s
-      retries: 10
-      start_period: 180s
-
-  jobmgr:
-    build:
-      context: .
-      dockerfile: Dockerfile.metrics
-    ports: ["1041:1041"]
-
-  # RQ 워커 (BATCH_USE_QUEUE=true 시 배치 작업 소비, 실패 시 DLQ)
-  batch-worker:
-    build:
-      context: .
-      dockerfile: dockerfile
-    env_file: [.env]
-    environment:
-      REDIS_HOST: "redis"
-      REDIS_PORT: "6379"
-      REDIS_DB: "0"
-      SPARK_SERVICE_URL: "http://spark-service:8002"
-    command: ["python", "scripts/rq_worker.py"]
-    depends_on:
-      redis:
-        condition: service_healthy
-      spark-service:
-        condition: service_healthy
-    restart: unless-stopped
-
-  # Spark 마이크로서비스 (전체 평균·recall seeds 계산). new_async·batch-worker는 SPARK_SERVICE_URL로 여기 호출.
-  spark-service:
-    build:
-      context: .
-      dockerfile: Dockerfile.spark-service
-    env_file: [.env]
-    environment:
-      SPARK_SERVICE_PORT: "8002"
-      SPARK_SERVICE_URL: ""   # 이 컨테이너는 로컬 Spark 사용, 자기 자신 HTTP 호출 방지
-    ports:
-      - "8002:8002"
-    command: ["python", "scripts/spark_service.py"]
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 60s
-    restart: unless-stopped
-
-  node-exporter:
-    image: prom/node-exporter:v1.7.0
-    ports: ["9100:9100"]
-
   prometheus:
-    image: prom/prometheus:v2.42.0
+    image: prom/prometheus:latest
+    extra_hosts:
+      - "host.docker.internal:host-gateway"     # allow a direct connection from container to the local machine
+    ports:
+      - "9090:9090"   # the default port used by Prometheus
     volumes:
-      - ./configs/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
-      - ./configs/prometheus/alerts.yml:/etc/prometheus/alerts.yml
-    ports: ["9090:9090"]
-    depends_on:
-      new_async:
-        condition: service_healthy
-      jobmgr:
-        condition: service_started
-      node-exporter:
-        condition: service_started
-      alertmanager:
-        condition: service_started
-
-  alertmanager:
-    image: prom/alertmanager:v0.26.0
-    volumes:
-      - ./configs/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml
-    ports: ["9093:9093"]
-    command:
-      - --config.file=/etc/alertmanager/alertmanager.yml
-      - --storage.path=/alertmanager
+      - ${PWD}/prometheus.yaml:/etc/prometheus/prometheus.yml # mount Prometheus config file
 
   grafana:
-    image: grafana/grafana:9.3.6
-    volumes:
-      - ./configs/grafana/datasources:/etc/grafana/provisioning/datasources/
-      - ./configs/grafana/dashboards:/etc/grafana/provisioning/dashboards/
-      - ./configs/grafana/ini/grafana.ini:/etc/grafana/grafana.ini
-    ports: ["3000:3000"]
-    depends_on: [prometheus]
-
-volumes:
-  redis_data:
+    image: grafana/grafana:latest
+    depends_on:
+      - prometheus
+    ports:
+      - "3000:3000" # the default port used by Grafana
