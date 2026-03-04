@@ -10,13 +10,13 @@ ENV PYTHONUNBUFFERED=1
 ENV "USE_GPU#"=false
 WORKDIR /app
 
-# 시스템 의존성: 빌드 도구 + OpenJDK (PySpark/비교 파이프라인용)
+# 시스템 의존성: 빌드 도구. OpenJDK는 Spark 서비스 이미지(Dockerfile.spark-service)에서만 사용.
+# RUN 시 openjdk-17-jdk-headless 제외 (메인 앱은 Kiwi·Spark 서비스 HTTP만 사용)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     curl \
-    openjdk-17-jdk-headless \
     && rm -rf /var/lib/apt/lists/*
-ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+# ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
 
 # PyTorch CPU 버전 (requirements보다 먼저 설치)
 RUN pip install --no-cache-dir --upgrade pip && \
