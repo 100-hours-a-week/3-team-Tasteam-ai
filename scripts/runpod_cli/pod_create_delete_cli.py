@@ -3,21 +3,59 @@ import time
 import requests
 from typing import Any, Dict, Literal, Optional
 
+from . import runpod_config
+
 
 class RunPodClient:
-    def __init__(self, token: str, base_url: str = "https://rest.runpod.io/v1", timeout: int = 60):
-        self.base_url = base_url.rstrip("/")
-        self.timeout = timeout
+    def __init__(
+        self,
+        token: str,
+        base_url: str | None = None,
+        timeout: int | None = None,
+    ):
+        self.base_url = (base_url or runpod_config.get_api_base_url()).rstrip("/")
+        self.timeout = timeout if timeout is not None else runpod_config.get_api_timeout()
         self.session = requests.Session()
         self.session.headers.update({
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
         })
 
-    def create_pod(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+    def create_pod(
+        self,
+        payload: Dict[str, Any],
+        max_retries: int = 4,
+        retry_statuses: tuple[int, ...] = (500, 502, 503),
+        base_delay_sec: float = 2.0,
+    ) -> Dict[str, Any]:
+        """Pod 생성. 500/502/503 또는 ConnectionError/ReadTimeout/ChunkedEncodingError 시 지수 백오프 재시도."""
         url = f"{self.base_url}/pods"
-        resp = self.session.post(url, json=payload, timeout=self.timeout)
-        return self._handle_json_response(resp)
+        last_exc = None
+        retryable = (
+            requests.exceptions.ConnectionError,
+            requests.exceptions.ReadTimeout,
+            requests.exceptions.ChunkedEncodingError,
+        )
+        for attempt in range(max_retries):
+            try:
+                resp = self.session.post(url, json=payload, timeout=self.timeout)
+                return self._handle_json_response(resp)
+            except requests.HTTPError as e:
+                last_exc = e
+                status = e.response.status_code if e.response is not None else None
+                if status in retry_statuses and attempt < max_retries - 1:
+                    time.sleep(base_delay_sec * (2**attempt))
+                    continue
+                raise
+            except retryable as e:
+                last_exc = e
+                if attempt < max_retries - 1:
+                    time.sleep(base_delay_sec * (2**attempt))
+                    continue
+                raise
+        if last_exc is not None:
+            raise last_exc
+        return {}
 
     def get_pod(self, pod_id: str) -> Dict[str, Any]:
         url = f"{self.base_url}/pods/{pod_id}"
@@ -126,55 +164,56 @@ class RunPodClient:
         while time.time() < deadline:
             pod = self.get_pod(pod_id)
             last = pod
-            if pod.get("status") == "already_deleted":
+            pod_status = (pod.get("status") or "").upper()
+            if pod_status in ("ALREADY_DELETED", "DELETED"):
                 return pod
             desired = (pod.get("desiredStatus") or "").upper()
             status = (pod.get("status") or pod.get("runtimeStatus") or "").upper()
-            if desired != "RUNNING" or ("EXIT" in status or "STOP" in status or status == "COMPLETED"):
+            if desired != "RUNNING" or status == "DELETED":
                 return pod
             time.sleep(poll_interval_sec)
         raise TimeoutError(f"Pod {pod_id} did not stop within {timeout_sec}s. Last: {last}")
 
     @staticmethod
     def get_default_pod_payload(
-        use: Literal["labeling", "train", "merge"] = "labeling",
+        use: Literal["labeling", "train", "merge", "eval"] = "labeling",
         docker_start_cmd: list[str] | None = None,
     ) -> Dict[str, Any]:
         """Pod 생성용 기본 payload.
-        use: "labeling" → vLLM 이미지/볼륨, "train" → 학습 이미지/볼륨, "merge" → 학습 이미지/볼륨에서 merge 스크립트 실행.
-        docker_start_cmd: 지정 시 컨테이너 CMD 오버라이드 (train 시 --labeled-path 등 전달용, merge 시 merge 스크립트 경로+인자).
+        use: "labeling" → vLLM 이미지/볼륨, "train" → 학습 이미지/볼륨, "merge" → merge 스크립트 실행, "eval" → 평가+artifact 업로드.
+        docker_start_cmd: 지정 시 컨테이너 CMD 오버라이드 (train 시 --labeled-path 등 전달용, merge/eval 시 스크립트 경로+인자).
+        기본값은 config/runpod.yaml 및 환경 변수에서 로드.
         """
         if use == "train":
-            image_name = os.environ.get("RUNPOD_POD_IMAGE_NAME_TRAIN", "jinsoo1218/train-llm:latest")
-            network_volume_id = os.environ.get("RUNPOD_NETWORK_VOLUME_ID_TRAIN", "v3i546pkrz")
+            image_name = runpod_config.get_pod_image_train()
+            network_volume_id = runpod_config.get_pod_network_volume_id_train()
             name = "train-pod"
         elif use == "merge":
-            image_name = os.environ.get("RUNPOD_POD_IMAGE_NAME_TRAIN", "jinsoo1218/train-llm:latest")
-            network_volume_id = os.environ.get("RUNPOD_NETWORK_VOLUME_ID_TRAIN", "v3i546pkrz")
+            image_name = runpod_config.get_pod_image_train()
+            network_volume_id = runpod_config.get_pod_network_volume_id_merge()
             name = "merge-pod"
+        elif use == "eval":
+            image_name = runpod_config.get_pod_image_eval()
+            network_volume_id = runpod_config.get_pod_network_volume_id_eval()
+            name = "eval-pod"
         else:
-            image_name = os.environ.get("RUNPOD_POD_IMAGE_NAME_LABELING", "jinsoo1218/runpod-pod-vllm:latest")
-            network_volume_id = os.environ.get("RUNPOD_NETWORK_VOLUME_ID_LABELING", "o3a3ya7flt")
+            image_name = runpod_config.get_pod_image_labeling()
+            network_volume_id = runpod_config.get_pod_network_volume_id_labeling()
             name = "vllm-pod"
         payload = {
-            "allowedCudaVersions": ["13.0"],
+            "allowedCudaVersions": runpod_config.get_pod_allowed_cuda_versions(),
             "cloudType": "SECURE",
             "computeType": "GPU",
-            "containerDiskInGb": 50,
+            "containerDiskInGb": runpod_config.get_pod_common_int("container_disk_in_gb", 50),
             "cpuFlavorPriority": "availability",
-            "dataCenterIds": [
-                "EU-RO-1", "CA-MTL-1", "EU-SE-1", "US-IL-1", "EUR-IS-1", "EU-CZ-1", "US-TX-3", "EUR-IS-2",
-                "US-KS-2", "US-GA-2", "US-WA-1", "US-TX-1", "CA-MTL-3", "EU-NL-1", "US-TX-4", "US-CA-2",
-                "US-NC-1", "OC-AU-1", "US-DE-1", "EUR-IS-3", "CA-MTL-2", "AP-JP-1", "EUR-NO-1", "EU-FR-1",
-                "US-KS-3", "US-GA-1",
-            ],
+            "dataCenterIds": runpod_config.get_pod_data_center_ids(),
             "dataCenterPriority": "availability",
             "dockerEntrypoint": [],
             "dockerStartCmd": docker_start_cmd if docker_start_cmd is not None else [],
             "env": {"ENV_VAR": "value",**({"WANDB_API_KEY": os.environ["WANDB_API_KEY"]} if os.environ.get("WANDB_API_KEY") else {}),},
             "globalNetworking": False,
-            "gpuCount": 1,
-            "gpuTypeIds": ["NVIDIA GeForce RTX 4090","NVIDIA RTX A5000"],
+            "gpuCount": runpod_config.get_pod_common_int("gpu_count", 1),
+            "gpuTypeIds": runpod_config.get_pod_gpu_type_ids(),
             "gpuTypePriority": "availability",
             "imageName": image_name,
             "interruptible": False,
@@ -188,11 +227,11 @@ class RunPodClient:
             "networkVolumeId": network_volume_id,
             "ports": ["8000/http", "22/tcp"],
             "supportPublicIp": True,
-            "vcpuCount": 2,
+            "vcpuCount": runpod_config.get_pod_common_int("vcpu_count", 2),
             "volumeInGb": 20,
             "volumeMountPath": "/workspace",
         }
-        if use == "merge":
+        if use in ("merge", "eval"):
             payload["dockerEntrypoint"] = ["python"]
         return payload
 

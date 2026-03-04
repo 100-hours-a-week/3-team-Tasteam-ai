@@ -123,6 +123,7 @@ def summarize_aspects_new(
 - price는 '가격 숫자'가 없으면 '가성비/양/구성/만족감' 같은 우회표현을 근거로 요약하라.
 - overall_summary는 2~3문장으로 종합 요약하라.
 - 근거(입력 리뷰)에 없는 내용은 추측하지 말고 "언급이 적어요"처럼 해요체로 표현하라.
+- 반드시 유효한 JSON만 출력하라. JSON 밖의 설명·접두어·접미어는 금지.
 """
     max_input_tokens = Config.LLM_MAX_CONTEXT_LENGTH - 1500 - 64
     payload = _payload_within_context_limit(
@@ -274,6 +275,7 @@ async def summarize_aspects_new_async(
 - price는 '가격 숫자'가 없으면 '가성비/양/구성/만족감' 같은 우회표현을 근거로 요약하라.
 - overall_summary는 2~3문장으로 종합 요약하라.
 - 근거(입력 리뷰)에 없는 내용은 추측하지 말고 "언급이 적어요"처럼 해요체로 표현하라.
+- 반드시 유효한 JSON만 출력하라. JSON 밖의 설명·접두어·접미어는 금지.
 """
     max_input_tokens = Config.LLM_MAX_CONTEXT_LENGTH - 1500 - 64
     payload = _payload_within_context_limit(

@@ -2,11 +2,8 @@
 RunPod Network Volume S3 호환 API로 로컬 파일/디렉터리 업로드.
 
 환경변수:
-  RUNPOD_S3_ACCESS_KEY   - RunPod S3 API Access Key (user_...)
-  RUNPOD_S3_SECRET_ACCESS_KEY - RunPod S3 API Secret (rps_...)
-  RUNPOD_NETWORK_VOLUME_ID    - 업로드 대상 볼륨 ID (기본: v3i546pkrz, train용)
-  RUNPOD_S3_REGION            - 데이터센터 ID (기본: eu-ro-1)
-  RUNPOD_S3_ENDPOINT_URL      - S3 엔드포인트 (기본: https://s3api-eu-ro-1.runpod.io)
+  RUNPOD_S3_ACCESS_KEY / RUNPOD_S3_SECRET_ACCESS_KEY - 필수. 시크릿은 config 파일에 넣지 말 것.
+  RUNPOD_NETWORK_VOLUME_ID, RUNPOD_S3_REGION, RUNPOD_S3_ENDPOINT_URL - 선택. 미설정 시 config/runpod.yaml 기본값 사용.
 
 참고: docs/runpod_cli/runpod_net_vol_s3_api.md
 """
@@ -24,10 +21,7 @@ except ImportError:
     boto3 = None  # type: ignore[assignment]
     ClientError = Exception  # type: ignore[misc, assignment]
 
-# EU-RO-1 기본값 (vllm_net_vol.md, distill_train_net_vol.md)
-DEFAULT_REGION = "eu-ro-1"
-DEFAULT_ENDPOINT_URL = "https://s3api-eu-ro-1.runpod.io"
-DEFAULT_VOLUME_ID = "v3i546pkrz"  # train용 볼륨 (labeled 데이터 업로드 대상, distill_train_net_vol.md)
+from . import runpod_config
 
 
 def _get_credentials() -> tuple[str, str]:
@@ -44,12 +38,12 @@ def get_runpod_s3_client(
     region: str | None = None,
     endpoint_url: str | None = None,
 ) -> Any:
-    """RunPod S3 호환 API용 boto3 S3 클라이언트 생성."""
+    """RunPod S3 호환 API용 boto3 S3 클라이언트 생성. 기본값은 config/runpod.yaml·환경 변수에서 로드."""
     if boto3 is None:
         raise RuntimeError("boto3 is required for RunPod S3 upload: pip install boto3")
     access, secret = _get_credentials()
-    region = region or os.environ.get("RUNPOD_S3_REGION", DEFAULT_REGION)
-    endpoint_url = endpoint_url or os.environ.get("RUNPOD_S3_ENDPOINT_URL", DEFAULT_ENDPOINT_URL)
+    region = region or runpod_config.get_s3_region()
+    endpoint_url = endpoint_url or runpod_config.get_s3_endpoint_url()
     return boto3.client(
         "s3",
         aws_access_key_id=access,
@@ -95,7 +89,7 @@ def upload_file_to_volume(
     if not os.environ.get("RUNPOD_S3_ACCESS_KEY") or not os.environ.get("RUNPOD_S3_SECRET_ACCESS_KEY"):
         raise ValueError("RUNPOD_S3_ACCESS_KEY and RUNPOD_S3_SECRET_ACCESS_KEY are required.")
     local_path = Path(local_path)
-    bucket = volume_id or os.environ.get("RUNPOD_NETWORK_VOLUME_ID", DEFAULT_VOLUME_ID)
+    bucket = volume_id or runpod_config.get_volume_id_train()
     key = object_key if object_key else local_path.name
     client = get_runpod_s3_client()
     upload_file(client, bucket, local_path, key)
@@ -130,26 +124,32 @@ def upload_labeled_dir_to_runpod(
     labeled_dir: str | Path,
     volume_id: str | None = None,
     remote_prefix: str | None = None,
+    skip_if_exists: bool = True,
 ) -> int:
     """
     라벨링 결과 디렉터리를 RunPod 네트워크 볼륨에 업로드.
     RUNPOD_S3_ACCESS_KEY, RUNPOD_S3_SECRET_ACCESS_KEY 필수.
     volume_id 미지정 시 RUNPOD_NETWORK_VOLUME_ID 또는 기본값(v3i546pkrz) 사용.
     remote_prefix 미지정 시 labeled/ 디렉터리 이름(버전) 사용.
+    skip_if_exists: True면 해당 버전(prefix/train_labeled.json)이 이미 볼륨에 있으면 업로드 생략하고 0 반환.
     """
     if not os.environ.get("RUNPOD_S3_ACCESS_KEY") or not os.environ.get("RUNPOD_S3_SECRET_ACCESS_KEY"):
         raise ValueError("RUNPOD_S3_ACCESS_KEY and RUNPOD_S3_SECRET_ACCESS_KEY are required.")
     labeled_dir = Path(labeled_dir)
-    bucket = volume_id or os.environ.get("RUNPOD_NETWORK_VOLUME_ID", DEFAULT_VOLUME_ID)
+    bucket = volume_id or runpod_config.get_volume_id_train()
     prefix = remote_prefix if remote_prefix is not None else f"labeled/{labeled_dir.name}"
     client = get_runpod_s3_client()
+    if skip_if_exists:
+        key = f"{prefix}/train_labeled.json"
+        if object_exists(client, bucket, key):
+            return 0
     return upload_directory(client, bucket, labeled_dir, prefix)
 
 
 def list_run_ids_with_adapter(volume_id: str, runs_prefix: str = "distill_pipeline_output/runs") -> list[str]:
     """볼륨 내 runs/ 하위에서 adapter가 있는 run_id 목록 반환 (최신 순)."""
     client = get_runpod_s3_client()
-    bucket = volume_id or os.environ.get("RUNPOD_NETWORK_VOLUME_ID", DEFAULT_VOLUME_ID)
+    bucket = volume_id or runpod_config.get_volume_id_train()
     prefix = f"{runs_prefix}/"
     run_ids: list[str] = []
     paginator = client.get_paginator("list_objects_v2")
@@ -199,10 +199,10 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="Upload a directory to RunPod Network Volume (S3 API).")
     parser.add_argument("local_dir", type=Path, help="Local directory to upload")
-    parser.add_argument("--volume-id", default=None, help=f"Network volume ID (default: env or {DEFAULT_VOLUME_ID})")
+    parser.add_argument("--volume-id", default=None, help="Network volume ID (default: config/runpod.yaml or env)")
     parser.add_argument("--prefix", default="", help="Remote path prefix (e.g. labeled/20260216_123456)")
     args = parser.parse_args()
-    bucket = args.volume_id or os.environ.get("RUNPOD_NETWORK_VOLUME_ID", DEFAULT_VOLUME_ID)
+    bucket = args.volume_id or runpod_config.get_volume_id_train()
     client = get_runpod_s3_client()
     n = upload_directory(client, bucket, args.local_dir, args.prefix or args.local_dir.name)
     print(f"Uploaded {n} files to s3://{bucket}/{args.prefix or args.local_dir.name}")

@@ -47,8 +47,8 @@ def _load_labeled(path: Path) -> list[dict]:
     return samples
 
 
-def _run_student(instruction: str, adapter_path: str, base_model: str, max_new_tokens: int = 1024) -> str:
-    """Student adapter로 instruction에 대한 출력 생성."""
+def _load_model_and_tokenizer(adapter_path: str, base_model: str):
+    """모델·토크나이저를 한 번만 로드. (model, tokenizer) 반환."""
     from transformers import AutoModelForCausalLM, AutoTokenizer
     from peft import PeftModel
 
@@ -61,7 +61,33 @@ def _run_student(instruction: str, adapter_path: str, base_model: str, max_new_t
     )
     model = PeftModel.from_pretrained(model, adapter_path)
     model.eval()
+    return model, tokenizer
 
+
+def _extract_json_for_rouge(raw: str) -> str:
+    """JSON 스키마 강제(후처리): 출력에서 JSON 블록만 추출해 ROUGE용 문자열로 반환. 실패 시 원문."""
+    if not raw or not raw.strip():
+        return raw or ""
+    try:
+        from src.json_parse_utils import extract_json_block, parse_json_relaxed
+        block = extract_json_block(raw.strip(), want_object=True)
+        if not block:
+            return raw.strip()
+        parsed = parse_json_relaxed(block)
+        if isinstance(parsed, dict) and any(k in parsed for k in ("service", "price", "food")):
+            return json.dumps(parsed, ensure_ascii=False)
+    except Exception:
+        pass
+    return raw.strip()
+
+
+def _generate_one(
+    model: Any,
+    tokenizer: Any,
+    instruction: str,
+    max_new_tokens: int = 1024,
+) -> str:
+    """이미 로드된 model/tokenizer로 instruction 한 건만 추론."""
     messages = [{"role": "user", "content": instruction}]
     text = tokenizer.apply_chat_template(
         messages,
@@ -76,7 +102,8 @@ def _run_student(instruction: str, adapter_path: str, base_model: str, max_new_t
         pad_token_id=tokenizer.eos_token_id,
     )
     generated = tokenizer.decode(out[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True)
-    return generated.strip()
+    raw = generated.strip()
+    return _extract_json_for_rouge(raw)
 
 
 def _rouge(pred: str, ref: str) -> dict[str, float]:
@@ -117,6 +144,7 @@ def main() -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     report: dict[str, Any] = {"val": {}, "test": {}, "meta": {}}
+    model, tokenizer = None, None
 
     for split, path in [("val", args.val_labeled), ("test", args.test_labeled)]:
         if not path or not path.exists():
@@ -129,6 +157,10 @@ def main() -> None:
             report[split] = {"skipped": True, "reason": "no samples"}
             continue
 
+        if model is None:
+            logger.info("Loading model and tokenizer (once for all splits)")
+            model, tokenizer = _load_model_and_tokenizer(str(args.adapter_path), args.base_model)
+
         preds: list[str] = []
         refs: list[str] = []
         for i, s in enumerate(samples):
@@ -136,7 +168,7 @@ def main() -> None:
                 logger.info("%s: %d/%d", split, i + 1, len(samples))
             ins = s.get("instruction", "")
             ref = s.get("output", "")
-            pred = _run_student(ins, str(args.adapter_path), args.base_model)
+            pred = _generate_one(model, tokenizer, ins, max_new_tokens=1024)
             preds.append(pred)
             refs.append(ref)
 

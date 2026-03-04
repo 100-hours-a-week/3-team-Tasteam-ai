@@ -24,3 +24,7 @@ wandb>=0.16.0
 # 유틸
 python-dotenv>=1.0.0
 numpy>=1.24.0
+
+# 평가 (eval_distill.py; RunPod eval 이미지에서 동일 requirements 사용)
+rouge-score>=0.1.2
+bert-score>=0.3.13

@@ -62,6 +62,7 @@ SUMMARY_INSTRUCTIONS = """너는 음식점 리뷰 분석가다.
 - price는 '가격 숫자'가 없으면 '가성비/양/구성/만족감' 같은 우회표현을 근거로 요약하라.
 - overall_summary는 2~3문장으로 종합 요약하라.
 - 근거(입력 리뷰)에 없는 내용은 추측하지 말고 "언급이 적어요"처럼 해요체로 표현하라.
+- 반드시 유효한 JSON만 출력하라. JSON 밖의 설명·접두어·접미어는 금지(You must output ONLY valid JSON. Do not include any text outside JSON).
 """
 
 # 품질 필터: 금지 표현 (hallucination 의심)
@@ -353,6 +354,7 @@ def main() -> None:
     parser.add_argument("--val-path", type=Path, default=None, help="val.json (optional, OpenAI-only for eval)")
     parser.add_argument("--test-path", type=Path, default=None, help="test.json (optional, OpenAI-only for eval)")
     parser.add_argument("--openai-cap", type=int, default=500, help="OpenAI gold label cap for train")
+    parser.add_argument("--openai-only", action="store_true", help="Teacher를 4o mini로 단일화: 전부 OpenAI(gpt-4o-mini)로만 라벨링, Pod/teacher 미사용")
     parser.add_argument("--output-dir", type=Path, required=True, help="Output directory")
     parser.add_argument("--seed", type=int, default=42, help="Random seed for sampling")
     args = parser.parse_args()
@@ -410,7 +412,9 @@ def main() -> None:
         print(json.dumps(out, ensure_ascii=False))
         return
 
-    labeled, meta = _label_samples(train_samples, args.openai_cap, args.seed, teacher_for_rest=True)
+    teacher_for_rest = not getattr(args, "openai_only", False)
+    openai_cap = 999999 if getattr(args, "openai_only", False) else args.openai_cap
+    labeled, meta = _label_samples(train_samples, openai_cap, args.seed, teacher_for_rest=teacher_for_rest)
     out_path = args.output_dir / "train_labeled.json"
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump({"samples": labeled, "meta": meta}, f, ensure_ascii=False, indent=2)
