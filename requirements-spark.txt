@@ -1,0 +1,19 @@
+# Spark 마이크로서비스 전용 의존성 (전체 평균·recall seeds 계산)
+# 메인 앱 requirements.txt와 분리 — 이 이미지에만 pyspark·JVM 사용
+
+# API
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+pydantic>=2.0.0
+
+# Spark (대용량 비율·recall seeds)
+pyspark>=3.5.0
+
+# comparison_pipeline (Kiwi bigram 분류 등)
+kiwipiepy>=0.20.0
+
+# HTTP 클라이언트 (선택적, 서비스는 주로 서버)
+httpx>=0.25.0
+
+# 환경 변수
+python-dotenv>=1.0.0

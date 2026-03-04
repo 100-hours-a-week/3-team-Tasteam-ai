@@ -63,10 +63,11 @@ services:
   spark-service:
     build:
       context: .
-      dockerfile: dockerfile
+      dockerfile: Dockerfile.spark-service
     env_file: [.env]
     environment:
       SPARK_SERVICE_PORT: "8002"
+      SPARK_SERVICE_URL: ""   # 이 컨테이너는 로컬 Spark 사용, 자기 자신 HTTP 호출 방지
     ports:
       - "8002:8002"
     command: ["python", "scripts/spark_service.py"]
