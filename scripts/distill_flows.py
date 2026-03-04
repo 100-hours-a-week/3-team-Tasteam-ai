@@ -304,21 +304,59 @@ def labeling_with_pod_task(
     pod_wait_timeout_sec: int = 600,
     public_ip_wait_timeout_sec: int = 180,
     vllm_ready_timeout_sec: int = 180,
+    openai_only: bool = False,
 ) -> dict:
     """
-    OpenAI 골드 먼저(Pod 없이) → Pod 기동 → self-hosted teacher로 나머지 라벨링 → Pod 삭제.
-    RUNPOD_API_KEY 필요.
+    openai_only=True: teacher를 4o mini로 단일화 — 전부 OpenAI(gpt-4o-mini)로만 라벨링, Pod 미사용.
+    openai_only=False: OpenAI 골드 먼저(Pod 없이) → Pod 기동 → self-hosted teacher로 나머지 라벨링 → Pod 삭제.
+    RUNPOD_API_KEY는 openai_only=False일 때만 필요.
     """
+    out_dir = Path(output_labeled_dir or _PROJECT_ROOT / "distill_pipeline_output")
+    version = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    labeled_dir = out_dir / "labeled" / version
+    labeled_dir.mkdir(parents=True, exist_ok=True)
+
+    if openai_only:
+        # teacher 4o mini 단일화: 전부 OpenAI로 라벨링, Pod 없음
+        cmd = [
+            sys.executable,
+            str(_SCRIPT_DIR / "label_for_distill.py"),
+            "--phase", "single",
+            "--openai-only",
+            "--train-path", str(train_path),
+            "--openai-cap", "999999",
+            "--output-dir", str(labeled_dir),
+            "--seed", "42",
+        ]
+        if val_path and Path(val_path).exists():
+            cmd.extend(["--val-path", str(val_path)])
+        if test_path and Path(test_path).exists():
+            cmd.extend(["--test-path", str(test_path)])
+        result = subprocess.run(cmd, cwd=str(_PROJECT_ROOT), capture_output=False)
+        if result.returncode != 0:
+            raise RuntimeError(f"label_for_distill.py openai_only exited with {result.returncode}")
+        labeled_path = labeled_dir / "train_labeled.json"
+        out = {"labeled_version": version, "labeled_path": str(labeled_path)}
+        for name, fn in [("val_labeled_path", "val_labeled.json"), ("test_labeled_path", "test_labeled.json")]:
+            p = labeled_dir / fn
+            if p.exists():
+                out[name] = str(p)
+        if upload_labeled_dir_to_runpod and os.environ.get("RUNPOD_S3_ACCESS_KEY"):
+            try:
+                n = upload_labeled_dir_to_runpod(labeled_dir)
+                out["runpod_upload"] = {"uploaded": True, "count": n, "labeled_dir": str(labeled_dir)}
+            except Exception as e:
+                logger.warning("RunPod S3 upload failed: %s", e)
+                out["runpod_upload"] = {"uploaded": False, "error": str(e)}
+        art = upload_labeled_to_artifact_task(labeled_dir=labeled_dir)
+        out["artifact"] = art
+        return out
+
     if RunPodClient is None:
         raise RuntimeError("RunPodClient not available. Check runpod_cli import.")
     token = os.environ.get("RUNPOD_API_KEY")
     if not token:
         raise ValueError("RUNPOD_API_KEY environment variable is required for labeling_with_pod")
-
-    out_dir = Path(output_labeled_dir or _PROJECT_ROOT / "distill_pipeline_output")
-    version = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-    labeled_dir = out_dir / "labeled" / version
-    labeled_dir.mkdir(parents=True, exist_ok=True)
 
     # 1) OpenAI 골드만 먼저 (Pod 없이)
     cmd_gold = [
@@ -408,9 +446,11 @@ def labeling_with_pod_flow(
     pod_wait_timeout_sec: int = 600,
     public_ip_wait_timeout_sec: int = 180,
     vllm_ready_timeout_sec: int = 180,
+    openai_only: bool = False,
 ) -> dict:
     """
-    OpenAI 골드 먼저(Pod 없이) → Pod 기동 → self-hosted teacher 나머지 → Pod 삭제.
+    openai_only=True: teacher를 4o mini로 단일화(전부 OpenAI, Pod 미사용).
+    openai_only=False: OpenAI 골드 먼저 → Pod 기동 → self-hosted teacher 나머지 → Pod 삭제.
     docs/runpod_cli/cli_strategy.md
     """
     return labeling_with_pod_task(
@@ -422,6 +462,7 @@ def labeling_with_pod_flow(
         pod_wait_timeout_sec=pod_wait_timeout_sec,
         public_ip_wait_timeout_sec=public_ip_wait_timeout_sec,
         vllm_ready_timeout_sec=vllm_ready_timeout_sec,
+        openai_only=openai_only,
     )
 
 
@@ -1630,8 +1671,9 @@ def distill_pipeline_all(
     public_ip_wait_timeout_sec: int = 180,
     vllm_ready_timeout_sec: int = 180,
     student_model: str = "Qwen/Qwen2.5-0.5B-Instruct",
+    openai_only: bool = False,
 ) -> dict:
-    """build_dataset → labeling(Pod) → train_student(Pod) → evaluate → merge(로컬) 순차 실행."""
+    """build_dataset → labeling(Pod 또는 openai_only) → train_student(Pod) → evaluate → merge(로컬) 순차 실행."""
     out_dir = Path(out_dir or _PROJECT_ROOT / "distill_pipeline_output")
     input_path = Path(input_path or _PROJECT_ROOT / "tasteam_app_all_review_data.json")
 
@@ -1644,6 +1686,7 @@ def distill_pipeline_all(
         output_labeled_dir=out_dir,
         public_ip_wait_timeout_sec=public_ip_wait_timeout_sec,
         vllm_ready_timeout_sec=vllm_ready_timeout_sec,
+        openai_only=openai_only,
     )
     tr = train_student_with_pod_flow(
         labeled_path=lb["labeled_path"],
@@ -1675,8 +1718,9 @@ def distill_pipeline_all_sweep(
     vllm_ready_timeout_sec: int = 180,
     student_model: str = "Qwen/Qwen2.5-0.5B-Instruct",
     num_pods: int = 1,
+    openai_only: bool = False,
 ) -> dict:
-    """build_dataset → labeling(Pod) → run_sweep → best run adapter로 evaluate → merge(로컬). sweep_id 없으면 sweep_yaml으로 등록. num_pods>1이면 멀티 Pod."""
+    """build_dataset → labeling(Pod 또는 openai_only) → run_sweep → best run adapter로 evaluate → merge(로컬). sweep_id 없으면 sweep_yaml으로 등록. num_pods>1이면 멀티 Pod."""
     out_dir = Path(out_dir or _PROJECT_ROOT / "distill_pipeline_output")
     input_path = Path(input_path or _PROJECT_ROOT / "tasteam_app_all_review_data.json")
 
@@ -1689,6 +1733,7 @@ def distill_pipeline_all_sweep(
         output_labeled_dir=out_dir,
         public_ip_wait_timeout_sec=public_ip_wait_timeout_sec,
         vllm_ready_timeout_sec=vllm_ready_timeout_sec,
+        openai_only=openai_only,
     )
     sweep_ev = run_sweep_and_evaluate_flow(
         sweep_id=sweep_id,
@@ -1792,6 +1837,7 @@ def main() -> None:
     parser.add_argument("--test-labeled-path", type=Path, default=None, help="test_labeled.json (for evaluate, evaluate_on_pod)")
     parser.add_argument("--artifact-version", type=str, default="latest", help="For download_eval_artifact: artifact version (latest, v0, v1, ...)")
     parser.add_argument("--openai-cap", type=int, default=500, help="OpenAI labeling cap (for labeling_with_pod/all)")
+    parser.add_argument("--openai-only", action="store_true", help="Teacher 4o mini 단일화: 라벨링 전부 OpenAI만 사용, Pod/teacher 미사용 (labeling_with_pod, all)")
     parser.add_argument("--public-ip-wait-timeout", type=int, default=180, help="publicIp 할당 대기 초 (labeling_with_pod, labeling_pod_only)")
     parser.add_argument("--vllm-ready-timeout", type=int, default=180, help="vLLM /v1/models 준비 대기 초 (labeling_with_pod, labeling_pod_only)")
     parser.add_argument("--student-model", type=str, default="Qwen/Qwen2.5-0.5B-Instruct", help="Student model")
@@ -1832,6 +1878,7 @@ def main() -> None:
             output_labeled_dir=out_dir,
             public_ip_wait_timeout_sec=args.public_ip_wait_timeout,
             vllm_ready_timeout_sec=args.vllm_ready_timeout,
+            openai_only=args.openai_only,
         )
         print("Result:", result)
     elif args.flow == "labeling_pod_only":
@@ -1980,6 +2027,7 @@ def main() -> None:
             public_ip_wait_timeout_sec=args.public_ip_wait_timeout,
             vllm_ready_timeout_sec=args.vllm_ready_timeout,
             student_model=args.student_model,
+            openai_only=args.openai_only,
         )
         print("Result keys:", list(result.keys()))
     elif args.flow == "all_sweep":
@@ -1994,6 +2042,7 @@ def main() -> None:
             vllm_ready_timeout_sec=args.vllm_ready_timeout,
             student_model=args.student_model,
             num_pods=args.num_pods,
+            openai_only=args.openai_only,
         )
         print("Result keys:", list(result.keys()))
 

@@ -64,6 +64,23 @@ def _load_model_and_tokenizer(adapter_path: str, base_model: str):
     return model, tokenizer
 
 
+def _extract_json_for_rouge(raw: str) -> str:
+    """JSON 스키마 강제(후처리): 출력에서 JSON 블록만 추출해 ROUGE용 문자열로 반환. 실패 시 원문."""
+    if not raw or not raw.strip():
+        return raw or ""
+    try:
+        from src.json_parse_utils import extract_json_block, parse_json_relaxed
+        block = extract_json_block(raw.strip(), want_object=True)
+        if not block:
+            return raw.strip()
+        parsed = parse_json_relaxed(block)
+        if isinstance(parsed, dict) and any(k in parsed for k in ("service", "price", "food")):
+            return json.dumps(parsed, ensure_ascii=False)
+    except Exception:
+        pass
+    return raw.strip()
+
+
 def _generate_one(
     model: Any,
     tokenizer: Any,
@@ -85,7 +102,8 @@ def _generate_one(
         pad_token_id=tokenizer.eos_token_id,
     )
     generated = tokenizer.decode(out[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True)
-    return generated.strip()
+    raw = generated.strip()
+    return _extract_json_for_rouge(raw)
 
 
 def _rouge(pred: str, ref: str) -> dict[str, float]:
