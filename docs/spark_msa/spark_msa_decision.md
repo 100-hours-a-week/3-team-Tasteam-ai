@@ -1,8 +1,4 @@
 
-두 가지를 나누어 보면 아래와 같습니다.
-
----
-
 ## 1. Option A: `src/__init__.py`에서 `vector_search`를 필요할 때만 import (lazy import)
 
 **방식**: `src/__init__.py`에서 `from .vector_search import ...` 를 제거하고,  
