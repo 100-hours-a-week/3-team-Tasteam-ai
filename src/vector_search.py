@@ -9,7 +9,7 @@ import uuid
 import hashlib
 import logging
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Any, Union
+from typing import Dict, List, Optional, Any, Set, Union
 
 from qdrant_client import QdrantClient, models
 from qdrant_client.models import PointStruct
@@ -146,6 +146,60 @@ class VectorSearch:
         """
         content = f"{restaurant_id}:{review_id}"
         return hashlib.md5(content.encode()).hexdigest()
+
+    def get_expected_point_ids(self, data: Dict) -> Set[str]:
+        """
+        요청 데이터(reviews / restaurants)에서 계산되는 Qdrant 포인트 ID 집합 반환.
+        중복 업로드 스킵 판단용 (임베딩 없이 ID만 계산).
+        """
+        ids: Set[str] = set()
+        reviews_list: List[Dict] = list(data.get("reviews", []))
+        if not reviews_list and "restaurants" in data:
+            for restaurant in data.get("restaurants", []):
+                if hasattr(restaurant, "model_dump"):
+                    restaurant = restaurant.model_dump()
+                elif hasattr(restaurant, "dict"):
+                    restaurant = restaurant.dict()
+                if isinstance(restaurant, dict):
+                    reviews_list.extend(restaurant.get("reviews", []))
+        for review in reviews_list:
+            if hasattr(review, "model_dump"):
+                review = review.model_dump()
+            elif hasattr(review, "dict"):
+                review = review.dict()
+            if not isinstance(review, dict):
+                continue
+            review_id = review.get("id") or review.get("review_id")
+            restaurant_id = review.get("restaurant_id")
+            if review_id is None and restaurant_id is None:
+                continue
+            ids.add(self._get_point_id(restaurant_id or "", review_id or ""))
+        return ids
+
+    def get_existing_point_ids(self, limit: int = 10000) -> Set[str]:
+        """
+        Qdrant 컬렉션에 이미 존재하는 포인트 ID 집합 반환 (scroll, with_vectors=False).
+        중복 업로드 스킵 판단용.
+        """
+        try:
+            records, _ = self.client.scroll(
+                collection_name=self.collection_name,
+                limit=limit,
+                with_payload=False,
+                with_vectors=False,
+            )
+            return {str(r.id) for r in records}
+        except Exception as e:
+            logger.warning(f"기존 포인트 ID 조회 실패: {e}")
+            return set()
+
+    def get_collection_points_count(self) -> int:
+        """컬렉션 포인트 수 반환. 컬렉션이 없으면 0."""
+        try:
+            info = self.client.get_collection(self.collection_name)
+            return getattr(info, "points_count", 0) or 0
+        except Exception:
+            return 0
     
     def _is_collection_single_vector(self) -> bool:
         """

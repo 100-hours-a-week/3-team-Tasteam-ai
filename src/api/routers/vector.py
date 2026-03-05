@@ -32,6 +32,23 @@ async def upload_vector_data(
             "reviews": [r.model_dump() for r in request.reviews],
             "restaurants": [r.model_dump() for r in (request.restaurants or [])],
         }
+        # 중복 업로드 스킵: Qdrant count + 요청 리뷰 수 비교 후, 동일하면 기존 포인트 ID와 요청 ID 집합 비교
+        expected_ids = vector_search.get_expected_point_ids(data)
+        if expected_ids:
+            points_count = vector_search.get_collection_points_count()
+            if points_count == len(expected_ids):
+                existing_ids = vector_search.get_existing_point_ids(limit=points_count + 500)
+                if len(existing_ids) == points_count and expected_ids == existing_ids:
+                    logger.info(
+                        "중복 업로드 방지: 동일 데이터가 이미 존재하여 스킵합니다 (count=%s, id 집합 일치)",
+                        points_count,
+                    )
+                    return VectorUploadResponse(
+                        message="중복 업로드 방지: 동일 데이터가 이미 존재하여 스킵합니다",
+                        points_count=len(expected_ids),
+                        collection_name=vector_search.collection_name,
+                    )
+
         logger.info(f"포인트 준비 시작: 리뷰 {len(request.reviews)}개, 레스토랑 {len(request.restaurants or [])}개")
         points = vector_search.prepare_points(data)
         logger.info(f"포인트 준비 완료: {len(points)}개 포인트 생성됨")
