@@ -21,8 +21,8 @@ COPY requirements-spark.txt /app/
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements-spark.txt
 
-# 소스 (src, scripts, servjces — Spark 서비스 진입점 포함)
-COPY src /app/src
+# 소스 (comparison_lib만 Spark 로직, scripts·servjces 진입점)
+COPY comparison_lib /app/comparison_lib
 COPY scripts /app/scripts
 COPY servjces /app/servjces
 
