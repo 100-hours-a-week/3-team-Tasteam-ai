@@ -1,0 +1,35 @@
+# Spark 마이크로서비스 전용 이미지 (전체 평균·recall seeds)
+# 메인 앱 이미지와 분리 — OpenJDK + pyspark만 이 이미지에 포함
+#
+# 빌드: docker build -f Dockerfile.spark-service -t tasteam-spark-service .
+# 실행: docker run -p 8002:8002 -e SPARK_SERVICE_PORT=8002 tasteam-spark-service
+#
+FROM python:3.11-slim-bookworm
+
+ENV PYTHONUNBUFFERED=1
+WORKDIR /app
+# Spark 워커(서브프로세스)가 comparison_lib를 찾을 수 있도록 (ModuleNotFoundError 방지)
+ENV PYTHONPATH=/app
+
+# OpenJDK 17 (PySpark 필수)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    openjdk-17-jdk-headless \
+    && rm -rf /var/lib/apt/lists/*
+ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-arm64
+
+# Spark 서비스 전용 의존성 (메인 앱 requirements.txt 미사용)
+COPY requirements-spark.txt /app/
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements-spark.txt
+
+# 소스 (comparison_lib만 Spark 로직, scripts·servjces 진입점)
+COPY comparison_lib /app/comparison_lib
+COPY scripts /app/scripts
+COPY servjces /app/servjces
+
+EXPOSE 8002
+
+# SPARK_SERVICE_URL 비우기 → 이 프로세스가 로컬 Spark 사용, 자기 자신 호출 방지
+ENV SPARK_SERVICE_URL=
+CMD ["python", "scripts/spark_service.py"]

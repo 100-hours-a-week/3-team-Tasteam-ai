@@ -58,6 +58,7 @@ HTTP API 호출만으로 테스트를 수행합니다. hybrid_search/final_pipel
     --load-test         부하테스트 (처리량/지연 측정). --total-requests, --concurrent-users, --ramp-up
     --load-test-data    부하테스트용 대형 JSON (예: real_service_simul_review_data_640k.json). 미지정 시 기본 테스트 데이터
     --generate-from-kr3 kr3.tsv 기반 테스트 데이터 생성 (--kr3-sample, --kr3-restaurants)
+    --test-data-max-reviews N  test_data_sample.json 로드 시 최대 리뷰 수 제한 (예: 2000)
 
 측정 지표 (--benchmark / QUANTITATIVE_METRICS.md):
     성능: 처리 시간(평균/P95/P99), TTFT, TPS, 처리량(req/s)
@@ -265,6 +266,7 @@ def generate_test_data(
     generate_from_kr3: bool = False,
     kr3_sample: Optional[int] = None,
     kr3_restaurants: Optional[int] = None,
+    max_reviews: Optional[int] = None,
 ):
     """
     테스트 데이터 로드 또는 생성
@@ -273,6 +275,7 @@ def generate_test_data(
         generate_from_kr3: kr3.tsv에서 데이터 생성 여부
         kr3_sample: kr3.tsv에서 샘플링할 리뷰 수
         kr3_restaurants: 생성할 레스토랑 수
+        max_reviews: test_data_sample.json 로드 시 사용할 최대 리뷰 수 (미지정 시 전체)
     """
     # kr3.tsv에서 데이터 생성 모드
     if generate_from_kr3:
@@ -296,7 +299,55 @@ def generate_test_data(
             data = json.load(f)
         
         # 데이터 형식 확인 및 변환
-        if isinstance(data, list):
+        # {"reviews": [...]} 형식 (test_data_sample.json): reviews가 있으면 레스토랑별로 그룹화하여 사용
+        # (파일에 "restaurants"만 있고 리뷰가 없을 수 있으므로, reviews 우선 사용)
+        if isinstance(data, dict) and data.get("reviews"):
+            review_list = data["reviews"]
+            print_info("reviews 배열 형식 데이터 감지, 레스토랑별로 그룹화 중...")
+            restaurants_dict = {}
+            for review in review_list:
+                if not isinstance(review, dict):
+                    continue
+                restaurant_id = review.get('restaurant_id')
+                if restaurant_id is None:
+                    continue
+                restaurant_id_str = str(restaurant_id)
+                if restaurant_id_str not in restaurants_dict:
+                    restaurants_dict[restaurant_id_str] = {
+                        'restaurant_id': restaurant_id,
+                        'restaurant_name': review.get('restaurant_name', f'Restaurant {restaurant_id}'),
+                        'food_category_id': review.get('food_category_id'),
+                        'food_category_name': review.get('food_category_name'),
+                        'reviews': []
+                    }
+                review_id = review.get('id')
+                if review_id is None:
+                    review_id = hash((restaurant_id, review.get('content', ''))) % (10 ** 9) or 1
+                review_data = {
+                    'id': review_id,
+                    'restaurant_id': review.get('restaurant_id'),
+                    'content': review.get('content', ''),
+                    'created_at': review.get('created_at') or datetime.now().isoformat(),
+                }
+                restaurants_dict[restaurant_id_str]['reviews'].append(review_data)
+            restaurants_list = list(restaurants_dict.values())
+            # 기존 data["restaurants"]에 id/name이 있으면 이름 매칭
+            name_by_id = {}
+            for r in (data.get("restaurants") or []):
+                rid = r.get("id") or r.get("restaurant_id")
+                if rid is not None and r.get("name"):
+                    name_by_id[int(rid) if isinstance(rid, (int, str)) and str(rid).isdigit() else rid] = r["name"]
+            for r in restaurants_list:
+                rid = r.get("restaurant_id")
+                if rid in name_by_id:
+                    r["restaurant_name"] = name_by_id[rid]
+            data = {'restaurants': restaurants_list}
+            print_info(f"  - {len(data['restaurants'])}개 레스토랑으로 그룹화 완료")
+            if max_reviews is not None and max_reviews > 0:
+                data = _trim_load_test_data_to_max_reviews(data, max_reviews)
+                total_after = sum(len(r.get("reviews") or []) for r in data.get("restaurants", []))
+                print_info(f"  - 테스트 데이터 제한: 최대 {max_reviews}건 리뷰 사용 (실제 {total_after}건)")
+        elif isinstance(data, list):
             # 리스트 형식: 리뷰 리스트를 레스토랑별로 그룹화
             print_info("리스트 형식 데이터 감지, 레스토랑별로 그룹화 중...")
             restaurants_dict = {}
@@ -334,9 +385,16 @@ def generate_test_data(
                 'restaurants': list(restaurants_dict.values())
             }
             print_info(f"  - {len(data['restaurants'])}개 레스토랑으로 그룹화 완료")
+            if max_reviews is not None and max_reviews > 0:
+                data = _trim_load_test_data_to_max_reviews(data, max_reviews)
+                total_after = sum(len(r.get("reviews") or []) for r in data.get("restaurants", []))
+                print_info(f"  - 테스트 데이터 제한: 최대 {max_reviews}건 리뷰 사용 (실제 {total_after}건)")
         
-        # 딕셔너리 형식 처리
+        # 딕셔너리 형식 처리 (nested만 있는 파일은 여기서 max_reviews 적용)
         if isinstance(data, dict):
+            if max_reviews is not None and max_reviews > 0 and data.get("restaurants") and not data.get("reviews"):
+                # nested만 있고 아직 trim 안 된 경우 (파일에 "restaurants"만 있을 때)
+                data = _trim_load_test_data_to_max_reviews(data, max_reviews)
             restaurants_count = len(data.get('restaurants', []))
             print_success(f"테스트 데이터 로드 완료: {restaurants_count}개 레스토랑")
             
@@ -3232,6 +3290,13 @@ def main():
         help="생성할 레스토랑 수 (--generate-from-kr3와 함께 사용)"
     )
     parser.add_argument(
+        "--test-data-max-reviews",
+        type=int,
+        default=None,
+        metavar="N",
+        help="일반 테스트 데이터(data/test_data_sample.json) 로드 시 사용할 최대 리뷰 수 (예: 2000). 미지정 시 전체 사용"
+    )
+    parser.add_argument(
         "--ports",
         type=int,
         nargs="+",
@@ -3339,6 +3404,7 @@ def main():
             generate_from_kr3=args.generate_from_kr3,
             kr3_sample=args.kr3_sample,
             kr3_restaurants=args.kr3_restaurants,
+            max_reviews=getattr(args, "test_data_max_reviews", None),
         )
     temp_json_path = None
     test_data = None

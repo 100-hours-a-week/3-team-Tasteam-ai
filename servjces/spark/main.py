@@ -34,14 +34,13 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 
-# comparison_pipeline은 이 프로세스에서만 Spark 로드 (메인 앱은 SPARK_SERVICE_URL로 여기 호출)
-from src.comparison_pipeline import (
+# comparison_lib만 사용 (src 미사용 → qdrant-client 등 불필요)
+from comparison_lib.comparison_pipeline import (
     calculate_all_average_ratios_from_file,
     calculate_all_average_ratios_from_texts,
     compute_recall_seeds_from_file,
     compute_recall_seeds_from_texts,
 )
-from src.config import Config
 
 app = FastAPI(title="Comparison Spark Service", version="0.1.0")
 
