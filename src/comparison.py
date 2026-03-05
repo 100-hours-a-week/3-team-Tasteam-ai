@@ -88,14 +88,26 @@ class ComparisonPipeline:
         )
 
         stopwords = _get_stopwords() or []
-        # 전체 평균: 요청으로 전달된 경로 > Config.ALL_AVERAGE_ASPECT_DATA_PATH > Qdrant 전체 > Config fallback
+        # 전체 평균: Qdrant(벡터 업로드 리뷰) 우선 → 파일 경로 → Config fallback. 벡터 리뷰 사용 시 Spark는 /all-average-from-reviews만 호출.
         aspect_data_path = all_average_data_path or Config.ALL_AVERAGE_ASPECT_DATA_PATH
         all_average_ratios = None
         try:
-            if aspect_data_path:
+            # ① Qdrant(벡터 업로드된 전체 리뷰) 우선. 2000건 이상이면 Spark /all-average-from-reviews 호출 가능.
+            logger.info("전체 평균 ① Qdrant 시도: get_all_reviews_for_all_average(5000)")
+            all_reviews = self.vector_search.get_all_reviews_for_all_average(limit=5000)
+            if all_reviews:
+                all_average_ratios = calculate_all_average_ratios_from_reviews(all_reviews, stopwords)
+                logger.info(
+                    "전체 평균 ① Qdrant 사용: 리뷰 %d건 → service=%.4f, price=%.4f",
+                    len(all_reviews), all_average_ratios.get("service", 0), all_average_ratios.get("price", 0),
+                )
+            else:
+                logger.warning("전체 평균 ① Qdrant: 조회된 리뷰 없음")
+            # ② Qdrant 실패 시 파일 경로로 시도 (Spark /all-average-from-file)
+            if all_average_ratios is None and aspect_data_path:
                 project_root = str(Path(__file__).resolve().parents[1])  # src/ 상위 = 프로젝트 루트
                 logger.info(
-                    "전체 평균 ① 파일 시도 (Spark 직접 읽기): path=%s",
+                    "전체 평균 ② 파일 시도 (Spark 직접 읽기): path=%s",
                     aspect_data_path,
                 )
                 all_average_ratios = calculate_all_average_ratios_from_file(
@@ -103,27 +115,16 @@ class ComparisonPipeline:
                 )
                 if all_average_ratios is not None:
                     logger.info(
-                        "전체 평균 ① 파일 사용 (Spark 직접 읽기): path=%s → service=%.4f, price=%.4f",
+                        "전체 평균 ② 파일 사용 (Spark 직접 읽기): path=%s → service=%.4f, price=%.4f",
                         aspect_data_path,
                         all_average_ratios.get("service", 0),
                         all_average_ratios.get("price", 0),
                     )
                 else:
                     logger.warning(
-                        "전체 평균 ① 파일: Spark 직접 읽기 실패 또는 파일 없음 (path=%s)",
+                        "전체 평균 ② 파일: Spark 직접 읽기 실패 또는 파일 없음 (path=%s)",
                         aspect_data_path,
                     )
-            if all_average_ratios is None:
-                logger.info("전체 평균 ② Qdrant 시도: get_all_reviews_for_all_average(5000)")
-                all_reviews = self.vector_search.get_all_reviews_for_all_average(limit=5000)
-                if all_reviews:
-                    all_average_ratios = calculate_all_average_ratios_from_reviews(all_reviews, stopwords)
-                    logger.info(
-                        "전체 평균 ② Qdrant 사용: 리뷰 %d건 → service=%.4f, price=%.4f",
-                        len(all_reviews), all_average_ratios.get("service", 0), all_average_ratios.get("price", 0),
-                    )
-                else:
-                    logger.warning("전체 평균 ② Qdrant: 조회된 리뷰 없음")
         except Exception as e:
             logger.debug(f"전체 평균 계산 건너뜀: {e}")
         if all_average_ratios is None:
