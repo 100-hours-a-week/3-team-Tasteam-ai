@@ -296,7 +296,51 @@ def generate_test_data(
             data = json.load(f)
         
         # 데이터 형식 확인 및 변환
-        if isinstance(data, list):
+        # {"reviews": [...]} 형식 (test_data_sample.json): reviews가 있으면 레스토랑별로 그룹화하여 사용
+        # (파일에 "restaurants"만 있고 리뷰가 없을 수 있으므로, reviews 우선 사용)
+        if isinstance(data, dict) and data.get("reviews"):
+            review_list = data["reviews"]
+            print_info("reviews 배열 형식 데이터 감지, 레스토랑별로 그룹화 중...")
+            restaurants_dict = {}
+            for review in review_list:
+                if not isinstance(review, dict):
+                    continue
+                restaurant_id = review.get('restaurant_id')
+                if restaurant_id is None:
+                    continue
+                restaurant_id_str = str(restaurant_id)
+                if restaurant_id_str not in restaurants_dict:
+                    restaurants_dict[restaurant_id_str] = {
+                        'restaurant_id': restaurant_id,
+                        'restaurant_name': review.get('restaurant_name', f'Restaurant {restaurant_id}'),
+                        'food_category_id': review.get('food_category_id'),
+                        'food_category_name': review.get('food_category_name'),
+                        'reviews': []
+                    }
+                review_id = review.get('id')
+                if review_id is None:
+                    review_id = hash((restaurant_id, review.get('content', ''))) % (10 ** 9) or 1
+                review_data = {
+                    'id': review_id,
+                    'restaurant_id': review.get('restaurant_id'),
+                    'content': review.get('content', ''),
+                    'created_at': review.get('created_at') or datetime.now().isoformat(),
+                }
+                restaurants_dict[restaurant_id_str]['reviews'].append(review_data)
+            restaurants_list = list(restaurants_dict.values())
+            # 기존 data["restaurants"]에 id/name이 있으면 이름 매칭
+            name_by_id = {}
+            for r in (data.get("restaurants") or []):
+                rid = r.get("id") or r.get("restaurant_id")
+                if rid is not None and r.get("name"):
+                    name_by_id[int(rid) if isinstance(rid, (int, str)) and str(rid).isdigit() else rid] = r["name"]
+            for r in restaurants_list:
+                rid = r.get("restaurant_id")
+                if rid in name_by_id:
+                    r["restaurant_name"] = name_by_id[rid]
+            data = {'restaurants': restaurants_list}
+            print_info(f"  - {len(data['restaurants'])}개 레스토랑으로 그룹화 완료")
+        elif isinstance(data, list):
             # 리스트 형식: 리뷰 리스트를 레스토랑별로 그룹화
             print_info("리스트 형식 데이터 감지, 레스토랑별로 그룹화 중...")
             restaurants_dict = {}
