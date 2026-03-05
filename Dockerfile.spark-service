@@ -14,7 +14,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     openjdk-17-jdk-headless \
     && rm -rf /var/lib/apt/lists/*
-ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-arm64
 
 # Spark 서비스 전용 의존성 (메인 앱 requirements.txt 미사용)
 COPY requirements-spark.txt /app/
