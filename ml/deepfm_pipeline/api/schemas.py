@@ -14,6 +14,9 @@ class TrainRequestDto(BaseModel):
 
     raw_data_dir: str | None = None
     processed_data_dir: str | None = None
+    source_dataset_path: str | None = Field(None, description="단일 CSV 경로. 지정 시 train/test로 나눈 뒤 전처리·학습")
+    test_ratio: float = Field(0.2, description="source_dataset_path 사용 시 test 비율 (0~1)")
+    random_state: int | None = Field(42, description="source_dataset_path 사용 시 분할 시드 (time_column 사용 시 무시)")
     num_train_sample: int | None = None
     num_test_sample: int | None = None
     num_val: int | None = None

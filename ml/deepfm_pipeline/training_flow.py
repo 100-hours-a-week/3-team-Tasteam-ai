@@ -1,13 +1,15 @@
 """
 Prefect 기반 DeepFM 학습 파이프라인 (deepfm_design.md §6-2).
 
-- 전처리 → 학습 → 모델 저장 + pipeline_version 발급 → 오프라인 지표 기록
+- (선택) train/test 분할 → 전처리 → 학습 → 모델 저장 + pipeline_version 발급 → 오프라인 지표 기록
 
 실행 (프로젝트 루트에서):
-  python deepfm_training/training_flow.py
+  python ml/deepfm_pipeline/training_flow.py
 
-또는 deepfm_training 디렉터리에서:
+또는 deepfm_pipeline 디렉터리에서:
   python training_flow.py
+
+source_dataset_path를 주면 해당 CSV를 train.csv/test.csv로 나눈 뒤 전처리·학습.
 """
 from __future__ import annotations
 
@@ -51,6 +53,51 @@ def _generate_pipeline_version() -> str:
     """deepfm_design §6-2: pipeline_version 발급 (예: deepfm-1.0.20260227120000)."""
     now = datetime.now(timezone.utc)
     return f"deepfm-1.0.{now.strftime('%Y%m%d%H%M%S')}"
+
+
+@task(name="deepfm-split-train-test", log_prints=True)
+def split_train_test_task(
+    source_dataset_path: str,
+    raw_data_dir: str,
+    test_ratio: float = 0.2,
+    random_state: int | None = 42,
+    time_column: str | None = None,
+) -> str:
+    """
+    단일 CSV를 train.csv / test.csv로 나눠 raw_data_dir에 저장.
+    - time_column이 있으면 시간 기준으로 정렬 후 뒤쪽 test_ratio를 test로 둠.
+    - time_column이 없으면 shuffle 후 뒤쪽 test_ratio를 test로 둠.
+    """
+    import pandas as pd
+
+    path = Path(source_dataset_path)
+    if not path.exists():
+        raise FileNotFoundError(f"Source dataset not found: {source_dataset_path}")
+
+    df = pd.read_csv(path)
+    if df.empty:
+        raise ValueError(f"Source dataset is empty: {source_dataset_path}")
+
+    n = len(df)
+    test_size = max(1, int(n * test_ratio))
+    train_size = n - test_size
+
+    if time_column and time_column in df.columns:
+        df = df.sort_values(time_column, na_position="last").reset_index(drop=True)
+        train_df = df.iloc[:train_size]
+        test_df = df.iloc[train_size:]
+    else:
+        if random_state is not None:
+            df = df.sample(frac=1, random_state=random_state).reset_index(drop=True)
+        train_df = df.iloc[:train_size]
+        test_df = df.iloc[train_size:]
+
+    raw = Path(raw_data_dir)
+    raw.mkdir(parents=True, exist_ok=True)
+    train_df.to_csv(raw / "train.csv", index=False)
+    test_df.to_csv(raw / "test.csv", index=False)
+    print(f"Split done: train={len(train_df)}, test={len(test_df)} -> {raw_data_dir}")
+    return raw_data_dir
 
 
 @task(name="deepfm-preprocess", log_prints=True)
@@ -256,10 +303,17 @@ def train_task(
     }
 
 
+def _default_source_dataset_path() -> str:
+    return str(_deepfm_root / "data" / "training_dataset.csv")
+
+
 @flow(name="DeepFM Training Pipeline", log_prints=True)
 def deepfm_training_flow(
     raw_data_dir: str | None = None,
     processed_data_dir: str | None = None,
+    source_dataset_path: str | None = None,
+    test_ratio: float = 0.2,
+    random_state: int | None = 42,
     num_train_sample: int | None = 9000,
     num_test_sample: int | None = 1000,
     num_val: int = 1000,
@@ -278,7 +332,8 @@ def deepfm_training_flow(
     use_wandb: bool = True,
 ) -> dict:
     """
-    전처리 → 학습을 순서대로 실행하는 DeepFM 파이프라인.
+    (선택) train/test 분할 → 전처리 → 학습을 순서대로 실행하는 DeepFM 파이프라인.
+    source_dataset_path를 주면 해당 CSV를 train.csv/test.csv로 나눈 뒤 전처리·학습.
     (wandb_design) use_wandb=True 시 Artifacts·메트릭 로깅, pipeline_version 매핑.
     """
     from utils import wandb_logger
@@ -296,6 +351,8 @@ def deepfm_training_flow(
             config={
                 "raw_data_dir": raw,
                 "processed_data_dir": processed,
+                "source_dataset_path": source_dataset_path,
+                "test_ratio": test_ratio,
                 "num_train_sample": num_train_sample,
                 "num_test_sample": num_test_sample,
                 "num_val": num_val,
@@ -312,6 +369,14 @@ def deepfm_training_flow(
         )
 
     if not skip_preprocess:
+        if source_dataset_path is not None:
+            split_train_test_task(
+                source_dataset_path=source_dataset_path,
+                raw_data_dir=raw,
+                test_ratio=test_ratio,
+                random_state=random_state,
+                time_column=time_column,
+            )
         preprocess_task(
             raw_data_dir=raw,
             processed_data_dir=processed,
@@ -384,5 +449,8 @@ def score_batch_task(
 
 
 if __name__ == "__main__":
-    # 기본 인자로 한 번 실행 (전처리 포함)
-    deepfm_training_flow()
+    # 기본 인자로 한 번 실행. data/training_dataset.csv가 있으면 자동으로 train/test 분할 후 전처리·학습
+    default_source = _default_source_dataset_path()
+    deepfm_training_flow(
+        source_dataset_path=default_source if Path(default_source).exists() else None,
+    )
