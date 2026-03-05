@@ -8,6 +8,8 @@ FROM python:3.11-slim-bookworm
 
 ENV PYTHONUNBUFFERED=1
 WORKDIR /app
+# Spark 워커(서브프로세스)가 comparison_lib를 찾을 수 있도록 (ModuleNotFoundError 방지)
+ENV PYTHONPATH=/app
 
 # OpenJDK 17 (PySpark 필수)
 RUN apt-get update && apt-get install -y --no-install-recommends \
