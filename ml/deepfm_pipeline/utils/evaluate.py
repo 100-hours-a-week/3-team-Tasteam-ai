@@ -128,8 +128,13 @@ def run_evaluation(
     user_cold_ndcg = {f"ndcg@{k}": [] for k in k_list}
     item_cold_ndcg = {f"ndcg@{k}": [] for k in k_list}
 
+    n_preds = len(preds)
     for name, idx in groups.indices.items():
         if name == "" or len(idx) == 0:
+            continue
+        idx = np.asarray(idx)
+        idx = idx[idx < n_preds]
+        if len(idx) == 0:
             continue
         order = np.argsort(-preds[idx])
         rel = weights[idx][order].tolist()
