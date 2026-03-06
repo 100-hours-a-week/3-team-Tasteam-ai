@@ -60,7 +60,7 @@
 
 | 요구사항 | 상태 | 비고 |
 |----------|------|------|
-| **§5-1** Weighted NDCG@K (K=5/10), gain=max(weight), 모델 점수 재정렬 | ✅ | `utils/evaluate.run_evaluation()`. |
+| **§5-1** NDCG@K (K=5/10), relevance=label(0/1), 모델 점수 재정렬 | ✅ | `utils/evaluate.run_evaluation()`. sample_weight는 metric 평균을 그룹 단위 가중평균할 때만 사용. |
 | **§5-2** Recall@K | ✅ | 동일. |
 | **§5-3** AUC (모니터링) | ✅ | `run_evaluation()` 결과에 포함. |
 
