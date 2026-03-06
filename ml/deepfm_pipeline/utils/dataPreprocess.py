@@ -583,14 +583,21 @@ def preprocess(
         meta_rows = []
         for row in test_rows:
             rec_id = row.get("recommendation_id") or row.get("generated_at")
-            if rec_id is not None and str(rec_id).strip():
+            def _empty(v: Any) -> bool:
+                if v is None:
+                    return True
+                if isinstance(v, float) and pd.isna(v):
+                    return True
+                s = str(v).strip().lower()
+                return not s or s == "nan" or s == "none"
+            if not _empty(rec_id):
                 rec_id = str(rec_id).strip()
             else:
                 uid = row.get("user_id")
                 aid = row.get("anonymous_id") or row.get("anonymous_cohort_id")
-                if uid is not None and str(uid).strip():
+                if not _empty(uid):
                     rec_id = f"u_{uid}"
-                elif aid is not None and str(aid).strip():
+                elif not _empty(aid):
                     rec_id = f"a_{aid}"
                 else:
                     rec_id = "single"
