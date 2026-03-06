@@ -296,26 +296,35 @@ class CategoryDictGenerator:
 
 
 def _label_from_row(row: dict) -> str:
-    w = row.get("weight")
-    if w is not None:
-        try:
-            return "1" if float(w) >= 0.5 else "0"
-        except (TypeError, ValueError):
-            pass
+    """
+    implicit_feedback 유무로 0/1 라벨.
+    - label 컬럼이 있으면 사용.
+    - 없으면: signal_type이 있고 비어있지 않으며 NO_FEEDBACK/IMPRESSION 등이 아니면 1, else 0.
+    """
     if row.get("label") is not None:
         return str(int(row["label"]))
+    st = row.get("signal_type")
+    if st is None:
+        return "0"
+    st = str(st).strip().upper()
+    if not st or st in ("NO_FEEDBACK", "NONE", "IMPRESSION"):
+        return "0"
     return "1"
 
 
 def _sample_weight_from_row(row: dict) -> float:
-    """옵션 C: 이진 라벨 + sample_weight. 없으면 1.0 (negative도 1.0)."""
-    w = row.get("weight")
-    if w is not None:
-        try:
-            return max(0.0, min(1.0, float(w)))
-        except (TypeError, ValueError):
-            pass
-    return 1.0
+    """
+    recommendation_techspec (385-392) signal 강도를 weight로 사용.
+    REVIEW=1.0, CALL=0.8, ROUTE=0.7, SAVE=0.6, SHARE=0.4, CLICK=0.2.
+    signal_type 없음(음성 샘플)이면 1.0.
+    """
+    st = row.get("signal_type")
+    if st is None or not str(st).strip():
+        return 1.0
+    st = str(st).strip().upper()
+    if st in ("NO_FEEDBACK", "NONE", "IMPRESSION"):
+        return 1.0
+    return float(SIGNAL_WEIGHTS.get(st, 0.2))
 
 
 def _parse_ts(v: Any) -> datetime | None:
