@@ -3,7 +3,7 @@ Tasteam DeepFM용 데이터 전처리.
 
 tasteam_deepfm_data.md + docs/data_designe + recommendation_techspec §스코어 계산 기준 반영:
 - 연속형: taste(4), visit_time(4), is_anonymous(1), pref_w_1~3(3) = 12개
-  + 스코어 피처 7개(선호 카테고리 매칭, 가격대 매칭, 맛×긍정구간, 시간대×컨텍스트, 거리, 날씨, 암묵적 피드백) = 19개
+  + 스코어 피처 6개(선호 카테고리, 가격대, 맛×긍정구간, 시간대×컨텍스트, 거리, 날씨; 암묵적 피드백 제외·라벨 누수 방지) = 18개
 - 범주형: user_id, anon_cohort_id, avg_price_tier, restaurant_id, primary_category,
   pref_cat_1~3, price_tier, region_gu, region_dong, geohash, day_of_week, time_slot,
   admin_dong, distance_bucket, weather_bucket, dining_type, first_positive_segment,
@@ -62,8 +62,8 @@ SIGNAL_WEIGHTS = {
     "SAVE": 0.6, "SHARE": 0.4, "CLICK": 0.2,
 }
 
-# recommendation_techspec §스코어 계산 기준 (548-556) 7개 피처 → 연속형 0~1
-NUM_SCORING_FEATURES = 7
+# recommendation_techspec §스코어 계산 기준 (548-556) 6개 피처 → 연속형 0~1 (암묵적 피드백 이력 제외: 현재 행 signal_type 사용 시 라벨 누수)
+NUM_SCORING_FEATURES = 6
 DISTANCE_BUCKET_SCORE = {"NEAR": 1.0, "CLOSE": 2.0 / 3.0, "MID": 1.0 / 3.0, "FAR": 0.0}
 
 
@@ -181,9 +181,10 @@ def _is_anonymous(row: dict) -> float:
 
 def _extract_scoring_features(row: dict) -> list[float]:
     """
-    recommendation_techspec §스코어 계산 기준 7개 피처를 0~1 연속값으로.
+    recommendation_techspec §스코어 계산 기준 6개 피처를 0~1 연속값으로.
     (1) 사용자 선호 카테고리 매칭 (2) 가격대 매칭 (3) 맛×긍정구간 (4) 시간대분포×컨텍스트
-    (5) 거리 bucket (6) 날씨 bucket 적합도 (7) 암묵적 피드백 이력(현재 행 signal 강도 proxy).
+    (5) 거리 bucket (6) 날씨 bucket 적합도.
+    암묵적 피드백 이력은 현재 행 signal_type과 라벨이 동일 정보라 누수되므로 제외.
     """
     pref_cats, _ = _get_preferred_categories_topk(row)
     if not any(pref_cats):
@@ -209,9 +210,6 @@ def _extract_scoring_features(row: dict) -> list[float]:
     weather_bucket = str(row.get("weather_bucket") or "").strip()
     weather_score = 0.5 if not weather_bucket else 1.0
 
-    signal_type = str(row.get("signal_type") or "CLICK").strip().upper()
-    feedback_score = max(0.0, min(1.0, float(SIGNAL_WEIGHTS.get(signal_type, 0.2))))
-
     return [
         cat_match,
         price_match,
@@ -219,7 +217,6 @@ def _extract_scoring_features(row: dict) -> list[float]:
         time_match,
         distance_score,
         weather_score,
-        feedback_score,
     ]
 
 
