@@ -32,6 +32,8 @@ class TrainRequestDto(BaseModel):
     valid_end: str | None = None
     test_end: str | None = None
     group_column: str | None = None
+    negative_sampling_ratio: float = Field(1.0, description="positive 1건당 추가할 음성 샘플 수, 0이면 미적용")
+    negative_sampling_seed: int = Field(42, description="음성 샘플링 시드")
     use_wandb: bool = True
 
 

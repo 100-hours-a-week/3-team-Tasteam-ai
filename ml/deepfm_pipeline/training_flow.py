@@ -112,6 +112,8 @@ def preprocess_task(
     valid_end: str | None = None,
     test_end: str | None = None,
     group_column: str | None = None,
+    negative_sampling_ratio: float = 1.0,
+    negative_sampling_seed: int = 42,
     use_wandb: bool = True,
 ) -> str:
     """
@@ -137,6 +139,8 @@ def preprocess_task(
         valid_end=valid_end,
         test_end=test_end,
         group_column=group_column,
+        negative_sampling_ratio=negative_sampling_ratio,
+        negative_sampling_seed=negative_sampling_seed,
     )
     print(f"Preprocess done: {processed_data_dir}")
 
@@ -329,6 +333,8 @@ def deepfm_training_flow(
     valid_end: str | None = None,
     test_end: str | None = None,
     group_column: str | None = None,
+    negative_sampling_ratio: float = 1.0,
+    negative_sampling_seed: int = 42,
     use_wandb: bool = True,
 ) -> dict:
     """
@@ -364,6 +370,7 @@ def deepfm_training_flow(
                 "valid_end": valid_end,
                 "test_end": test_end,
                 "group_column": group_column,
+                "negative_sampling_ratio": negative_sampling_ratio,
             },
             run_name=run_name,
         )
@@ -388,6 +395,8 @@ def deepfm_training_flow(
             valid_end=valid_end,
             test_end=test_end,
             group_column=group_column,
+            negative_sampling_ratio=negative_sampling_ratio,
+            negative_sampling_seed=negative_sampling_seed,
             use_wandb=use_wandb,
         )
 

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import random
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
@@ -400,6 +401,79 @@ def _load_all_rows(datadir: str, filenames: list[str], limit: int | None) -> lis
     return out
 
 
+def _is_positive_row(row: dict) -> bool:
+    return _label_from_row(row) == "1"
+
+
+# 음식점별 피처(전처리 전 raw row 기준). 음성 샘플 생성 시 해당 음식점 정보로 덮어쓸 필드.
+_RESTAURANT_KEYS = (
+    "restaurant_id", "primary_category", "price_tier",
+    "region_gu", "region_dong", "first_positive_segment", "first_comparison_tag",
+)
+
+
+def _add_negative_samples(
+    rows: list[dict],
+    all_rows: list[dict],
+    ratio: float,
+    seed: int = 42,
+) -> list[dict]:
+    """
+    positive 행당 ratio개 음성 행 추가. 같은 유저/컨텍스트, 다른 음식점(미클릭)으로 라벨 0.
+    """
+    if ratio <= 0 or not rows:
+        return rows
+    rng = random.Random(seed)
+    restaurant_lookup: dict[str, dict] = {}
+    for r in all_rows:
+        rid = r.get("restaurant_id")
+        if rid is not None and str(rid).strip():
+            rid = str(rid).strip()
+            if rid not in restaurant_lookup:
+                restaurant_lookup[rid] = {k: r.get(k) for k in _RESTAURANT_KEYS}
+
+    all_rids = list(restaurant_lookup.keys())
+    if len(all_rids) < 2:
+        return rows
+
+    user_positive: dict[str, set[str]] = defaultdict(set)
+    for r in all_rows:
+        if not _is_positive_row(r):
+            continue
+        uid = str(r.get("user_id") or r.get("anonymous_id") or r.get("anonymous_cohort_id") or "").strip()
+        if not uid:
+            uid = "_anon"
+        rid = r.get("restaurant_id")
+        if rid is not None and str(rid).strip():
+            user_positive[uid].add(str(rid).strip())
+
+    out = list(rows)
+    n_per_row = max(1, int(ratio)) if ratio >= 1 else 1
+    for row in rows:
+        if not _is_positive_row(row):
+            continue
+        uid = str(row.get("user_id") or row.get("anonymous_id") or row.get("anonymous_cohort_id") or "").strip()
+        if not uid:
+            uid = "_anon"
+        pos_set = user_positive.get(uid, set())
+        pool = [rid for rid in all_rids if rid not in pos_set]
+        if not pool:
+            continue
+        k = min(n_per_row, len(pool))
+        chosen = rng.sample(pool, k)
+        for neg_rid in chosen:
+            feat = restaurant_lookup.get(neg_rid, {})
+            neg_row = dict(row)
+            for key in _RESTAURANT_KEYS:
+                neg_row[key] = feat.get(key)
+            neg_row["signal_type"] = "NO_FEEDBACK"
+            neg_row["weight"] = 1.0
+            if "label" in neg_row:
+                del neg_row["label"]
+            out.append(neg_row)
+    return out
+
+
 def preprocess(
     datadir: str,
     outdir: str,
@@ -412,6 +486,8 @@ def preprocess(
     valid_end: str | None = None,
     test_end: str | None = None,
     group_column: str | None = None,
+    negative_sampling_ratio: float = 1.0,
+    negative_sampling_seed: int = 42,
 ) -> None:
     """
     Tasteam + data_designe 반영 전처리.
@@ -419,6 +495,7 @@ def preprocess(
     - use_sample_weight: True면 train/val/test 마지막에 sample_weight 컬럼 추가 (옵션 C).
     - time_column: 있으면 시간 기준 split (train_end, valid_end, test_end 구간 사용).
     - group_column: recommendation_id 또는 generated_at 등, 같은 값은 같은 구간으로.
+    - negative_sampling_ratio: positive 1건당 추가할 음성 샘플 수 (0이면 미적용). AUC/이진 분류용.
     - 시간 split 시 train.csv만 있어도 됨. 없으면 train.csv / test.csv 행 그대로 사용.
     """
     Path(outdir).mkdir(parents=True, exist_ok=True)
@@ -443,6 +520,13 @@ def preprocess(
             train_rows, test_rows = test_rows, []
         if not train_rows:
             raise FileNotFoundError(f"데이터 없음: {datadir}")
+
+    all_rows = train_rows + val_rows + test_rows
+    if negative_sampling_ratio > 0:
+        train_rows = _add_negative_samples(train_rows, all_rows, negative_sampling_ratio, negative_sampling_seed)
+        test_rows = _add_negative_samples(test_rows, all_rows, negative_sampling_ratio, negative_sampling_seed + 1)
+        if val_rows:
+            val_rows = _add_negative_samples(val_rows, all_rows, negative_sampling_ratio, negative_sampling_seed + 2)
 
     dicts = CategoryDictGenerator(len(CATEGORICAL_FEATURES))
     dicts.build(train_rows, cutoff=categorical_cutoff)
@@ -498,10 +582,22 @@ def preprocess(
     if test_rows:
         meta_rows = []
         for row in test_rows:
+            rec_id = row.get("recommendation_id") or row.get("generated_at")
+            if rec_id is not None and str(rec_id).strip():
+                rec_id = str(rec_id).strip()
+            else:
+                uid = row.get("user_id")
+                aid = row.get("anonymous_id") or row.get("anonymous_cohort_id")
+                if uid is not None and str(uid).strip():
+                    rec_id = f"u_{uid}"
+                elif aid is not None and str(aid).strip():
+                    rec_id = f"a_{aid}"
+                else:
+                    rec_id = "single"
             meta_rows.append({
                 "user_id": row.get("user_id") or "",
                 "restaurant_id": row.get("restaurant_id") or "",
-                "recommendation_id": row.get("recommendation_id") or row.get("generated_at") or "",
+                "recommendation_id": rec_id,
             })
         pd.DataFrame(meta_rows).to_csv(
             os.path.join(outdir, "test_meta.csv"), index=False

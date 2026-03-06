@@ -89,6 +89,8 @@ def trigger_train(body: TrainRequestDto | None = None) -> TrainResponseDto:
             valid_end=body.valid_end,
             test_end=body.test_end,
             group_column=body.group_column,
+            negative_sampling_ratio=body.negative_sampling_ratio,
+            negative_sampling_seed=body.negative_sampling_seed,
             use_wandb=body.use_wandb,
         )
     except FileNotFoundError as e:
