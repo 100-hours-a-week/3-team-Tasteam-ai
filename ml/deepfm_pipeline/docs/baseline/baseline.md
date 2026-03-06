@@ -1,3 +1,5 @@
+eval 결과 (default config)
+
 {
   "pipeline_version": "deepfm-1.0.20260306052211",
   "model_path": "/Users/js/tasteam-new-async/ml/deepfm_pipeline/output/manual/model.pt",
@@ -13,3 +15,7 @@
   "timestamp_utc": "2026-03-06T05:22:12.266233+00:00",
   "wandb_run_id": "7et41c3l"
 }
+
+---
+
+--> condidate 전체(모든 condidate set을 합친 전체) 기준, positive 97%, negative 3%, 클래스 매우 불균형
