@@ -1,0 +1,18 @@
+옵션	기본값	설명
+--source	(없으면 training_dataset.csv 시도)	단일 CSV 경로
+--raw-dir	(기본 경로)	raw 데이터 디렉터리
+--processed-dir	(기본 경로)	전처리 결과 디렉터리
+--output-dir	(기본 경로)	모델 출력 디렉터리
+--test-ratio	0.2	test 비율
+--random-state	42	분할 시드
+--num-train	None	학습 샘플 수 제한
+--num-test	None	테스트 샘플 수 제한
+--num-val	1000	validation 샘플 수
+--epochs	5	epoch 수
+--batch-size	100	배치 크기
+--lr	1e-4	학습률
+--negative-ratio	1.0	positive 1건당 음성 샘플 수 (0이면 미적용)
+--negative-seed	42	음성 샘플링 시드
+--skip-preprocess	False	전처리 생략
+--no-wandb	False	wandb 비활성화
+--cuda	False	CUDA 사용
