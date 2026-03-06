@@ -93,6 +93,8 @@ def trigger_train(body: TrainRequestDto | None = None) -> TrainResponseDto:
             negative_sampling_seed=body.negative_sampling_seed,
             eval_list_size=body.eval_list_size,
             eval_num_neg=body.eval_num_neg,
+            eval_num_popular_neg=body.eval_num_popular_neg,
+            eval_popular_top_k=body.eval_popular_top_k,
             eval_list_seed=body.eval_list_seed,
             use_wandb=body.use_wandb,
         )

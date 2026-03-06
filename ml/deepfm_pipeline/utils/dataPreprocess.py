@@ -488,13 +488,18 @@ def _row_recommendation_id(row: dict) -> str:
 def _build_eval_lists(
     rows: list[dict],
     all_rows: list[dict],
-    list_size: int = 100,
-    num_neg: int = 99,
+    list_size: int = 101,
+    num_neg: int = 100,
+    num_popular_neg: int = 50,
+    popular_top_k: int = 1000,
     seed: int = 42,
 ) -> list[dict]:
     """
     리스트 단위 평가용: 그룹별로 1 pos + num_neg neg = list_size행, 동일 recommendation_id 부여.
-    positive가 하나 이상인 그룹만 처리. negative는 같은 그룹 neg + 전체 풀(미클릭)에서 채움.
+    - positive가 하나 이상인 그룹만 처리.
+    - negative는 (인기 아이템 중 num_popular_neg) + (랜덤 샘플링)으로 구성.
+      인기 아이템은 all_rows에서 restaurant_id별 positive count 상위 popular_top_k.
+    - 인기 풀/랜덤 풀에서 부족하면 가능한 만큼 채움(그래도 부족하면 해당 그룹 skip).
     """
     if list_size <= 0 or num_neg <= 0 or not rows:
         return rows
@@ -512,6 +517,16 @@ def _build_eval_lists(
             rid = str(rid).strip()
             if rid not in restaurant_lookup:
                 restaurant_lookup[rid] = {k: r.get(k) for k in _RESTAURANT_KEYS}
+    # 인기 아이템 풀 (restaurant_id별 positive count)
+    pop_count: dict[str, int] = defaultdict(int)
+    for r in all_rows:
+        rid = r.get("restaurant_id")
+        if rid is None or not str(rid).strip():
+            continue
+        rid = str(rid).strip()
+        if _is_positive_row(r):
+            pop_count[rid] += 1
+    popular_rids = [rid for rid, _ in sorted(pop_count.items(), key=lambda x: (-x[1], x[0]))[: max(0, int(popular_top_k))]]
     user_positive: dict[str, set[str]] = defaultdict(set)
     for r in all_rows:
         if not _is_positive_row(r):
@@ -538,12 +553,23 @@ def _build_eval_lists(
         if not uid:
             uid = "_anon"
         user_pos = user_positive.get(uid, set()) | {pos_rid}
-        pool = [rid for rid in all_rids if rid not in user_pos]
-        if len(pool) < num_neg:
-            pool = pool + [r for r in all_rids if r not in user_pos and r not in pool][: num_neg - len(pool)]
-        if len(pool) < num_neg:
-            continue
-        chosen_neg = rng.sample(pool, num_neg)
+        # 1) 인기 negative
+        num_pop = max(0, min(int(num_popular_neg), int(num_neg)))
+        pop_pool = [rid for rid in popular_rids if rid not in user_pos]
+        chosen_pop = rng.sample(pop_pool, min(num_pop, len(pop_pool))) if pop_pool and num_pop > 0 else []
+        # 2) 랜덤 negative (인기에서 뽑은 것 제외)
+        remain = num_neg - len(chosen_pop)
+        rand_pool = [rid for rid in all_rids if rid not in user_pos and rid not in set(chosen_pop)]
+        if remain > 0:
+            if len(rand_pool) < remain:
+                # deterministic fill (still excluding user_pos + chosen_pop)
+                rand_pool = rand_pool + [r for r in all_rids if r not in user_pos and r not in set(chosen_pop) and r not in rand_pool][: remain - len(rand_pool)]
+            if len(rand_pool) < remain:
+                continue
+            chosen_rand = rng.sample(rand_pool, remain)
+        else:
+            chosen_rand = []
+        chosen_neg = chosen_pop + chosen_rand
         list_rec_id = rec_id
         pos_copy = dict(pos_row)
         pos_copy["recommendation_id"] = list_rec_id
@@ -575,8 +601,10 @@ def preprocess(
     group_column: str | None = None,
     negative_sampling_ratio: float = 1.0,
     negative_sampling_seed: int = 42,
-    eval_list_size: int = 0,
-    eval_num_neg: int = 99,
+    eval_list_size: int = 101,
+    eval_num_neg: int = 100,
+    eval_num_popular_neg: int = 50,
+    eval_popular_top_k: int = 1000,
     eval_list_seed: int = 42,
 ) -> None:
     """
@@ -587,6 +615,7 @@ def preprocess(
     - group_column: recommendation_id 또는 generated_at 등, 같은 값은 같은 구간으로.
     - negative_sampling_ratio: positive 1건당 추가할 음성 샘플 수 (0이면 미적용). AUC/이진 분류용.
     - eval_list_size: >0이면 test/val을 리스트 단위로 재구성 (1 pos + eval_num_neg neg = eval_list_size행, 동일 recommendation_id).
+      eval_num_popular_neg 만큼은 인기 아이템에서 negative를 뽑고, 나머지는 랜덤 negative.
     - 시간 split 시 train.csv만 있어도 됨. 없으면 train.csv / test.csv 행 그대로 사용.
     """
     Path(outdir).mkdir(parents=True, exist_ok=True)
@@ -620,9 +649,25 @@ def preprocess(
             if val_rows:
                 val_rows = _add_negative_samples(val_rows, all_rows, negative_sampling_ratio, negative_sampling_seed + 2)
     if eval_list_size > 0 and eval_num_neg > 0:
-        test_rows = _build_eval_lists(test_rows, all_rows, list_size=eval_list_size, num_neg=eval_num_neg, seed=eval_list_seed)
+        test_rows = _build_eval_lists(
+            test_rows,
+            all_rows,
+            list_size=eval_list_size,
+            num_neg=eval_num_neg,
+            num_popular_neg=eval_num_popular_neg,
+            popular_top_k=eval_popular_top_k,
+            seed=eval_list_seed,
+        )
         if val_rows:
-            val_rows = _build_eval_lists(val_rows, all_rows, list_size=eval_list_size, num_neg=eval_num_neg, seed=eval_list_seed + 1)
+            val_rows = _build_eval_lists(
+                val_rows,
+                all_rows,
+                list_size=eval_list_size,
+                num_neg=eval_num_neg,
+                num_popular_neg=eval_num_popular_neg,
+                popular_top_k=eval_popular_top_k,
+                seed=eval_list_seed + 1,
+            )
 
     dicts = CategoryDictGenerator(len(CATEGORICAL_FEATURES))
     dicts.build(train_rows, cutoff=categorical_cutoff)

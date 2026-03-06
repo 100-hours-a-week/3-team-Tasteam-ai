@@ -34,8 +34,10 @@ class TrainRequestDto(BaseModel):
     group_column: str | None = None
     negative_sampling_ratio: float = Field(1.0, description="positive 1건당 추가할 음성 샘플 수, 0이면 미적용")
     negative_sampling_seed: int = Field(42, description="음성 샘플링 시드")
-    eval_list_size: int = Field(100, description="test/val 리스트당 행 수 (1 pos + eval_num_neg neg). 0이면 미적용")
-    eval_num_neg: int = Field(99, description="리스트당 음성 개수")
+    eval_list_size: int = Field(101, description="test/val 리스트당 행 수 (1 pos + eval_num_neg neg). 0이면 미적용")
+    eval_num_neg: int = Field(100, description="리스트당 음성 개수")
+    eval_num_popular_neg: int = Field(50, description="리스트당 인기 아이템 기반 음성 개수 (나머지는 랜덤)")
+    eval_popular_top_k: int = Field(1000, description="인기 아이템 풀 크기 (positive count 상위 K)")
     eval_list_seed: int = Field(42, description="eval 리스트 구성 시드")
     use_wandb: bool = True
 

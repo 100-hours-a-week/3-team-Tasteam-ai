@@ -114,8 +114,10 @@ def preprocess_task(
     group_column: str | None = None,
     negative_sampling_ratio: float = 1.0,
     negative_sampling_seed: int = 42,
-    eval_list_size: int = 100,
-    eval_num_neg: int = 99,
+    eval_list_size: int = 101,
+    eval_num_neg: int = 100,
+    eval_num_popular_neg: int = 50,
+    eval_popular_top_k: int = 1000,
     eval_list_seed: int = 42,
     use_wandb: bool = True,
 ) -> str:
@@ -147,6 +149,8 @@ def preprocess_task(
         negative_sampling_seed=negative_sampling_seed,
         eval_list_size=eval_list_size,
         eval_num_neg=eval_num_neg,
+        eval_num_popular_neg=eval_num_popular_neg,
+        eval_popular_top_k=eval_popular_top_k,
         eval_list_seed=eval_list_seed,
     )
     print(f"Preprocess done: {processed_data_dir}")
@@ -342,8 +346,10 @@ def deepfm_training_flow(
     group_column: str | None = None,
     negative_sampling_ratio: float = 1.0,
     negative_sampling_seed: int = 42,
-    eval_list_size: int = 100,
-    eval_num_neg: int = 99,
+    eval_list_size: int = 101,
+    eval_num_neg: int = 100,
+    eval_num_popular_neg: int = 50,
+    eval_popular_top_k: int = 1000,
     eval_list_seed: int = 42,
     use_wandb: bool = True,
 ) -> dict:
@@ -383,6 +389,8 @@ def deepfm_training_flow(
                 "negative_sampling_ratio": negative_sampling_ratio,
                 "eval_list_size": eval_list_size,
                 "eval_num_neg": eval_num_neg,
+                "eval_num_popular_neg": eval_num_popular_neg,
+                "eval_popular_top_k": eval_popular_top_k,
             },
             run_name=run_name,
         )
@@ -411,6 +419,8 @@ def deepfm_training_flow(
             negative_sampling_seed=negative_sampling_seed,
             eval_list_size=eval_list_size,
             eval_num_neg=eval_num_neg,
+            eval_num_popular_neg=eval_num_popular_neg,
+            eval_popular_top_k=eval_popular_top_k,
             eval_list_seed=eval_list_seed,
             use_wandb=use_wandb,
         )
@@ -489,8 +499,10 @@ if __name__ == "__main__":
     p.add_argument("--lr", type=float, default=1e-4, help="학습률")
     p.add_argument("--negative-ratio", type=float, default=1.0, help="positive 1건당 음성 샘플 수 (0이면 미적용)")
     p.add_argument("--negative-seed", type=int, default=42, help="음성 샘플링 시드")
-    p.add_argument("--eval-list-size", type=int, default=100, help="test/val 리스트당 행 수 (1 pos + eval-num-neg neg). 0이면 미적용")
-    p.add_argument("--eval-num-neg", type=int, default=99, help="리스트당 음성 개수 (eval-list-size-1)")
+    p.add_argument("--eval-list-size", type=int, default=101, help="test/val 리스트당 행 수 (1 pos + eval-num-neg neg). 0이면 미적용")
+    p.add_argument("--eval-num-neg", type=int, default=100, help="리스트당 음성 개수 (eval-list-size-1)")
+    p.add_argument("--eval-num-popular-neg", type=int, default=50, help="리스트당 인기 아이템 기반 음성 개수 (나머지는 랜덤)")
+    p.add_argument("--eval-popular-top-k", type=int, default=1000, help="인기 아이템 풀 크기 (positive count 상위 K)")
     p.add_argument("--eval-list-seed", type=int, default=42, help="eval 리스트 구성 시드")
     p.add_argument("--skip-preprocess", action="store_true", help="전처리 생략 (기존 train.txt 사용)")
     p.add_argument("--no-wandb", action="store_true", help="wandb 로깅 비활성화")
@@ -516,6 +528,8 @@ if __name__ == "__main__":
         negative_sampling_seed=args.negative_seed,
         eval_list_size=args.eval_list_size,
         eval_num_neg=args.eval_num_neg,
+        eval_num_popular_neg=args.eval_num_popular_neg,
+        eval_popular_top_k=args.eval_popular_top_k,
         eval_list_seed=args.eval_list_seed,
         skip_preprocess=args.skip_preprocess,
         use_wandb=not args.no_wandb,
