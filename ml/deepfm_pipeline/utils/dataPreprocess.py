@@ -1,8 +1,9 @@
 """
 Tasteam DeepFM용 데이터 전처리.
 
-tasteam_deepfm_data.md + docs/data_designe 반영:
-- 연속형: taste_preferences(4), visit_time_distribution(4), is_anonymous(1), pref_w_1~3(3) = 12개
+tasteam_deepfm_data.md + docs/data_designe + recommendation_techspec §스코어 계산 기준 반영:
+- 연속형: taste(4), visit_time(4), is_anonymous(1), pref_w_1~3(3) = 12개
+  + 스코어 피처 7개(선호 카테고리 매칭, 가격대 매칭, 맛×긍정구간, 시간대×컨텍스트, 거리, 날씨, 암묵적 피드백) = 19개
 - 범주형: user_id, anon_cohort_id, avg_price_tier, restaurant_id, primary_category,
   pref_cat_1~3, price_tier, region_gu, region_dong, geohash, day_of_week, time_slot,
   admin_dong, distance_bucket, weather_bucket, dining_type, first_positive_segment,
@@ -59,6 +60,10 @@ SIGNAL_WEIGHTS = {
     "REVIEW": 1.0, "CALL": 0.8, "ROUTE": 0.7,
     "SAVE": 0.6, "SHARE": 0.4, "CLICK": 0.2,
 }
+
+# recommendation_techspec §스코어 계산 기준 (548-556) 7개 피처 → 연속형 0~1
+NUM_SCORING_FEATURES = 7
+DISTANCE_BUCKET_SCORE = {"NEAR": 1.0, "CLOSE": 2.0 / 3.0, "MID": 1.0 / 3.0, "FAR": 0.0}
 
 
 def _safe_json(s: Any) -> Any:
@@ -173,6 +178,50 @@ def _is_anonymous(row: dict) -> float:
     return 1.0
 
 
+def _extract_scoring_features(row: dict) -> list[float]:
+    """
+    recommendation_techspec §스코어 계산 기준 7개 피처를 0~1 연속값으로.
+    (1) 사용자 선호 카테고리 매칭 (2) 가격대 매칭 (3) 맛×긍정구간 (4) 시간대분포×컨텍스트
+    (5) 거리 bucket (6) 날씨 bucket 적합도 (7) 암묵적 피드백 이력(현재 행 signal 강도 proxy).
+    """
+    pref_cats, _ = _get_preferred_categories_topk(row)
+    if not any(pref_cats):
+        pref_cats = [str(row.get("pref_cat_1") or "").strip(), str(row.get("pref_cat_2") or "").strip(), str(row.get("pref_cat_3") or "").strip()]
+    primary = str(row.get("primary_category") or "").strip()
+    cat_match = 1.0 if primary and primary in [c for c in pref_cats if c] else 0.0
+
+    avg_pt = str(row.get("avg_price_tier") or "").strip()
+    pt = str(row.get("price_tier") or "").strip()
+    price_match = 1.0 if avg_pt and pt and avg_pt == pt else 0.0
+
+    taste = _get_taste_preferences(row)
+    pos_seg = str(_get_first_positive_segment(row) or "").strip()
+    taste_pos = max(0.0, min(1.0, float(taste.get(pos_seg, 0.0)))) if pos_seg else 0.0
+
+    visit = _get_visit_time_distribution(row)
+    time_slot = str(row.get("time_slot") or "").strip()
+    time_match = max(0.0, min(1.0, float(visit.get(time_slot, 0.0) or visit.get("other", 0.0))))
+
+    dist_bucket = str(row.get("distance_bucket") or "").strip().upper()
+    distance_score = DISTANCE_BUCKET_SCORE.get(dist_bucket, 0.5)
+
+    weather_bucket = str(row.get("weather_bucket") or "").strip()
+    weather_score = 0.5 if not weather_bucket else 1.0
+
+    signal_type = str(row.get("signal_type") or "CLICK").strip().upper()
+    feedback_score = max(0.0, min(1.0, float(SIGNAL_WEIGHTS.get(signal_type, 0.2))))
+
+    return [
+        cat_match,
+        price_match,
+        taste_pos,
+        time_match,
+        distance_score,
+        weather_score,
+        feedback_score,
+    ]
+
+
 def _extract_continuous(row: dict) -> list[float]:
     taste = _get_taste_preferences(row)
     visit = _get_visit_time_distribution(row)
@@ -187,6 +236,7 @@ def _extract_continuous(row: dict) -> list[float]:
     out.append(_is_anonymous(row))
     _, pref_weights = _get_preferred_categories_topk(row)
     out.extend(pref_weights)
+    out.extend(_extract_scoring_features(row))
     return out
 
 
@@ -388,7 +438,7 @@ def preprocess(
     dicts = CategoryDictGenerator(len(CATEGORICAL_FEATURES))
     dicts.build(train_rows, cutoff=categorical_cutoff)
     dict_sizes = dicts.dicts_sizes()
-    sizes = [1] * len(CONTINUOUS_FEATURES) + dict_sizes
+    sizes = [1] * (len(CONTINUOUS_FEATURES) + NUM_SCORING_FEATURES) + dict_sizes
     with open(os.path.join(outdir, "feature_sizes.txt"), "w") as f:
         f.write(",".join(map(str, sizes)))
 
