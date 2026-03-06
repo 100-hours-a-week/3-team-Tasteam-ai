@@ -458,8 +458,45 @@ def score_batch_task(
 
 
 if __name__ == "__main__":
-    # 기본 인자로 한 번 실행. data/training_dataset.csv가 있으면 자동으로 train/test 분할 후 전처리·학습
+    import argparse
+    p = argparse.ArgumentParser(description="DeepFM 학습 파이프라인 (분할 → 전처리 → 학습)")
+    p.add_argument("--source", type=str, default=None, help="단일 CSV 경로. 없으면 data/training_dataset.csv 사용 시도")
+    p.add_argument("--raw-dir", type=str, default=None, help="raw 데이터 디렉터리 (train.csv, test.csv)")
+    p.add_argument("--processed-dir", type=str, default=None, help="전처리 결과 출력 디렉터리")
+    p.add_argument("--output-dir", type=str, default=None, help="모델/아티팩트 출력 디렉터리")
+    p.add_argument("--test-ratio", type=float, default=0.2, help="source 사용 시 test 비율 (0~1)")
+    p.add_argument("--random-state", type=int, default=42, help="train/test 분할 시드")
+    p.add_argument("--num-train", type=int, default=None, help="학습 샘플 수 제한")
+    p.add_argument("--num-test", type=int, default=None, help="테스트 샘플 수 제한")
+    p.add_argument("--num-val", type=int, default=1000, help="validation 샘플 수")
+    p.add_argument("--epochs", type=int, default=5, help="학습 epoch 수")
+    p.add_argument("--batch-size", type=int, default=100, help="배치 크기")
+    p.add_argument("--lr", type=float, default=1e-4, help="학습률")
+    p.add_argument("--negative-ratio", type=float, default=1.0, help="positive 1건당 음성 샘플 수 (0이면 미적용)")
+    p.add_argument("--negative-seed", type=int, default=42, help="음성 샘플링 시드")
+    p.add_argument("--skip-preprocess", action="store_true", help="전처리 생략 (기존 train.txt 사용)")
+    p.add_argument("--no-wandb", action="store_true", help="wandb 로깅 비활성화")
+    p.add_argument("--cuda", action="store_true", help="CUDA 사용")
+    args = p.parse_args()
+
     default_source = _default_source_dataset_path()
+    source = args.source if args.source is not None else (default_source if Path(default_source).exists() else None)
     deepfm_training_flow(
-        source_dataset_path=default_source if Path(default_source).exists() else None,
+        source_dataset_path=source,
+        raw_data_dir=args.raw_dir,
+        processed_data_dir=args.processed_dir,
+        output_dir=args.output_dir,
+        test_ratio=args.test_ratio,
+        random_state=args.random_state,
+        num_train_sample=args.num_train,
+        num_test_sample=args.num_test,
+        num_val=args.num_val,
+        epochs=args.epochs,
+        batch_size=args.batch_size,
+        lr=args.lr,
+        negative_sampling_ratio=args.negative_ratio,
+        negative_sampling_seed=args.negative_seed,
+        skip_preprocess=args.skip_preprocess,
+        use_wandb=not args.no_wandb,
+        use_cuda=args.cuda,
     )
