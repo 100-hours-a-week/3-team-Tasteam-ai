@@ -471,6 +471,96 @@ def _add_negative_samples(
     return out
 
 
+def _row_recommendation_id(row: dict) -> str:
+    """그룹 키: recommendation_id 또는 generated_at 또는 u_{user_id} / a_{aid} / single."""
+    rec_id = row.get("recommendation_id") or row.get("generated_at")
+    if rec_id is not None and str(rec_id).strip().lower() not in ("", "nan", "none"):
+        return str(rec_id).strip()
+    uid = row.get("user_id")
+    aid = row.get("anonymous_id") or row.get("anonymous_cohort_id")
+    if uid is not None and str(uid).strip().lower() not in ("", "nan", "none"):
+        return f"u_{uid}"
+    if aid is not None and str(aid).strip().lower() not in ("", "nan", "none"):
+        return f"a_{aid}"
+    return "single"
+
+
+def _build_eval_lists(
+    rows: list[dict],
+    all_rows: list[dict],
+    list_size: int = 100,
+    num_neg: int = 99,
+    seed: int = 42,
+) -> list[dict]:
+    """
+    리스트 단위 평가용: 그룹별로 1 pos + num_neg neg = list_size행, 동일 recommendation_id 부여.
+    positive가 하나 이상인 그룹만 처리. negative는 같은 그룹 neg + 전체 풀(미클릭)에서 채움.
+    """
+    if list_size <= 0 or num_neg <= 0 or not rows:
+        return rows
+    rng = random.Random(seed)
+    # 그룹 by recommendation_id
+    rec_to_indices: dict[str, list[int]] = defaultdict(list)
+    for i, row in enumerate(rows):
+        rec_id = _row_recommendation_id(row)
+        rec_to_indices[rec_id].append(i)
+    # restaurant 풀 & 유저별 positive set (all_rows 기준)
+    restaurant_lookup: dict[str, dict] = {}
+    for r in all_rows:
+        rid = r.get("restaurant_id")
+        if rid is not None and str(rid).strip():
+            rid = str(rid).strip()
+            if rid not in restaurant_lookup:
+                restaurant_lookup[rid] = {k: r.get(k) for k in _RESTAURANT_KEYS}
+    user_positive: dict[str, set[str]] = defaultdict(set)
+    for r in all_rows:
+        if not _is_positive_row(r):
+            continue
+        uid = str(r.get("user_id") or r.get("anonymous_id") or r.get("anonymous_cohort_id") or "").strip()
+        if not uid:
+            uid = "_anon"
+        rid = r.get("restaurant_id")
+        if rid is not None and str(rid).strip():
+            user_positive[uid].add(str(rid).strip())
+    all_rids = list(restaurant_lookup.keys())
+    if len(all_rids) < 2:
+        return rows
+
+    out: list[dict] = []
+    for rec_id, indices in rec_to_indices.items():
+        group_rows = [rows[i] for i in indices]
+        positives = [r for r in group_rows if _is_positive_row(r)]
+        if not positives:
+            continue
+        pos_row = rng.choice(positives)
+        pos_rid = str(pos_row.get("restaurant_id") or "").strip()
+        uid = str(pos_row.get("user_id") or pos_row.get("anonymous_id") or pos_row.get("anonymous_cohort_id") or "").strip()
+        if not uid:
+            uid = "_anon"
+        user_pos = user_positive.get(uid, set()) | {pos_rid}
+        pool = [rid for rid in all_rids if rid not in user_pos]
+        if len(pool) < num_neg:
+            pool = pool + [r for r in all_rids if r not in user_pos and r not in pool][: num_neg - len(pool)]
+        if len(pool) < num_neg:
+            continue
+        chosen_neg = rng.sample(pool, num_neg)
+        list_rec_id = rec_id
+        pos_copy = dict(pos_row)
+        pos_copy["recommendation_id"] = list_rec_id
+        out.append(pos_copy)
+        for neg_rid in chosen_neg:
+            neg_row = dict(pos_row)
+            for key in _RESTAURANT_KEYS:
+                neg_row[key] = restaurant_lookup.get(neg_rid, {}).get(key)
+            neg_row["signal_type"] = "NO_FEEDBACK"
+            neg_row["weight"] = 1.0
+            if "label" in neg_row:
+                del neg_row["label"]
+            neg_row["recommendation_id"] = list_rec_id
+            out.append(neg_row)
+    return out if out else rows
+
+
 def preprocess(
     datadir: str,
     outdir: str,
@@ -485,6 +575,9 @@ def preprocess(
     group_column: str | None = None,
     negative_sampling_ratio: float = 1.0,
     negative_sampling_seed: int = 42,
+    eval_list_size: int = 0,
+    eval_num_neg: int = 99,
+    eval_list_seed: int = 42,
 ) -> None:
     """
     Tasteam + data_designe 반영 전처리.
@@ -493,6 +586,7 @@ def preprocess(
     - time_column: 있으면 시간 기준 split (train_end, valid_end, test_end 구간 사용).
     - group_column: recommendation_id 또는 generated_at 등, 같은 값은 같은 구간으로.
     - negative_sampling_ratio: positive 1건당 추가할 음성 샘플 수 (0이면 미적용). AUC/이진 분류용.
+    - eval_list_size: >0이면 test/val을 리스트 단위로 재구성 (1 pos + eval_num_neg neg = eval_list_size행, 동일 recommendation_id).
     - 시간 split 시 train.csv만 있어도 됨. 없으면 train.csv / test.csv 행 그대로 사용.
     """
     Path(outdir).mkdir(parents=True, exist_ok=True)
@@ -521,9 +615,14 @@ def preprocess(
     all_rows = train_rows + val_rows + test_rows
     if negative_sampling_ratio > 0:
         train_rows = _add_negative_samples(train_rows, all_rows, negative_sampling_ratio, negative_sampling_seed)
-        test_rows = _add_negative_samples(test_rows, all_rows, negative_sampling_ratio, negative_sampling_seed + 1)
+        if eval_list_size <= 0:
+            test_rows = _add_negative_samples(test_rows, all_rows, negative_sampling_ratio, negative_sampling_seed + 1)
+            if val_rows:
+                val_rows = _add_negative_samples(val_rows, all_rows, negative_sampling_ratio, negative_sampling_seed + 2)
+    if eval_list_size > 0 and eval_num_neg > 0:
+        test_rows = _build_eval_lists(test_rows, all_rows, list_size=eval_list_size, num_neg=eval_num_neg, seed=eval_list_seed)
         if val_rows:
-            val_rows = _add_negative_samples(val_rows, all_rows, negative_sampling_ratio, negative_sampling_seed + 2)
+            val_rows = _build_eval_lists(val_rows, all_rows, list_size=eval_list_size, num_neg=eval_num_neg, seed=eval_list_seed + 1)
 
     dicts = CategoryDictGenerator(len(CATEGORICAL_FEATURES))
     dicts.build(train_rows, cutoff=categorical_cutoff)

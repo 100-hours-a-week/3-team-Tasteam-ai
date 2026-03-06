@@ -114,10 +114,14 @@ def preprocess_task(
     group_column: str | None = None,
     negative_sampling_ratio: float = 1.0,
     negative_sampling_seed: int = 42,
+    eval_list_size: int = 100,
+    eval_num_neg: int = 99,
+    eval_list_seed: int = 42,
     use_wandb: bool = True,
 ) -> str:
     """
     전처리 + (wandb_design) split 메타·feature_sizes·dataset 스냅샷 artifact 로깅.
+    eval_list_size>0이면 test/val을 리스트당 1 pos + eval_num_neg neg로 재구성.
     """
     from utils.dataPreprocess import preprocess
     from utils import wandb_logger
@@ -141,6 +145,9 @@ def preprocess_task(
         group_column=group_column,
         negative_sampling_ratio=negative_sampling_ratio,
         negative_sampling_seed=negative_sampling_seed,
+        eval_list_size=eval_list_size,
+        eval_num_neg=eval_num_neg,
+        eval_list_seed=eval_list_seed,
     )
     print(f"Preprocess done: {processed_data_dir}")
 
@@ -335,6 +342,9 @@ def deepfm_training_flow(
     group_column: str | None = None,
     negative_sampling_ratio: float = 1.0,
     negative_sampling_seed: int = 42,
+    eval_list_size: int = 100,
+    eval_num_neg: int = 99,
+    eval_list_seed: int = 42,
     use_wandb: bool = True,
 ) -> dict:
     """
@@ -371,6 +381,8 @@ def deepfm_training_flow(
                 "test_end": test_end,
                 "group_column": group_column,
                 "negative_sampling_ratio": negative_sampling_ratio,
+                "eval_list_size": eval_list_size,
+                "eval_num_neg": eval_num_neg,
             },
             run_name=run_name,
         )
@@ -397,6 +409,9 @@ def deepfm_training_flow(
             group_column=group_column,
             negative_sampling_ratio=negative_sampling_ratio,
             negative_sampling_seed=negative_sampling_seed,
+            eval_list_size=eval_list_size,
+            eval_num_neg=eval_num_neg,
+            eval_list_seed=eval_list_seed,
             use_wandb=use_wandb,
         )
 
@@ -474,6 +489,9 @@ if __name__ == "__main__":
     p.add_argument("--lr", type=float, default=1e-4, help="학습률")
     p.add_argument("--negative-ratio", type=float, default=1.0, help="positive 1건당 음성 샘플 수 (0이면 미적용)")
     p.add_argument("--negative-seed", type=int, default=42, help="음성 샘플링 시드")
+    p.add_argument("--eval-list-size", type=int, default=100, help="test/val 리스트당 행 수 (1 pos + eval-num-neg neg). 0이면 미적용")
+    p.add_argument("--eval-num-neg", type=int, default=99, help="리스트당 음성 개수 (eval-list-size-1)")
+    p.add_argument("--eval-list-seed", type=int, default=42, help="eval 리스트 구성 시드")
     p.add_argument("--skip-preprocess", action="store_true", help="전처리 생략 (기존 train.txt 사용)")
     p.add_argument("--no-wandb", action="store_true", help="wandb 로깅 비활성화")
     p.add_argument("--cuda", action="store_true", help="CUDA 사용")
@@ -496,6 +514,9 @@ if __name__ == "__main__":
         lr=args.lr,
         negative_sampling_ratio=args.negative_ratio,
         negative_sampling_seed=args.negative_seed,
+        eval_list_size=args.eval_list_size,
+        eval_num_neg=args.eval_num_neg,
+        eval_list_seed=args.eval_list_seed,
         skip_preprocess=args.skip_preprocess,
         use_wandb=not args.no_wandb,
         use_cuda=args.cuda,
