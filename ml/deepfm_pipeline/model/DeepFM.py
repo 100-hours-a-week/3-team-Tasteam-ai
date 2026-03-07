@@ -162,7 +162,8 @@ class DeepFM(nn.Module):
         num_samples = 0
         model.eval()  # set model to evaluation mode
         with torch.no_grad():
-            for xi, xv, y in loader:
+            for batch in loader:
+                xi, xv, y = batch[0], batch[1], batch[2]
                 xi = xi.to(device=self.device, dtype=self.dtype)  # move to device, e.g. GPU
                 xv = xv.to(device=self.device, dtype=torch.float)
                 y = y.to(device=self.device, dtype=torch.bool)

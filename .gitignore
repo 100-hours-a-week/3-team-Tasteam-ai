@@ -38,3 +38,9 @@ wandb/
 data/test_data_sample.json
 
 docs/spark_msa/long_logs/
+
+ml/deepfm_pipeline/data/training_dataset.csv
+
+ml/deepfm_pipeline/data/
+
+ml/deepfm_pipeline/output/

@@ -71,6 +71,9 @@ def trigger_train(body: TrainRequestDto | None = None) -> TrainResponseDto:
         result = deepfm_training_flow(
             raw_data_dir=raw,
             processed_data_dir=processed,
+            source_dataset_path=body.source_dataset_path,
+            test_ratio=body.test_ratio,
+            random_state=body.random_state,
             num_train_sample=body.num_train_sample,
             num_test_sample=body.num_test_sample,
             num_val=body.num_val or 1000,
@@ -86,6 +89,13 @@ def trigger_train(body: TrainRequestDto | None = None) -> TrainResponseDto:
             valid_end=body.valid_end,
             test_end=body.test_end,
             group_column=body.group_column,
+            negative_sampling_ratio=body.negative_sampling_ratio,
+            negative_sampling_seed=body.negative_sampling_seed,
+            eval_list_size=body.eval_list_size,
+            eval_num_neg=body.eval_num_neg,
+            eval_num_popular_neg=body.eval_num_popular_neg,
+            eval_popular_top_k=body.eval_popular_top_k,
+            eval_list_seed=body.eval_list_seed,
             use_wandb=body.use_wandb,
         )
     except FileNotFoundError as e:
