@@ -220,6 +220,103 @@ def run_evaluation(
     return result
 
 
+def run_popularity_baseline(
+    processed_data_dir: str,
+    k_list: list[int] | None = None,
+) -> dict:
+    """
+    같은 평가셋에서 popularity baseline NDCG@K, Recall@K 계산.
+    score = restaurant_popularity[item] 로 랭킹 후 binary relevance로 NDCG/Recall 산출.
+    split_meta.json에 restaurant_positive_counts가 있어야 함 (전처리 시 저장).
+    """
+    k_list = k_list or [5, 10]
+    root = Path(processed_data_dir)
+    test_path = root / "test.txt"
+    meta_path = root / "test_meta.csv"
+    split_meta_path = root / "split_meta.json"
+    sizes_path = root / "feature_sizes.txt"
+
+    if not test_path.exists():
+        return {"error": "test.txt not found"}
+    if not split_meta_path.exists():
+        return {"error": "split_meta.json not found"}
+
+    with open(split_meta_path, encoding="utf-8") as f:
+        split_meta = json.load(f)
+    popularity: dict[str, int] = split_meta.get("restaurant_positive_counts") or {}
+    if not popularity:
+        return {"error": "restaurant_positive_counts not in split_meta (re-run preprocess)"}
+
+    feature_sizes = [int(x) for x in np.loadtxt(str(sizes_path), delimiter=",").ravel()] if sizes_path.exists() else []
+    if not feature_sizes:
+        return {"error": "feature_sizes.txt not found"}
+    n_fields = len(feature_sizes)
+
+    data = pd.read_csv(test_path)
+    if data.shape[1] <= n_fields:
+        return {"error": "test.txt has no label column"}
+    y_true = data.iloc[:, n_fields].values.astype(np.float32)
+    weights = data.iloc[:, n_fields + 1].values.astype(np.float32) if data.shape[1] > n_fields + 1 else np.ones_like(y_true)
+
+    meta = pd.read_csv(meta_path) if meta_path.exists() else None
+    if meta is None or "recommendation_id" not in meta.columns or "restaurant_id" not in meta.columns:
+        return {"error": "test_meta.csv with recommendation_id and restaurant_id required"}
+
+    rec_id = meta["recommendation_id"].astype(str)
+    groups = rec_id.groupby(rec_id)
+
+    ndcg_results = {f"ndcg@{k}": [] for k in k_list}
+    recall_results = {f"recall@{k}": [] for k in k_list}
+    group_weights = {f"ndcg@{k}": [] for k in k_list}
+    group_weights.update({f"recall@{k}": [] for k in k_list})
+
+    n_rows = len(y_true)
+    for name, idx in groups.indices.items():
+        if name == "" or len(idx) == 0:
+            continue
+        idx = np.asarray(idx)
+        idx = idx[idx < n_rows]
+        if len(idx) == 0:
+            continue
+        pos_mask = y_true[idx] >= 0.5
+        if not np.any(pos_mask):
+            continue
+        gw = float(np.max(weights[idx][pos_mask]))
+        if not np.isfinite(gw) or gw <= 0:
+            gw = 1.0
+
+        restaurant_ids = [str(meta.iloc[i].get("restaurant_id", "") or "").strip() for i in idx]
+        scores = np.array([float(popularity.get(rid, 0)) for rid in restaurant_ids])
+        order = np.argsort(-scores)
+        rel_bin = (y_true[idx][order] >= 0.5).astype(int).tolist()
+        n_rel = int(np.sum(y_true[idx] >= 0.5))
+
+        for k in k_list:
+            n = ndcg_at_k(rel_bin, k)
+            r = 0.0 if n_rel <= 0 else float(np.sum(np.asarray(rel_bin)[:k]) / n_rel)
+            ndcg_results[f"ndcg@{k}"].append(n)
+            recall_results[f"recall@{k}"].append(min(1.0, r))
+            group_weights[f"ndcg@{k}"].append(gw)
+            group_weights[f"recall@{k}"].append(gw)
+
+    def _wmean(vals: list[float], wts: list[float]) -> float:
+        if not vals:
+            return 0.0
+        w = np.asarray(wts, dtype=np.float64)
+        v = np.asarray(vals, dtype=np.float64)
+        if len(w) != len(v):
+            return float(np.mean(v))
+        s = float(np.sum(w))
+        if s <= 0:
+            return float(np.mean(v))
+        return float(np.sum(v * w) / s)
+
+    return {
+        **{k: _wmean(v, group_weights[k]) for k, v in ndcg_results.items()},
+        **{k: _wmean(v, group_weights[k]) for k, v in recall_results.items()},
+    }
+
+
 def _auc(y_true: np.ndarray, y_score: np.ndarray) -> float:
     from sklearn.metrics import roc_auc_score
     if np.unique(y_true).size < 2:

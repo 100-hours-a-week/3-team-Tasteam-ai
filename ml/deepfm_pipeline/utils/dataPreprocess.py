@@ -700,6 +700,7 @@ def preprocess(
 
     train_user_ids = set()
     train_restaurant_ids = set()
+    restaurant_positive_counts: dict[str, int] = defaultdict(int)
     for row in train_rows:
         uid = row.get("user_id")
         if uid is not None and str(uid).strip():
@@ -707,6 +708,8 @@ def preprocess(
         rid = row.get("restaurant_id")
         if rid is not None and str(rid).strip():
             train_restaurant_ids.add(str(rid))
+        if _is_positive_row(row) and rid is not None and str(rid).strip():
+            restaurant_positive_counts[str(rid).strip()] += 1
     split_meta = {
         "train_end": train_end,
         "valid_end": valid_end,
@@ -715,6 +718,7 @@ def preprocess(
         "group_column": group_column,
         "train_user_ids": list(train_user_ids),
         "train_restaurant_ids": list(train_restaurant_ids),
+        "restaurant_positive_counts": dict(restaurant_positive_counts),
         "use_sample_weight": use_sample_weight,
     }
     with open(os.path.join(outdir, "split_meta.json"), "w", encoding="utf-8") as f:

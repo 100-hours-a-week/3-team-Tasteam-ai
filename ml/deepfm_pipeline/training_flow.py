@@ -254,11 +254,11 @@ def train_task(
     np.savetxt(str(meta_path), feature_sizes, fmt="%d", delimiter=",")
     print(f"Model saved: {model_path}, pipeline_version: {pipeline_version}")
 
-    # §6-2: 오프라인 지표 산출(NDCG@K / Recall@K / AUC) 기록
+    # §6-2: 오프라인 지표 산출(NDCG@K / Recall@K / AUC) + popularity baseline 기록
     run_metrics = {}
     test_path = data_path / "test.txt"
     if test_path.exists():
-        from utils.evaluate import run_evaluation
+        from utils.evaluate import run_evaluation, run_popularity_baseline
         run_metrics = run_evaluation(
             processed_data_dir=str(data_path),
             model_path=str(model_path),
@@ -266,6 +266,15 @@ def train_task(
             k_list=[5, 10],
             use_cuda=use_cuda,
         )
+        popularity_baseline = run_popularity_baseline(
+            processed_data_dir=str(data_path),
+            k_list=[5, 10],
+        )
+        if "error" not in popularity_baseline:
+            run_metrics["popularity_baseline"] = popularity_baseline
+            print(f"Popularity baseline: ndcg@5={popularity_baseline.get('ndcg@5', 0):.4f}, recall@5={popularity_baseline.get('recall@5', 0):.4f}")
+        else:
+            run_metrics["popularity_baseline_error"] = popularity_baseline.get("error", "unknown")
         if "error" not in run_metrics:
             metrics_path = out_run / "run_metrics.json"
             with open(metrics_path, "w", encoding="utf-8") as f:
