@@ -229,7 +229,30 @@ distance_weight = 1 / (distance_bucket + 1)
 학습 실패
 
 이유:
-모름, 따라서 디버깅 필요
+모름 --> 디버깅 필요.
+
+로그 분석:
+학습 중엔 validation accuracy가 이렇게 올라갔죠.
+
+61.4%
+
+69.3%
+
+74.5%
+
+75.5%
+
+75.6%
+
+그런데 최종 ranking metric은 0입니다.
+
+이 조합은 보통 둘 중 하나입니다.
+
+accuracy가 추천 품질과 무관한 지표라서 속이고 있음
+
+eval ranking 로직이 잘못됨
+
+현재 baseline들이 정상적으로 나오니까, 저는 eval ranking 로직이나 model output 분포를 가장 먼저 보겠습니다.(디버깅)
 
 디버깅 방안:
 
