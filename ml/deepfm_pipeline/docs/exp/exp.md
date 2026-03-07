@@ -39,10 +39,11 @@
 ---
 
 의사결정:
-popularlity baseline 선정 (아이템 popularity ranking)
+popularlity baseline 출력
+(아이템 popularity ranking)
 
-이유:
-“모델이 진짜로 똑똑한지, 아니면 그냥 인기 아이템만 잘 맞추는지”를 구분하기 위해서
+용도:
+“모델이 진짜로 똑똑한지, 아니면 그냥 인기 아이템만 잘 맞추는지”를 구분하는 용도
 
 추가설명:
 model score < popularlity score
@@ -63,7 +64,7 @@ model score > popularity score
 
 의미: 모델이 단순 인기 추천보다 개인화가 잘 된다
 
-적용방안:
+구현방안:
 
 [positive,
  neg_random_1,
@@ -87,3 +88,35 @@ Recall
 
 계산
 
+의사결정:
+random baseline 출력
+
+용도:
+평가가 정상적으로 작동하는지 확인하는 용도
+(평가 sanity check)
+
+구현방안:
+
+[positive,
+ neg_random_1,
+ neg_random_2,
+ ...
+ neg_popular_1,
+ neg_popular_2]
+
+random score 생성
+
+scores = [random.random() for _ in candidate_items]
+
+ranking
+
+rank = sorted(items, key=lambda x: score[x], reverse=True)
+
+metric 계산
+
+이 랭킹으로
+NDCG
+Recall
+계산
+
+---
