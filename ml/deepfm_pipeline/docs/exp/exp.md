@@ -493,3 +493,290 @@ sigmoid 전 값이 전부 큰 양수인지
 ---
 
 결과
+
+{
+  "auc": 0.5060968660968661,
+  "ndcg@5": 0.0,
+  "ndcg@10": 0.0,
+  "recall@5": 0.0,
+  "recall@10": 0.0,
+}
+
+로그 분석:
+
+좋아요. 이번 로그로 **왜 망하는지 훨씬 더 선명해졌습니다.**
+
+핵심 결론부터 말하면:
+
+> **문제는 “값이 너무 커서”라기보다, 새 feature들이 너무 한쪽으로 치우쳐 있고(train/test 분포도 다르고), 그 결과 모델이 거의 모든 샘플을 positive처럼 보는 방향으로 무너진 것**입니다.
+
+특히 지금 로그에서 중요한 건 이 두 묶음입니다.
+
+## 1. 출력이 여전히 거의 전부 1
+
+* `logit min/max/mean/std: -20.75 / 162.24 / 58.70 / 28.09`
+* `pred min/max/mean/std: ~0 / 1 / 0.996 / 0.053`
+* 여러 그룹에서 `group preds`가 사실상 전부 `1.`
+
+이건 여전히 **sigmoid 포화** 상태입니다.
+즉 모델이 candidate 101개를 봐도 거의 다 “positive 확률 1”로 내고 있습니다.
+
+그러면 랭킹이 안 됩니다.
+
+---
+
+## 2. 새 feature 분포가 너무 강하게 쏠림
+
+이게 더 중요합니다.
+
+### train 쪽
+
+* `restaurant_popularity mean=0.866`
+* `restaurant_signal_count mean=0.914`
+* `user_category_count mean=0.861`
+* `user_region_count mean=0.926`
+* `user_category_match mean=0.763`
+* `user_region_match mean=0.818`
+
+### test 쪽
+
+* `user_category_count mean=0.057`
+* `user_region_count mean=0.147`
+* `user_category_match mean=0.319`
+* `user_region_match mean=0.538`
+
+이건 아주 강한 신호예요.
+
+> **train과 test에서 feature 분포가 크게 다릅니다.**
+
+특히 `user_category_count`, `user_region_count`는 거의 **완전히 다른 feature** 수준입니다.
+
+* train: 대부분 높음
+* test: 대부분 낮음
+
+이러면 모델은 train에서
+“값이 큰 쪽 = positive 쪽”으로 학습하기 쉽고,
+eval에서는 그 규칙이 무너져 버립니다.
+
+---
+
+# 지금 가장 의심되는 진짜 원인
+
+## 원인 A: 집계 feature를 row의 label 구조에 너무 가깝게 만들었거나, train/test 계산 기준이 다름
+
+특히 위험한 것:
+
+* `user_category_count`
+* `user_region_count`
+* `restaurant_popularity`
+* `restaurant_signal_count`
+
+이런 건 보통 “누적/집계”로 만드는데,
+현재 분포를 보면 **train과 test에서 계산 방식 또는 참조 데이터가 다르게 작동하는 느낌**이 강합니다.
+
+특히 `user_category_count`:
+
+* train mean 0.861
+* test mean 0.057
+
+이건 단순 일반화 실패보다 **집계 정의 차이**를 더 의심하게 합니다.
+
+예를 들면:
+
+* train은 현재 row 포함해서 집계
+* test는 과거 이력만 집계
+* unseen user는 거의 0
+* normalization 기준이 split마다 다름
+
+이런 경우 딱 이렇게 됩니다.
+
+---
+
+## 원인 B: feature가 너무 “positive 친화적”이라 학습이 collapse
+
+`user_category_match`, `user_region_match` 평균도 꽤 높죠.
+
+* train category_match 0.763
+* train region_match 0.818
+
+candidate set이 1 positive + 100 negative인데,
+이런 match feature가 negatives에서도 너무 자주 1이면
+모델 입장에서는 **positive/negative를 가르는 feature가 아니라 거의 다 좋은 신호**가 됩니다.
+
+그러면 점수를 전체적으로 다 올리는 방향으로 가기 쉽습니다.
+
+즉:
+
+> **구분력이 있는 feature가 아니라, 전체를 positive처럼 보이게 만드는 feature**가 되었을 수 있습니다.
+
+---
+
+## 원인 C: distance_weight는 죽은 feature
+
+* train/test 모두 `distance_weight = 0.333333`, std=0
+
+이건 완전 상수라서 정보가 없습니다.
+넣어도 도움이 안 되고, 혼란만 줄 수 있으니 빼는 게 낫습니다.
+
+---
+
+# 지금 로그에서 바로 읽히는 판단
+
+### 1) 스케일 문제만은 아님
+
+이미 0~1 근처로 정규화된 값들이 많습니다.
+그래서 예전처럼 “raw count가 너무 커서 폭주”만의 문제는 아닙니다.
+
+### 2) 더 본질적인 문제는 분포/정의 문제
+
+특히:
+
+* train/test 분포 차이
+* candidate 내 구분력 부족
+* 집계 feature의 정의가 추천 task와 안 맞음
+
+이쪽이 더 큽니다.
+
+---
+
+# 왜 positive rank가 계속 101이 나오나
+
+`first 5 positive ranks: [101, 101, 101, 49, 101]`
+
+이건 positive가 거의 항상 맨 뒤라는 뜻인데,
+재미있는 건 `group preds`는 다 1처럼 보인다는 점이죠.
+
+즉 실제로는:
+
+* 수치상 거의 다 1이지만
+* 아주 미세한 차이로 정렬되고
+* 그 미세한 차이에서 positive가 계속 밀림
+
+이건 **positive를 올리는 신호보다 negative를 올리는 신호가 더 강하게 학습된 상태**라는 뜻입니다.
+
+---
+
+# 지금 해야 할 것
+
+## 1. feature를 한 번에 다 넣지 말고 쪼개서 확인
+
+지금은 ablation이 필수입니다.
+
+추천 순서:
+
+### 실험 1
+
+기존 baseline +
+
+* `user_category_match`
+* `user_region_match`
+* `price_diff`
+
+이 3개만
+
+### 실험 2
+
+실험 1 +
+
+* `restaurant_popularity`
+
+### 실험 3
+
+실험 2 +
+
+* `restaurant_signal_count`
+* `restaurant_avg_weight`
+
+### 실험 4
+
+마지막으로
+
+* `user_category_count`
+* `user_region_count`
+* `user_price_mean`
+
+이렇게 가세요.
+
+지금 로그상 가장 위험한 건 `user_*_count` 계열입니다.
+
+---
+
+## 2. `user_category_count`, `user_region_count` 정의부터 다시 점검
+
+특히 이 두 개는 꼭 확인해야 합니다.
+
+확인할 질문:
+
+* train과 test에서 같은 기준으로 만들었나
+* 현재 row를 포함했나
+* user 전체 이력 기준인가, split 이전 이력만인가
+* unseen user는 어떻게 처리하나
+* normalization을 split별로 따로 했나
+
+지금 분포 차이는 정상적이지 않습니다.
+
+---
+
+## 3. candidate 내 분포를 봐야 함
+
+전체 mean보다 더 중요한 건 **그룹 내부에서 positive와 negative가 얼마나 다른가**입니다.
+
+각 feature마다 group 기준으로:
+
+* positive 평균
+* negative 평균
+
+을 찍어보세요.
+
+예를 들어 `user_category_match`가
+
+* positive 평균 0.82
+* negative 평균 0.79
+
+이면 사실상 쓸모가 없습니다.
+
+반대로
+
+* positive 0.9
+* negative 0.2
+
+면 강한 feature입니다.
+
+---
+
+## 4. 상수 feature 제거
+
+`distance_weight`는 지금 완전 상수이니 제거하세요.
+
+---
+
+## 5. accuracy는 당분간 무시
+
+지금은 `75% accuracy`가 완전히 misleading합니다.
+추천 모델 품질은 `recall@k / ndcg@k`만 보세요.
+
+---
+
+# 내 판단
+
+지금 가장 가능성 높은 원인은:
+
+> **집계형 user feature(`user_category_count`, `user_region_count`)가 train/test에서 정의나 분포가 크게 달라졌고, match 계열도 negatives에서 너무 자주 1이라 구분력이 약해서, 모델이 전반적으로 점수를 다 올리는 방향으로 collapse했다.**
+
+---
+
+# 가장 추천하는 다음 액션
+
+딱 이렇게 하세요.
+
+1. `distance_weight` 제거
+2. `user_category_count`, `user_region_count`, `user_price_mean` 제거
+3. `user_category_match`, `user_region_match`, `price_diff`만 넣고 재학습
+4. 그 결과가 괜찮으면 popularity 계열을 하나씩 추가
+
+이 순서가 제일 빠르게 원인 찾습니다.
+
+원하시면 제가 지금 feature들을 기준으로 **“남길 것 / 잠깐 뺄 것 / 나중에 다시 넣을 것”** 3분류로 바로 정리해드릴게요.
+
+---
+
