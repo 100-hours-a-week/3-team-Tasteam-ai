@@ -119,6 +119,33 @@ random < popularity < model
 
 결과
 
+{
+  "auc": 0.4243447293447294,
+  "ndcg@5": 0.05813953477290916,
+  "ndcg@10": 0.05813953477290916,
+  "recall@5": 0.05813953477290916,
+  "recall@10": 0.05813953477290916,
+  "model_baseline": {
+    "auc": 0.4243447293447294,
+    "ndcg@5": 0.05813953477290916,
+    "ndcg@10": 0.05813953477290916,
+    "recall@5": 0.05813953477290916,
+    "recall@10": 0.05813953477290916
+  },
+  "popularity_baseline": {
+    "ndcg@5": 0.036681962347030764,
+    "ndcg@10": 0.07602503625341908,
+    "recall@5": 0.05813953477290916,
+    "recall@10": 0.18604651144657863
+  },
+  "random_baseline": {
+    "ndcg@5": 0.013150346142652493,
+    "ndcg@10": 0.0166506949749307,
+    "recall@5": 0.023255814255702296,
+    "recall@10": 0.034883721383553445
+  }
+}
+
 random < model < popular
 
 이유:
@@ -128,9 +155,9 @@ random < model < popular
 
 item popularity -
 
-restaurant_popularity
-restaurant_rank
-restaurant_ctr
+restaurant_popularity = sum(weight)
+restaurant_signal_count
+restaurant_avg_weight
 
 user preference -
 
@@ -138,8 +165,28 @@ user_category_count
 user_region_count
 user_price_preference
 
+-->
+
+user_category_count(category)
+user_region_count(region)
+user_price_mean
+
 user-item interaction -
 
 user_category_match
 user_region_match
 price_match
+
+-->
+
+user_category_match = primary_category == pref_cat_1/2/3
+user_region_match = region_gu == user_pref_region
+price_diff = abs(price_tier - user_price_mean)
+
+context feature -
+
+distance_weight = 1 / (distance_bucket + 1)
+
+---
+
+결과

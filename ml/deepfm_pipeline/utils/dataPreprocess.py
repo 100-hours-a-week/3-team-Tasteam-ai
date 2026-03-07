@@ -1,9 +1,10 @@
 """
 Tasteam DeepFM용 데이터 전처리.
 
-tasteam_deepfm_data.md + docs/data_designe + recommendation_techspec §스코어 계산 기준 반영:
+tasteam_deepfm_data.md + docs/data_designe + recommendation_techspec §스코어 계산 기준 + exp.md 반영:
 - 연속형: taste(4), visit_time(4), is_anonymous(1), pref_w_1~3(3) = 12개
-  + 스코어 피처 6개(선호 카테고리, 가격대, 맛×긍정구간, 시간대×컨텍스트, 거리, 날씨; 암묵적 피드백 제외·라벨 누수 방지) = 18개
+  + 스코어 피처 6개(선호 카테고리, 가격대, 맛×긍정구간, 시간대×컨텍스트, 거리, 날씨; 암묵적 피드백 제외·라벨 누수 방지)
+  + exp 10개: restaurant_popularity, restaurant_signal_count, restaurant_avg_weight, user_category_count, user_region_count, user_price_mean, user_category_match, user_region_match, price_diff, distance_weight = 28개
 - 범주형: user_id, anon_cohort_id, avg_price_tier, restaurant_id, primary_category,
   pref_cat_1~3, price_tier, region_gu, region_dong, geohash, day_of_week, time_slot,
   admin_dong, distance_bucket, weather_bucket, dining_type, first_positive_segment,
@@ -64,7 +65,10 @@ SIGNAL_WEIGHTS = {
 
 # recommendation_techspec §스코어 계산 기준 (548-556) 6개 피처 → 연속형 0~1 (암묵적 피드백 이력 제외: 현재 행 signal_type 사용 시 라벨 누수)
 NUM_SCORING_FEATURES = 6
+# exp.md (156-188): item popularity / user preference / user-item / context
+NUM_EXP_FEATURES = 10  # restaurant_popularity(sum weight), restaurant_signal_count, restaurant_avg_weight, user_category_count, user_region_count, user_price_mean, user_category_match, user_region_match, price_diff, distance_weight
 DISTANCE_BUCKET_SCORE = {"NEAR": 1.0, "CLOSE": 2.0 / 3.0, "MID": 1.0 / 3.0, "FAR": 0.0}
+DISTANCE_BUCKET_INDEX = {"NEAR": 0, "CLOSE": 1, "MID": 2, "FAR": 3}  # distance_weight = 1/(idx+1)
 
 
 def _safe_json(s: Any) -> Any:
@@ -177,6 +181,143 @@ def _is_anonymous(row: dict) -> float:
     if uid is not None and str(uid).strip() != "":
         return 0.0
     return 1.0
+
+
+def _user_key_for_lookup(row: dict) -> str:
+    """user_id 또는 anonymous_id 기반 단일 키 (exp lookups용)."""
+    uid = row.get("user_id")
+    if uid is not None and str(uid).strip():
+        return f"u_{str(uid).strip()}"
+    aid = row.get("anonymous_id") or row.get("anonymous_cohort_id")
+    if aid is not None and str(aid).strip():
+        return f"a_{str(aid).strip()}"
+    return ""
+
+
+def _price_tier_to_num(s: str) -> float:
+    """가격대 문자열을 0~1 수치로. 빈 값은 0.5."""
+    s = (s or "").strip()
+    if not s:
+        return 0.5
+    try:
+        x = float(s)
+        return max(0.0, min(1.0, x / 5.0)) if x > 1 else max(0.0, min(1.0, x))
+    except ValueError:
+        s_lower = s.lower()
+        if s_lower in ("low", "l", "1"): return 0.2
+        if s_lower in ("mid", "m", "2"): return 0.5
+        if s_lower in ("high", "h", "3"): return 0.8
+        return 0.5
+
+
+def build_exp_lookups(train_rows: list[dict]) -> dict[str, Any]:
+    """
+    exp.md (156-188): item popularity = sum(weight), signal_count, avg_weight;
+    user preference = user_category_count, user_region_count, user_price_mean;
+    user_top_region for user_region_match.
+    """
+    # Item popularity: 모든 train 행 기준 (weight 합, positive 개수, 평균 weight)
+    rid_sum_weight: dict[str, float] = defaultdict(float)
+    rid_count: dict[str, int] = defaultdict(int)
+    rid_signal_count: dict[str, int] = defaultdict(int)
+
+    user_cat: dict[tuple[str, str], int] = defaultdict(int)
+    user_region: dict[tuple[str, str], int] = defaultdict(int)
+    user_price_list: dict[str, list[float]] = defaultdict(list)
+
+    for row in train_rows:
+        w = _sample_weight_from_row(row)
+        rid = str(row.get("restaurant_id") or "").strip()
+        if rid:
+            rid_sum_weight[rid] += w
+            rid_count[rid] += 1
+            if _is_positive_row(row):
+                rid_signal_count[rid] += 1
+
+        uk = _user_key_for_lookup(row)
+        if not uk or not _is_positive_row(row):
+            continue
+        primary = str(row.get("primary_category") or "").strip() or _get_primary_category(row)
+        if primary:
+            user_cat[(uk, primary)] += 1
+        rgu = str(row.get("region_gu") or "").strip()
+        if rgu:
+            user_region[(uk, rgu)] += 1
+        pt = _price_tier_to_num(str(row.get("price_tier") or "").strip())
+        user_price_list[uk].append(pt)
+
+    max_sum_weight = max(rid_sum_weight.values(), default=1.0)
+    max_signal = max(rid_signal_count.values(), default=1)
+    restaurant_popularity = {rid: s / max_sum_weight for rid, s in rid_sum_weight.items()}
+    restaurant_signal_count_norm = {rid: c / max_signal for rid, c in rid_signal_count.items()}
+    restaurant_avg_weight = {}
+    for rid in rid_sum_weight:
+        n = rid_count[rid]
+        restaurant_avg_weight[rid] = rid_sum_weight[rid] / n if n else 0.0
+
+    user_price_mean: dict[str, float] = {}
+    for uk, vals in user_price_list.items():
+        user_price_mean[uk] = sum(vals) / len(vals) if vals else 0.5
+
+    user_top_region: dict[str, str] = {}
+    for (uk, rgu), c in user_region.items():
+        if uk not in user_top_region or user_region[(uk, user_top_region[uk])] < c:
+            user_top_region[uk] = rgu
+
+    return {
+        "restaurant_popularity": restaurant_popularity,
+        "restaurant_signal_count": restaurant_signal_count_norm,
+        "restaurant_avg_weight": restaurant_avg_weight,
+        "user_category_count": dict(user_cat),
+        "user_region_count": dict(user_region),
+        "user_price_mean": user_price_mean,
+        "user_top_region": user_top_region,
+        "max_user_cat_count": max(user_cat.values(), default=1),
+        "max_user_region_count": max(user_region.values(), default=1),
+    }
+
+
+def _extract_exp_features(row: dict, lookups: dict[str, Any]) -> list[float]:
+    """
+    exp.md (156-188): 10개 - item popularity(3), user preference(3), user-item(3), context(1).
+    """
+    rid = str(row.get("restaurant_id") or "").strip()
+    uk = _user_key_for_lookup(row)
+    primary = str(row.get("primary_category") or "").strip() or _get_primary_category(row)
+    rgu = str(row.get("region_gu") or "").strip()
+    price_tier_num = _price_tier_to_num(str(row.get("price_tier") or "").strip())
+    pref_cats = [str(row.get("pref_cat_1") or "").strip(), str(row.get("pref_cat_2") or "").strip(), str(row.get("pref_cat_3") or "").strip()]
+
+    restaurant_popularity = lookups["restaurant_popularity"].get(rid, 0.0)
+    restaurant_signal_count = lookups["restaurant_signal_count"].get(rid, 0.0)
+    restaurant_avg_weight = lookups["restaurant_avg_weight"].get(rid, 0.0)
+
+    max_cat = lookups["max_user_cat_count"]
+    max_reg = lookups["max_user_region_count"]
+    user_category_count = lookups["user_category_count"].get((uk, primary), 0) / max_cat if max_cat else 0.0
+    user_region_count = lookups["user_region_count"].get((uk, rgu), 0) / max_reg if max_reg else 0.0
+    user_price_mean = lookups["user_price_mean"].get(uk, 0.5)
+
+    user_category_match = 1.0 if primary and primary in [c for c in pref_cats if c] else 0.0
+    user_region_match = 1.0 if (uk and lookups["user_top_region"].get(uk) == rgu) else 0.0
+    price_diff = min(1.0, abs(price_tier_num - user_price_mean) / 3.0)
+
+    dist_bucket = str(row.get("distance_bucket") or "").strip().upper()
+    idx = DISTANCE_BUCKET_INDEX.get(dist_bucket, 2)
+    distance_weight = 1.0 / (idx + 1)
+
+    return [
+        restaurant_popularity,
+        restaurant_signal_count,
+        restaurant_avg_weight,
+        user_category_count,
+        user_region_count,
+        user_price_mean,
+        user_category_match,
+        user_region_match,
+        price_diff,
+        distance_weight,
+    ]
 
 
 def _extract_scoring_features(row: dict) -> list[float]:
@@ -672,14 +813,16 @@ def preprocess(
     dicts = CategoryDictGenerator(len(CATEGORICAL_FEATURES))
     dicts.build(train_rows, cutoff=categorical_cutoff)
     dict_sizes = dicts.dicts_sizes()
-    sizes = [1] * (len(CONTINUOUS_FEATURES) + NUM_SCORING_FEATURES) + dict_sizes
+    sizes = [1] * (len(CONTINUOUS_FEATURES) + NUM_SCORING_FEATURES + NUM_EXP_FEATURES) + dict_sizes
     with open(os.path.join(outdir, "feature_sizes.txt"), "w") as f:
         f.write(",".join(map(str, sizes)))
+
+    exp_lookups = build_exp_lookups(train_rows)
 
     def write_rows(rows: list[dict], path: str, include_sw: bool) -> None:
         with open(os.path.join(outdir, path), "w") as f:
             for row in rows:
-                cont = _extract_continuous(row)
+                cont = _extract_continuous(row) + _extract_exp_features(row, exp_lookups)
                 cont_str = ",".join(f"{x:.6f}".rstrip("0").rstrip(".") for x in cont)
                 cat_vals = _extract_categorical(row)
                 cat_str = ",".join(str(dicts.gen(i, cat_vals[i])) for i in range(len(cat_vals)))
