@@ -271,3 +271,225 @@ print("group preds :", y_score_group)
 print("sorted idx  :", np.argsort(y_score_group)[::-1])
 
 ---
+
+결과
+
+(동일)
+
+로그 분석:
+
+원인이 거의 잡혔습니다.
+
+핵심은 이 로그 한 줄들입니다.
+
+pred min/max/mean/std: 1.3335758e-09 1.0 0.9966973 0.049383864
+
+여러 그룹에서 group preds : [1. 1. 1. ... 1.]
+
+first 5 positive ranks: [101, 101, 101, 49, 101]
+
+즉,
+
+모델이 거의 모든 후보에 1.0에 가까운 점수를 주고 있습니다.
+
+그래서 랭킹이 사실상 무너졌고, positive가 top-k에 거의 못 들어가서 recall@k = 0, ndcg@k = 0이 나온 겁니다.
+
+이건 하이퍼파라미터 문제가 아니라 출력 포화(saturation) 문제예요.
+
+지금 무슨 일이 벌어진 거냐
+
+현재 모델은 eval에서 각 그룹 101개 후보를 보고도 거의 다:
+
+0.9999
+
+1.0
+
+1.0
+
+1.0
+
+처럼 내고 있습니다.
+
+그러면 점수 차이가 거의 없어져서 정렬이 의미를 잃습니다.
+지금 sorted idx가 거의 인덱스 순서 비슷하게 보이는 것도 그 때문입니다.
+
+즉 모델이 실제로는:
+
+“이건 다 positive다” 쪽으로 무너진 상태
+
+입니다.
+
+왜 피처 엔지니어링 후 이런 현상이 잘 생기나
+
+가장 가능성 높은 원인은 3개입니다.
+
+1. 새 dense feature 스케일이 너무 큼
+
+네가 추가하려던/추가한 피처 중에는 이런 것들이 있었죠.
+
+restaurant_popularity = sum(weight)
+
+restaurant_signal_count
+
+restaurant_avg_weight
+
+user_category_count
+
+user_region_count
+
+user_price_preference
+
+이런 집계형 수치 피처는 값 범위가 커지기 쉽습니다.
+
+예를 들어 어떤 피처가
+
+0~3 수준이 아니라
+
+0~500, 0~5000
+
+처럼 들어가면, DeepFM의 linear/deep 쪽이 그 피처 하나에 끌려서 로짓이 엄청 커질 수 있습니다.
+그러면 sigmoid 출력이 거의 전부 1로 포화됩니다.
+
+지금 로그가 딱 그 패턴입니다.
+
+2. label leakage 성격의 피처가 들어갔을 가능성
+
+특히 위험한 컬럼:
+
+weight
+
+signal_type
+
+first_positive_segment
+
+first_comparison_tag
+
+이런 피처를 어떤 방식으로 가공했는지에 따라, 학습 때는 “정답 힌트”처럼 작동하고 eval에서는 분포가 꼬이거나 전부 한 방향으로 작동할 수 있습니다.
+
+특히 weight 기반 집계는 매우 조심해야 합니다.
+현재 label과 너무 가까운 신호를 직접 먹이면 모델이 쉽게 과하게 쏠립니다.
+
+3. dense feature 정규화 없이 그대로 투입
+
+DeepFM은 sparse categorical에는 강하지만, dense numerical feature는 스케일 관리가 중요합니다.
+
+지금은 새 수치형 피처들이 들어오면서:
+
+linear term 폭주
+
+deep part activation 폭주
+
+sigmoid saturation
+
+이 일어난 걸로 보입니다.
+
+오히려 좋은 점
+
+이번 로그 덕분에 문제 위치는 꽤 분명합니다.
+
+평가 파이프라인 정상
+
+random baseline 정상
+
+popularity baseline 정상
+
+모델만 전부 1.0 출력
+
+즉,
+
+모델 입력/피처 스케일 쪽 문제로 거의 좁혀졌습니다.
+
+지금 바로 해야 할 것
+1. 새로 넣은 수치형 피처 전부 분포 확인
+
+특히 이것들:
+
+restaurant_popularity
+
+restaurant_signal_count
+
+restaurant_avg_weight
+
+user_category_count
+
+user_region_count
+
+user_price_preference
+
+price_diff 계열 있으면 그것도
+
+각각에 대해 train/test의:
+
+min
+
+max
+
+mean
+
+std
+
+상위 5개 값
+
+을 찍어보세요.
+
+아마 몇 개는 값 범위가 확 튀어 있을 가능성이 큽니다.
+
+2. 수치형 피처는 정규화해서 넣기
+
+가장 먼저 추천하는 건:
+
+log1p 적용
+
+그다음 standardization 또는 min-max scaling
+
+예를 들어:
+
+restaurant_popularity → log1p(popularity)
+
+restaurant_signal_count → log1p(count)
+
+user_category_count → log1p(count)
+
+이렇게 바꾸는 게 좋습니다.
+
+3. 위험한 피처는 일단 빼고 ablation
+
+지금은 한 번에 다 넣지 말고 순서대로 보세요.
+
+추천 순서:
+
+match 계열만
+
+user_category_match
+
+user_region_match
+
+price_match 또는 price_diff
+
+그다음 popularity 계열 1개씩
+
+restaurant_popularity
+
+restaurant_signal_count
+
+마지막에 user aggregate 계열
+
+user_category_count
+
+user_region_count
+
+이렇게 해야 범인을 잡을 수 있습니다.
+
+4. eval 직전 로짓도 찍어보기
+
+지금은 sigmoid 이후 값만 본 것 같은데, 가능하면 로짓(raw output)도 보세요.
+
+로짓 min/max/mean/std
+
+sigmoid 전 값이 전부 큰 양수인지
+
+이러면 포화 원인이 더 확실해집니다.
+
+---
+
+결과
