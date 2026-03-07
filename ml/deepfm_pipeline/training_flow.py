@@ -258,7 +258,7 @@ def train_task(
     run_metrics = {}
     test_path = data_path / "test.txt"
     if test_path.exists():
-        from utils.evaluate import run_evaluation, run_popularity_baseline
+        from utils.evaluate import run_evaluation, run_popularity_baseline, run_random_baseline
         run_metrics = run_evaluation(
             processed_data_dir=str(data_path),
             model_path=str(model_path),
@@ -275,6 +275,16 @@ def train_task(
             print(f"Popularity baseline: ndcg@5={popularity_baseline.get('ndcg@5', 0):.4f}, recall@5={popularity_baseline.get('recall@5', 0):.4f}")
         else:
             run_metrics["popularity_baseline_error"] = popularity_baseline.get("error", "unknown")
+        random_baseline = run_random_baseline(
+            processed_data_dir=str(data_path),
+            k_list=[5, 10],
+            seed=42,
+        )
+        if "error" not in random_baseline:
+            run_metrics["random_baseline"] = random_baseline
+            print(f"Random baseline: ndcg@5={random_baseline.get('ndcg@5', 0):.4f}, recall@5={random_baseline.get('recall@5', 0):.4f}")
+        else:
+            run_metrics["random_baseline_error"] = random_baseline.get("error", "unknown")
         if "error" not in run_metrics:
             metrics_path = out_run / "run_metrics.json"
             with open(metrics_path, "w", encoding="utf-8") as f:

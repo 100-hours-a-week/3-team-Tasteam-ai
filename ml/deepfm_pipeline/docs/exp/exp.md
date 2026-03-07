@@ -119,4 +119,8 @@ NDCG
 Recall
 계산
 
+random < popularity < model
+
+추천 시스템에서는 이 구조가 나와야 정상.
+
 ---
