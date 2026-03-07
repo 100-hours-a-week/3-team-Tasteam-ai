@@ -14,6 +14,7 @@ tasteam_deepfm_data.md + docs/data_designe + recommendation_techspec §스코어
 from __future__ import annotations
 
 import json
+import math
 import os
 import random
 from collections import defaultdict
@@ -67,6 +68,11 @@ SIGNAL_WEIGHTS = {
 NUM_SCORING_FEATURES = 6
 # exp.md (156-188): item popularity / user preference / user-item / context
 NUM_EXP_FEATURES = 10  # restaurant_popularity(sum weight), restaurant_signal_count, restaurant_avg_weight, user_category_count, user_region_count, user_price_mean, user_category_match, user_region_match, price_diff, distance_weight
+EXP_FEATURE_NAMES = [
+    "restaurant_popularity", "restaurant_signal_count", "restaurant_avg_weight",
+    "user_category_count", "user_region_count", "user_price_mean",
+    "user_category_match", "user_region_match", "price_diff", "distance_weight",
+]
 DISTANCE_BUCKET_SCORE = {"NEAR": 1.0, "CLOSE": 2.0 / 3.0, "MID": 1.0 / 3.0, "FAR": 0.0}
 DISTANCE_BUCKET_INDEX = {"NEAR": 0, "CLOSE": 1, "MID": 2, "FAR": 3}  # distance_weight = 1/(idx+1)
 
@@ -246,10 +252,13 @@ def build_exp_lookups(train_rows: list[dict]) -> dict[str, Any]:
         pt = _price_tier_to_num(str(row.get("price_tier") or "").strip())
         user_price_list[uk].append(pt)
 
-    max_sum_weight = max(rid_sum_weight.values(), default=1.0)
-    max_signal = max(rid_signal_count.values(), default=1)
-    restaurant_popularity = {rid: s / max_sum_weight for rid, s in rid_sum_weight.items()}
-    restaurant_signal_count_norm = {rid: c / max_signal for rid, c in rid_signal_count.items()}
+    # exp.md (429-436): log1p 적용 후 정규화
+    log1p_pop = [math.log1p(s) for s in rid_sum_weight.values()]
+    max_log1p_pop = max(log1p_pop, default=1.0)
+    restaurant_popularity = {rid: math.log1p(s) / max_log1p_pop for rid, s in rid_sum_weight.items()}
+    log1p_signal = [math.log1p(c) for c in rid_signal_count.values()]
+    max_log1p_signal = max(log1p_signal, default=1.0)
+    restaurant_signal_count_norm = {rid: math.log1p(c) / max_log1p_signal for rid, c in rid_signal_count.items()}
     restaurant_avg_weight = {}
     for rid in rid_sum_weight:
         n = rid_count[rid]
@@ -277,9 +286,10 @@ def build_exp_lookups(train_rows: list[dict]) -> dict[str, Any]:
     }
 
 
-def _extract_exp_features(row: dict, lookups: dict[str, Any]) -> list[float]:
+def _extract_exp_features(row: dict, lookups: dict[str, Any], include_names: list[str] | None = None) -> list[float]:
     """
     exp.md (156-188): 10개 - item popularity(3), user preference(3), user-item(3), context(1).
+    include_names가 있으면 해당 피처만 해당 순서로 반환 (exp.md 444-458 ablation).
     """
     rid = str(row.get("restaurant_id") or "").strip()
     uk = _user_key_for_lookup(row)
@@ -294,8 +304,11 @@ def _extract_exp_features(row: dict, lookups: dict[str, Any]) -> list[float]:
 
     max_cat = lookups["max_user_cat_count"]
     max_reg = lookups["max_user_region_count"]
-    user_category_count = lookups["user_category_count"].get((uk, primary), 0) / max_cat if max_cat else 0.0
-    user_region_count = lookups["user_region_count"].get((uk, rgu), 0) / max_reg if max_reg else 0.0
+    cat_count = lookups["user_category_count"].get((uk, primary), 0)
+    reg_count = lookups["user_region_count"].get((uk, rgu), 0)
+    # exp.md (433): user_category_count → log1p(count)
+    user_category_count = math.log1p(cat_count) / math.log1p(max_cat) if max_cat else 0.0
+    user_region_count = math.log1p(reg_count) / math.log1p(max_reg) if max_reg else 0.0
     user_price_mean = lookups["user_price_mean"].get(uk, 0.5)
 
     user_category_match = 1.0 if primary and primary in [c for c in pref_cats if c] else 0.0
@@ -306,7 +319,7 @@ def _extract_exp_features(row: dict, lookups: dict[str, Any]) -> list[float]:
     idx = DISTANCE_BUCKET_INDEX.get(dist_bucket, 2)
     distance_weight = 1.0 / (idx + 1)
 
-    return [
+    all_vals = [
         restaurant_popularity,
         restaurant_signal_count,
         restaurant_avg_weight,
@@ -318,6 +331,44 @@ def _extract_exp_features(row: dict, lookups: dict[str, Any]) -> list[float]:
         price_diff,
         distance_weight,
     ]
+    if include_names is None:
+        return all_vals
+    return [all_vals[EXP_FEATURE_NAMES.index(n)] for n in include_names if n in EXP_FEATURE_NAMES]
+
+
+def print_exp_feature_distribution(outdir: str) -> None:
+    """
+    exp.md (403-421): 수치형 exp 피처 전부 train/test에 대해
+    min, max, mean, std, 상위 5개 값 출력.
+    """
+    sizes_path = os.path.join(outdir, "feature_sizes.txt")
+    if not os.path.exists(sizes_path):
+        return
+    with open(sizes_path) as f:
+        sizes = [int(x) for x in f.read().strip().split(",")]
+    n_cont = sum(1 for s in sizes if s == 1)
+    base_cont = len(CONTINUOUS_FEATURES) + NUM_SCORING_FEATURES  # 18
+    num_exp = n_cont - base_cont
+    if num_exp <= 0:
+        return
+    exp_start = base_cont
+    names = EXP_FEATURE_NAMES[:num_exp]
+
+    for fname in ("train.txt", "test.txt"):
+        path = os.path.join(outdir, fname)
+        if not os.path.exists(path):
+            continue
+        df = pd.read_csv(path, header=None)
+        if df.shape[1] <= n_cont:
+            continue
+        # 연속형은 앞 n_cont 컬럼 (인덱스 0..n_cont-1)
+        block = df.iloc[:, exp_start:n_cont].astype(float)
+        print(f"[exp feature distribution] {fname}")
+        for j, name in enumerate(names):
+            col = block.iloc[:, j]
+            top5 = col.nlargest(5).tolist()
+            print(f"  {name}: min={col.min():.6f} max={col.max():.6f} mean={col.mean():.6f} std={col.std():.6f} top5={top5}")
+        print()
 
 
 def _extract_scoring_features(row: dict) -> list[float]:
@@ -747,10 +798,13 @@ def preprocess(
     eval_num_popular_neg: int = 50,
     eval_popular_top_k: int = 1000,
     eval_list_seed: int = 42,
+    exp_ablation: list[str] | None = None,
 ) -> None:
     """
     Tasteam + data_designe 반영 전처리.
 
+    - exp_ablation: None이면 exp 피처 10개 전부. 리스트면 해당 이름만 해당 순서로 포함 (exp.md 444-458).
+      예: ["user_category_match", "user_region_match", "price_diff"] → match 계열만.
     - use_sample_weight: True면 train/val/test 마지막에 sample_weight 컬럼 추가 (옵션 C).
     - time_column: 있으면 시간 기준 split (train_end, valid_end, test_end 구간 사용).
     - group_column: recommendation_id 또는 generated_at 등, 같은 값은 같은 구간으로.
@@ -813,7 +867,8 @@ def preprocess(
     dicts = CategoryDictGenerator(len(CATEGORICAL_FEATURES))
     dicts.build(train_rows, cutoff=categorical_cutoff)
     dict_sizes = dicts.dicts_sizes()
-    sizes = [1] * (len(CONTINUOUS_FEATURES) + NUM_SCORING_FEATURES + NUM_EXP_FEATURES) + dict_sizes
+    num_exp = len(exp_ablation) if exp_ablation else NUM_EXP_FEATURES
+    sizes = [1] * (len(CONTINUOUS_FEATURES) + NUM_SCORING_FEATURES + num_exp) + dict_sizes
     with open(os.path.join(outdir, "feature_sizes.txt"), "w") as f:
         f.write(",".join(map(str, sizes)))
 
@@ -822,7 +877,7 @@ def preprocess(
     def write_rows(rows: list[dict], path: str, include_sw: bool) -> None:
         with open(os.path.join(outdir, path), "w") as f:
             for row in rows:
-                cont = _extract_continuous(row) + _extract_exp_features(row, exp_lookups)
+                cont = _extract_continuous(row) + _extract_exp_features(row, exp_lookups, include_names=exp_ablation)
                 cont_str = ",".join(f"{x:.6f}".rstrip("0").rstrip(".") for x in cont)
                 cat_vals = _extract_categorical(row)
                 cat_str = ",".join(str(dicts.gen(i, cat_vals[i])) for i in range(len(cat_vals)))
@@ -840,6 +895,8 @@ def preprocess(
     if not test_rows and train_rows:
         n = min(num_test_sample or 1000, len(train_rows))
         write_rows(train_rows[:n], "test.txt", use_sample_weight)
+
+    print_exp_feature_distribution(outdir)
 
     train_user_ids = set()
     train_restaurant_ids = set()

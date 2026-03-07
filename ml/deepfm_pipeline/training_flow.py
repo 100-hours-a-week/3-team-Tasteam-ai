@@ -120,10 +120,12 @@ def preprocess_task(
     eval_popular_top_k: int = 1000,
     eval_list_seed: int = 42,
     use_wandb: bool = True,
+    exp_ablation: list[str] | None = None,
 ) -> str:
     """
     전처리 + (wandb_design) split 메타·feature_sizes·dataset 스냅샷 artifact 로깅.
     eval_list_size>0이면 test/val을 리스트당 1 pos + eval_num_neg neg로 재구성.
+    exp_ablation: exp 피처 ablation (예: ["user_category_match","user_region_match","price_diff"]).
     """
     from utils.dataPreprocess import preprocess
     from utils import wandb_logger
@@ -152,6 +154,7 @@ def preprocess_task(
         eval_num_popular_neg=eval_num_popular_neg,
         eval_popular_top_k=eval_popular_top_k,
         eval_list_seed=eval_list_seed,
+        exp_ablation=exp_ablation,
     )
     print(f"Preprocess done: {processed_data_dir}")
 
@@ -393,6 +396,7 @@ def deepfm_training_flow(
     eval_list_seed: int = 42,
     use_wandb: bool = True,
     seed: int = 42,
+    exp_ablation: list[str] | None = None,
 ) -> dict:
     """
     (선택) train/test 분할 → 전처리 → 학습을 순서대로 실행하는 DeepFM 파이프라인.
@@ -465,6 +469,7 @@ def deepfm_training_flow(
             eval_popular_top_k=eval_popular_top_k,
             eval_list_seed=eval_list_seed,
             use_wandb=use_wandb,
+            exp_ablation=exp_ablation,
         )
 
     result = train_task(
@@ -547,6 +552,7 @@ if __name__ == "__main__":
     p.add_argument("--eval-num-popular-neg", type=int, default=50, help="리스트당 인기 아이템 기반 음성 개수 (나머지는 랜덤)")
     p.add_argument("--eval-popular-top-k", type=int, default=1000, help="인기 아이템 풀 크기 (positive count 상위 K)")
     p.add_argument("--eval-list-seed", type=int, default=42, help="eval 리스트 구성 시드")
+    p.add_argument("--exp-ablation", type=str, default=None, help="exp 피처 ablation (쉼표 구분, 예: user_category_match,user_region_match,price_diff)")
     p.add_argument("--seed", type=int, default=42, help="학습 재현성 시드 (모델 초기화·배치 셔플)")
     p.add_argument("--skip-preprocess", action="store_true", help="전처리 생략 (기존 train.txt 사용)")
     p.add_argument("--no-wandb", action="store_true", help="wandb 로깅 비활성화")
@@ -576,6 +582,7 @@ if __name__ == "__main__":
         eval_popular_top_k=args.eval_popular_top_k,
         eval_list_seed=args.eval_list_seed,
         seed=args.seed,
+        exp_ablation=[s.strip() for s in args.exp_ablation.split(",")] if args.exp_ablation else None,
         skip_preprocess=args.skip_preprocess,
         use_wandb=not args.no_wandb,
         use_cuda=args.cuda,

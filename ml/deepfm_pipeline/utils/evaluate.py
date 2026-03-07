@@ -100,6 +100,7 @@ def run_evaluation(
 
     n_cont = _get_continuous_feature_count(str(root))
     preds = []
+    logits_list = []
     with torch.no_grad():
         for start in range(0, len(X), batch_size):
             batch = X[start : start + batch_size]
@@ -114,8 +115,14 @@ def run_evaluation(
                 np.concatenate([Xv_cont, Xv_cat], axis=1)
             ).to(device)
             out = model(Xi, Xv)
+            logits_list.append(out.cpu().numpy().ravel())
             preds.append(torch.sigmoid(out).cpu().numpy().ravel())
+    logits = np.concatenate(logits_list)
     preds = np.concatenate(preds)
+
+    # exp.md (484-490): eval 직전 로짓 분포·포화 여부
+    print("logit min/max/mean/std:", float(logits.min()), float(logits.max()), float(logits.mean()), float(logits.std()))
+    print("logits all large positive (saturation):", bool(np.all(logits > 10)), "(min > 10:", bool(float(logits.min()) > 10), ")")
 
     if meta is not None and "recommendation_id" in meta.columns and meta["recommendation_id"].astype(str).str.strip().ne("").any():
         rec_id = meta["recommendation_id"].astype(str)
