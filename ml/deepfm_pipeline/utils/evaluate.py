@@ -124,6 +124,27 @@ def run_evaluation(
         rec_id = pd.Series(["single"] * len(y_true))
         groups = rec_id.groupby(rec_id)
 
+    # exp.md (259-271): 학습 끝난 직후 eval 직전 디버깅 출력
+    n_preds = len(preds)
+    _group_list = []
+    _positive_ranks = []
+    for _name, _idx in groups.indices.items():
+        if _name == "" or len(_idx) == 0:
+            continue
+        _idx = np.asarray(_idx)
+        _idx = _idx[_idx < n_preds]
+        if len(_idx) == 0:
+            continue
+        _group_list.append(_idx)
+        _order = np.argsort(-preds[_idx])
+        _pos_pos = np.where((y_true[_idx][_order] >= 0.5))[0]
+        _positive_ranks.append(int(_pos_pos[0] + 1) if len(_pos_pos) > 0 else 0)
+    print("pred min/max/mean/std:", preds.min(), preds.max(), preds.mean(), preds.std())
+    print("num groups:", len(_group_list))
+    print("positive count total:", int((y_true >= 0.5).sum()))
+    print("first 5 group sizes:", [len(g) for g in _group_list[:5]])
+    print("first 5 positive ranks:", _positive_ranks[:5])
+
     ndcg_results = {f"ndcg@{k}": [] for k in k_list}
     recall_results = {f"recall@{k}": [] for k in k_list}
     group_weights = {f"ndcg@{k}": [] for k in k_list}
@@ -140,6 +161,7 @@ def run_evaluation(
     item_cold_w = {f"ndcg@{k}": [] for k in k_list}
 
     n_preds = len(preds)
+    _debug_group_count = 0
     for name, idx in groups.indices.items():
         if name == "" or len(idx) == 0:
             continue
@@ -147,6 +169,13 @@ def run_evaluation(
         idx = idx[idx < n_preds]
         if len(idx) == 0:
             continue
+        if _debug_group_count < 5:
+            y_true_group = y_true[idx]
+            y_score_group = preds[idx]
+            print("group labels:", y_true_group)
+            print("group preds :", y_score_group)
+            print("sorted idx  :", np.argsort(y_score_group)[::-1])
+            _debug_group_count += 1
         order = np.argsort(-preds[idx])
         rel_bin = (y_true[idx][order] >= 0.5).astype(int).tolist()
 
