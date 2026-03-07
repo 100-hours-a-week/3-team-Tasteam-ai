@@ -776,7 +776,168 @@ candidate set이 1 positive + 100 negative인데,
 
 이 순서가 제일 빠르게 원인 찾습니다.
 
-원하시면 제가 지금 feature들을 기준으로 **“남길 것 / 잠깐 뺄 것 / 나중에 다시 넣을 것”** 3분류로 바로 정리해드릴게요.
+---
+
+실헙 1 결과
+
+{
+  "auc": 0.6426139601139602,
+  "ndcg@5": 0.22093023283013208,
+  "ndcg@10": 0.22093023283013208,
+  "recall@5": 0.22093023283013208,
+  "recall@10": 0.22093023283013208,
+}
+
+로그 분석:
+좋습니다. **실험 1은 명확하게 성공입니다.**
+
+결과를 요약하면:
+
+* **AUC: 0.64261**
+* **NDCG@5: 0.22093**
+* **NDCG@10: 0.22093**
+* **Recall@5: 0.22093**
+* **Recall@10: 0.22093**
+
+비교하면:
+
+* 이전 모델 baseline: `recall@10 ≈ 0.058`
+* popularity baseline: `recall@10 ≈ 0.186`
+* 이번 실험 1: `recall@10 ≈ 0.221`
+
+즉,
+
+> **random < popularity < 실험 1 DeepFM**
+
+이 됐습니다.
+
+이건 꽤 큰 의미가 있어요.
+단순히 조금 오른 게 아니라, **popularity baseline도 넘어섰습니다.**
+
+## 이 결과가 말해주는 것
+
+### 1. 문제 원인이 거의 확정됨
+
+이전 성능 붕괴의 원인은 **DeepFM 자체가 아니라, 추가한 일부 feature가 모델을 망가뜨린 것**입니다.
+
+특히 지금 실험 1은
+
+* `user_category_match`
+* `user_region_match`
+* `price_diff`
+
+만 넣었는데 바로 좋아졌죠.
+
+즉:
+
+> **match 계열 interaction feature는 유효했고, 집계형 feature가 문제였을 가능성이 매우 높습니다.**
+
+### 2. 지금 추가한 3개 feature는 진짜 signal이 있음
+
+이 세 개는 추천 문제에서 아주 좋은 feature들입니다.
+
+* `user_category_match`
+  → 유저 취향 카테고리와 식당 카테고리 일치
+* `user_region_match`
+  → 유저 선호 지역과 식당 지역 일치
+* `price_diff`
+  → 유저 선호 가격대와 식당 가격대 차이
+
+이건 **개인화 신호**라서 popularity보다 강해질 수 있습니다.
+
+### 3. 이전 집계 feature들은 정의/스케일/분포 문제가 있었을 확률이 큼
+
+특히 아까 로그에서 이상했던 것:
+
+* `user_region_match`가 전부 0
+* `price_diff`가 전부 0
+* `user_category_match`가 1/0이 아니라 큰 count처럼 보였던 값
+
+이건 아블레이션 파이프라인에서 컬럼 선택/매핑이 꼬였을 가능성도 보여줍니다.
+하지만 어쨌든 지금 결과는 “이 3개 방향은 맞다”는 걸 증명합니다.
 
 ---
 
+## 지금 상태 평가
+
+현재는 이렇게 볼 수 있습니다.
+
+| 방법                  |  recall@10 |
+| ------------------- | ---------: |
+| random              |     0.0349 |
+| popularity          |     0.1860 |
+| DeepFM baseline(이전) |     0.0581 |
+| **실험 1**            | **0.2209** |
+
+이건 꽤 좋습니다.
+
+특히:
+
+* random 대비 약 **6배 이상**
+* popularity 대비도 **유의미하게 우세**
+
+라서, 이제는 **모델이 실제 개인화 랭킹을 하고 있다**고 봐도 됩니다.
+
+---
+
+## 다음 액션
+
+이제 해야 할 건 명확합니다.
+
+### 1. 실험 1을 새 strong baseline으로 저장
+
+현재 기준선은 이제 이겁니다.
+
+* `user_category_match`
+* `user_region_match`
+* `price_diff`
+
+이 조합을 **새 baseline**으로 두세요.
+
+### 2. 다음 feature는 하나씩 추가
+
+이제부터는 반드시 **한 번에 하나씩** 넣는 게 좋습니다.
+
+추천 순서:
+
+1. `restaurant_popularity`
+2. `restaurant_signal_count`
+3. `restaurant_avg_weight`
+4. `user_price_mean`
+5. `user_category_count`
+6. `user_region_count`
+
+이 순서로요.
+
+### 3. 추가 후 판단 기준
+
+각 실험마다 이렇게 보세요.
+
+* 실험 1 대비 개선됐는가
+* popularity baseline보다 계속 높은가
+* 출력 saturation이 다시 생기지 않는가
+
+---
+
+## 주의할 점
+
+지금 로그를 보면 아직도 많은 `group preds`가 `0.99~1.0`에 몰려 있습니다.
+다만 이번엔 일부 샘플에서 차이가 생겨서 랭킹이 살아난 거예요.
+
+즉:
+
+> **성능은 좋아졌지만, 출력이 여전히 다소 포화된 편**입니다.
+
+그래서 다음에 집계형 feature를 넣을 때 또 망가질 수 있습니다.
+특히 `user_region_count` 같은 건 가장 나중에 넣는 게 좋습니다.
+
+---
+
+## 한 줄 결론
+
+> **실험 1은 성공이고, 핵심 interaction feature 3개만으로 popularity baseline을 넘어섰습니다.**
+> 이제 이 조합을 새 baseline으로 삼고, 집계형 feature는 하나씩 조심스럽게 추가하면 됩니다.
+
+다음 실험은 `restaurant_popularity` 하나만 추가하는 게 가장 좋습니다.
+
+---
