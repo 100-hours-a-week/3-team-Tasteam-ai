@@ -1,3 +1,7 @@
+feature:
+python /Users/js/tasteam-new-async/ml/deepfm_pipeline/training_flow.py --exp-ablation "user_category_match,user_region_match,price_diff"
+
+
 {
   "pipeline_version": "deepfm-1.0.20260307084041",
   "model_path": "/Users/js/tasteam-new-async/ml/deepfm_pipeline/output/manual/model.pt",
