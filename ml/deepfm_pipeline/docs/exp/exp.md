@@ -117,3 +117,29 @@ random < popularity < model
 
 ---
 
+결과
+
+random < model < popular
+
+이유:
+피처 수는 많지만 피처에 실제로 모델이 학습할 수 있는 preference signal의 부족.
+
+추가 방안:
+
+item popularity -
+
+restaurant_popularity
+restaurant_rank
+restaurant_ctr
+
+user preference -
+
+user_category_count
+user_region_count
+user_price_preference
+
+user-item interaction -
+
+user_category_match
+user_region_match
+price_match
