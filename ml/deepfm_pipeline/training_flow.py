@@ -282,7 +282,7 @@ def train_task(
             k_list=[5, 10],
             use_cuda=use_cuda,
         )
-        # model_baseline: exp.md 기준 참조값 (하드코딩)
+        # baseline_v2 (하드코딩)
         run_metrics["model_baseline"] = {
             "auc": 0.6426139601139602,
             "ndcg@5": 0.22093023283013208,
