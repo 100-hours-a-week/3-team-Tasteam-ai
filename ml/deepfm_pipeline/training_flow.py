@@ -180,12 +180,22 @@ def train_task(
     use_cuda: bool = False,
     verbose: bool = True,
     use_wandb: bool = True,
+    seed: int = 42,
 ) -> dict:
     """
     전처리된 데이터로 DeepFM 학습 후 모델 저장.
+    seed 고정 시 동일 실행마다 동일 결과 (모델 초기화·배치 셔플 재현).
     (wandb_design) checkpoint·evaluation report artifact, metrics 로깅, pipeline_version 매핑.
     """
     from utils import wandb_logger
+
+    # 재현성: 모델 초기화·DataLoader 셔플 고정
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    if use_cuda and torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    g = torch.Generator()
+    g.manual_seed(seed)
 
     data_path = Path(processed_data_dir)
     if not (data_path / "train.txt").exists():
@@ -205,6 +215,7 @@ def train_task(
         "batch_size": batch_size,
         "lr": lr,
         "use_cuda": use_cuda,
+        "seed": seed,
     }
 
     # 데이터 로드: 시간 기준 split 시 val.txt 사용, 없으면 train 뒤쪽을 val로 (랜덤 row split 아님)
@@ -213,7 +224,7 @@ def train_task(
     if val_path.exists():
         val_data = CriteoDataset(str(data_path), train=False, use_val_file=True)
         loader_train = DataLoader(
-            train_data, batch_size=batch_size, shuffle=True
+            train_data, batch_size=batch_size, shuffle=True, generator=g
         )
         loader_val = DataLoader(
             val_data, batch_size=batch_size, shuffle=False
@@ -227,11 +238,13 @@ def train_task(
             train_data,
             batch_size=batch_size,
             sampler=sampler.SubsetRandomSampler(train_indices),
+            generator=g,
         )
         loader_val = DataLoader(
             train_data,
             batch_size=batch_size,
             sampler=sampler.SubsetRandomSampler(val_indices),
+            generator=g,
         )
 
     feature_sizes_path = data_path / "feature_sizes.txt"
@@ -379,6 +392,7 @@ def deepfm_training_flow(
     eval_popular_top_k: int = 1000,
     eval_list_seed: int = 42,
     use_wandb: bool = True,
+    seed: int = 42,
 ) -> dict:
     """
     (선택) train/test 분할 → 전처리 → 학습을 순서대로 실행하는 DeepFM 파이프라인.
@@ -418,6 +432,7 @@ def deepfm_training_flow(
                 "eval_num_neg": eval_num_neg,
                 "eval_num_popular_neg": eval_num_popular_neg,
                 "eval_popular_top_k": eval_popular_top_k,
+                "seed": seed,
             },
             run_name=run_name,
         )
@@ -463,6 +478,7 @@ def deepfm_training_flow(
         use_cuda=use_cuda,
         verbose=True,
         use_wandb=use_wandb,
+        seed=seed,
     )
     if use_wandb and wandb_logger.is_available():
         wandb_logger.finish_run()
@@ -531,6 +547,7 @@ if __name__ == "__main__":
     p.add_argument("--eval-num-popular-neg", type=int, default=50, help="리스트당 인기 아이템 기반 음성 개수 (나머지는 랜덤)")
     p.add_argument("--eval-popular-top-k", type=int, default=1000, help="인기 아이템 풀 크기 (positive count 상위 K)")
     p.add_argument("--eval-list-seed", type=int, default=42, help="eval 리스트 구성 시드")
+    p.add_argument("--seed", type=int, default=42, help="학습 재현성 시드 (모델 초기화·배치 셔플)")
     p.add_argument("--skip-preprocess", action="store_true", help="전처리 생략 (기존 train.txt 사용)")
     p.add_argument("--no-wandb", action="store_true", help="wandb 로깅 비활성화")
     p.add_argument("--cuda", action="store_true", help="CUDA 사용")
@@ -558,6 +575,7 @@ if __name__ == "__main__":
         eval_num_popular_neg=args.eval_num_popular_neg,
         eval_popular_top_k=args.eval_popular_top_k,
         eval_list_seed=args.eval_list_seed,
+        seed=args.seed,
         skip_preprocess=args.skip_preprocess,
         use_wandb=not args.no_wandb,
         use_cuda=args.cuda,
