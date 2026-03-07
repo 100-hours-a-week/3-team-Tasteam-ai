@@ -284,11 +284,11 @@ def train_task(
         )
         # model_baseline: exp.md 기준 참조값 (하드코딩)
         run_metrics["model_baseline"] = {
-            "auc": 0.4243447293447294,
-            "ndcg@5": 0.05813953477290916,
-            "ndcg@10": 0.05813953477290916,
-            "recall@5": 0.05813953477290916,
-            "recall@10": 0.05813953477290916,
+            "auc": 0.6426139601139602,
+            "ndcg@5": 0.22093023283013208,
+            "ndcg@10": 0.22093023283013208,
+            "recall@5": 0.22093023283013208,
+            "recall@10": 0.22093023283013208,
         }
         popularity_baseline = run_popularity_baseline(
             processed_data_dir=str(data_path),
