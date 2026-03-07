@@ -266,6 +266,14 @@ def train_task(
             k_list=[5, 10],
             use_cuda=use_cuda,
         )
+        if "error" not in run_metrics:
+            run_metrics["model_baseline"] = {
+                "auc": run_metrics.get("auc"),
+                "ndcg@5": run_metrics.get("ndcg@5"),
+                "ndcg@10": run_metrics.get("ndcg@10"),
+                "recall@5": run_metrics.get("recall@5"),
+                "recall@10": run_metrics.get("recall@10"),
+            }
         popularity_baseline = run_popularity_baseline(
             processed_data_dir=str(data_path),
             k_list=[5, 10],
