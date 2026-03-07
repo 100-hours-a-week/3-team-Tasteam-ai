@@ -1,4 +1,4 @@
-1 pos, random neg 50, popular neg 50 (baseline)
+1 pos, random neg 50, popular neg 50 (baseline) (실서비스와 유사)
 
 {
   "pipeline_version": "deepfm-1.0.20260306065402",
@@ -18,7 +18,7 @@
 
 ---
 
-1 pos, random 100
+1 pos, random neg 100
 
 {
   "pipeline_version": "deepfm-1.0.20260307060359",
@@ -38,4 +38,52 @@
 
 ---
 
+의사결정:
+popularlity baseline 선정 (아이템 popularity ranking)
+
+이유:
+“모델이 진짜로 똑똑한지, 아니면 그냥 인기 아이템만 잘 맞추는지”를 구분하기 위해서
+
+추가설명:
+model score < popularlity score
+
+-> 모델이 인기순 추천보다 못하다
+
+이유: 
+
+feature 부족
+
+데이터 문제
+
+학습 문제
+
+의심.
+
+model score > popularity score
+
+의미: 모델이 단순 인기 추천보다 개인화가 잘 된다
+
+적용방안:
+
+[positive,
+ neg_random_1,
+ neg_random_2,
+ ...
+ neg_popular_1,
+ neg_popular_2]
+
+model 대신
+
+ score = restaurant_popularity[item]
+으로 ranking
+
+ scores = [popularity[item] for item in candidate_items]
+rank = argsort(scores, descending=True)
+
+이걸로
+
+NDCG
+Recall
+
+계산
 
