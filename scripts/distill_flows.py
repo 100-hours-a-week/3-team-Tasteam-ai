@@ -1214,15 +1214,14 @@ def evaluate_task(
         eval_dir = out_dir / "eval" / run_id
         eval_dir.mkdir(parents=True, exist_ok=True)
         report_path = eval_dir / "report.json"
-        human_path = eval_dir / "human_eval_samples.json"
         json.dump(
-            {"skipped": True, "reason": "no val/test labeled paths"},
+            {"val": {"skipped": True}, "test": {"skipped": True}, "meta": {"reason": "no val/test labeled paths", "llm_judge_sample_ids": []}},
             open(report_path, "w", encoding="utf-8"),
             ensure_ascii=False,
             indent=2,
         )
-        json.dump({"sample_ids": []}, open(human_path, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
-        return {"report_path": str(report_path), "human_eval_sample_path": str(human_path)}
+        art = upload_eval_to_artifact_task(eval_dir=eval_dir)
+        return {"report_path": str(report_path), "eval_dir": str(eval_dir), "artifact": art}
 
     cmd = [
         sys.executable,
@@ -1240,12 +1239,57 @@ def evaluate_task(
     if result.returncode != 0:
         raise RuntimeError(f"eval_distill.py exited with {result.returncode}\n{result.stderr or ''}")
 
+    report_path = None
     for line in reversed((result.stdout or "").strip().splitlines()):
         line = line.strip()
         if line.startswith("{"):
             out = json.loads(line)
-            return {"report_path": out["report_path"], "human_eval_sample_path": out["human_eval_sample_path"]}
-    raise RuntimeError("eval_distill.py did not produce expected output")
+            report_path = out.get("report_path")
+            break
+    if not report_path:
+        raise RuntimeError("eval_distill.py did not produce report_path")
+
+    eval_dir = Path(report_path).parent
+    llm_judge_path = eval_dir / "llm_as_a_judge_results.json"
+    kd_report_path = eval_dir / "kd_sft_analysis_report.json"
+
+    # report.json의 meta.llm_judge_sample_ids로 LLM-as-a-Judge 실행 (별도 samples 파일 없음)
+    with open(report_path, "r", encoding="utf-8") as f:
+        report_data = json.load(f)
+    sample_ids = report_data.get("meta", {}).get("llm_judge_sample_ids", [])
+    if sample_ids and val_labeled_path and Path(val_labeled_path).exists():
+        cmd_judge = [
+            sys.executable,
+            str(_SCRIPT_DIR / "eval_llm_as_judge.py"),
+            "--report", str(report_path),
+            "--val-labeled", str(val_labeled_path),
+            "--adapter-path", str(adapter_path),
+            "--base-model", base_model,
+            "--output", str(llm_judge_path),
+        ]
+        rj = subprocess.run(cmd_judge, cwd=str(_PROJECT_ROOT), capture_output=True, text=True)
+        if rj.returncode != 0:
+            logger.warning("eval_llm_as_judge failed: %s", rj.stderr or rj.stdout)
+        elif llm_judge_path.exists():
+            # kd_sft_analysis
+            cmd_kd = [
+                sys.executable,
+                str(_SCRIPT_DIR / "kd_sft_analysis.py"),
+                "--input", str(llm_judge_path),
+                "--output-dir", str(eval_dir),
+            ]
+            rk = subprocess.run(cmd_kd, cwd=str(_PROJECT_ROOT), capture_output=True, text=True)
+            if rk.returncode != 0:
+                logger.warning("kd_sft_analysis failed: %s", rk.stderr or rk.stdout)
+
+    art = upload_eval_to_artifact_task(eval_dir=eval_dir)
+    return {
+        "report_path": str(report_path),
+        "eval_dir": str(eval_dir),
+        "llm_as_a_judge_results_path": str(llm_judge_path) if llm_judge_path.exists() else None,
+        "kd_sft_analysis_report_path": str(kd_report_path) if kd_report_path.exists() else None,
+        "artifact": art,
+    }
 
 
 @flow(name="evaluate_flow", log_prints=True)
@@ -1256,7 +1300,7 @@ def evaluate_flow(
     output_dir: str | Path | None = None,
     base_model: str = "Qwen/Qwen2.5-0.5B-Instruct",
 ) -> dict:
-    """val/test 평가 (ROUGE/BERTScore), 휴먼 평가 샘플 뽑기."""
+    """val/test 평가 (ROUGE/BERTScore) → LLM-as-a-Judge → kd_sft_analysis → eval 아티팩트 업로드."""
     return evaluate_task(
         adapter_path=adapter_path,
         val_labeled_path=val_labeled_path,
@@ -1267,6 +1311,52 @@ def evaluate_flow(
 
 
 EVAL_ARTIFACT_NAME_DEFAULT = "distill-eval-report"
+
+
+@task(name="upload-eval-to-artifact-task", log_prints=True)
+def upload_eval_to_artifact_task(
+    eval_dir: str | Path,
+    project: str = DEFAULT_WANDB_PROJECT,
+    entity: str | None = None,
+    artifact_name: str = EVAL_ARTIFACT_NAME_DEFAULT,
+) -> dict:
+    """
+    eval 디렉터리(report.json, llm_as_a_judge_results.json, kd_sft_analysis_report.json 등)를 wandb artifact로 업로드.
+    """
+    import wandb
+
+    eval_dir = Path(eval_dir)
+    if not eval_dir.is_dir():
+        raise FileNotFoundError(f"eval_dir is not a directory: {eval_dir}")
+    version = eval_dir.name
+    if not os.environ.get("WANDB_API_KEY"):
+        logger.warning("WANDB_API_KEY not set; skipping eval artifact upload")
+        return {"skipped": True, "reason": "WANDB_API_KEY not set", "eval_dir": str(eval_dir)}
+
+    try:
+        run = wandb.init(
+            project=project,
+            entity=entity or os.environ.get("WANDB_ENTITY"),
+            name=f"upload-eval-{version}",
+            job_type="eval_upload",
+        )
+        artifact = wandb.Artifact(
+            name=artifact_name,
+            type="eval-report",
+            metadata={"version": version, "eval_dir": str(eval_dir)},
+        )
+        artifact.add_dir(str(eval_dir), name="eval")
+        wandb.log_artifact(artifact)
+        wandb.finish()
+        logger.info("Uploaded eval dir to artifact %s (version=%s)", artifact_name, version)
+        return {
+            "artifact_name": artifact_name,
+            "version": version,
+            "eval_dir": str(eval_dir),
+        }
+    except Exception as e:
+        logger.warning("wandb eval artifact upload failed: %s", e)
+        return {"skipped": True, "reason": str(e), "eval_dir": str(eval_dir)}
 
 
 @task(name="download-eval-artifact-task", log_prints=True)
@@ -1290,11 +1380,14 @@ def download_eval_artifact_task(
     art = api.artifact(qualified)
     art.download(root=str(output_dir))
     # artifact는 add_dir(..., name="eval")로 올렸으므로 report는 output_dir/eval/report.json
-    report_path = output_dir / "eval" / "report.json"
-    human_path = output_dir / "eval" / "human_eval_samples.json"
+    eval_subdir = output_dir / "eval"
+    report_path = eval_subdir / "report.json"
+    llm_judge_path = eval_subdir / "llm_as_a_judge_results.json"
+    kd_report_path = eval_subdir / "kd_sft_analysis_report.json"
     return {
         "report_path": str(report_path) if report_path.exists() else None,
-        "human_eval_sample_path": str(human_path) if human_path.exists() else None,
+        "llm_as_a_judge_results_path": str(llm_judge_path) if llm_judge_path.exists() else None,
+        "kd_sft_analysis_report_path": str(kd_report_path) if kd_report_path.exists() else None,
         "artifact_version": artifact_version,
         "qualified_name": qualified,
         "download_root": str(output_dir),
@@ -1409,11 +1502,14 @@ def evaluate_on_pod_task(
         _api = _wandb.Api()
         _art = _api.artifact(qualified_name)
         _art.download(root=str(out_dir))
-        report_path = out_dir / "eval" / "report.json"
-        human_path = out_dir / "eval" / "human_eval_samples.json"
+        eval_subdir = out_dir / "eval"
+        report_path = eval_subdir / "report.json"
+        llm_judge_path = eval_subdir / "llm_as_a_judge_results.json"
+        kd_report_path = eval_subdir / "kd_sft_analysis_report.json"
         return {
             "report_path": str(report_path) if report_path.exists() else None,
-            "human_eval_sample_path": str(human_path) if human_path.exists() else None,
+            "llm_as_a_judge_results_path": str(llm_judge_path) if llm_judge_path.exists() else None,
+            "kd_sft_analysis_report_path": str(kd_report_path) if kd_report_path.exists() else None,
             "artifact_version": artifact_version_str,
             "qualified_name": qualified_name,
             "download_root": str(out_dir),

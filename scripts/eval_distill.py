@@ -189,17 +189,22 @@ def main() -> None:
             for s, p, r in zip(samples[:10], preds[:10], refs[:10])
         ]
 
-    human_path = out_dir / "human_eval_samples.json"
-    sample_ids = [s.get("sample_id") for s in (_load_labeled(args.val_labeled) if args.val_labeled and args.val_labeled.exists() else [])[:50]]
-    human_path.write_text(json.dumps({"sample_ids": sample_ids}, ensure_ascii=False, indent=2))
+    llm_judge_sample_ids: list[int | str] = []
+    if args.val_labeled and args.val_labeled.exists():
+        val_samples = _load_labeled(args.val_labeled)[:50]
+        llm_judge_sample_ids = [s.get("sample_id") for s in val_samples]
 
     report_path = out_dir / "report.json"
-    report["meta"] = {"adapter_path": str(args.adapter_path), "base_model": args.base_model}
+    report["meta"] = {
+        "adapter_path": str(args.adapter_path),
+        "base_model": args.base_model,
+        "llm_judge_sample_ids": llm_judge_sample_ids,
+    }
     with open(report_path, "w", encoding="utf-8") as f:
         json.dump(report, f, ensure_ascii=False, indent=2)
 
     logger.info("Report: %s", report_path)
-    print(json.dumps({"report_path": str(report_path), "human_eval_sample_path": str(human_path)}, ensure_ascii=False))
+    print(json.dumps({"report_path": str(report_path)}, ensure_ascii=False))
 
 
 if __name__ == "__main__":

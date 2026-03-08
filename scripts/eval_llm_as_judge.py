@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
-LLM-as-a-Judge 평가: llm_as_a_judge_samples의 sample_ids에 대해
-student 모델 추론 → OpenAI GPT-4o로 품질 평가(1–5점 + 이유).
+LLM-as-a-Judge 평가: sample_ids에 대해 student 추론 → OpenAI GPT-4o 품질 평가(1–5점 + 이유).
+
+sample_ids는 --report( eval_distill report.json ) 또는 --llm-judge-samples(별도 JSON)로 지정.
 
 사용:
-  python scripts/eval_llm_as_judge.py \
-    --llm-judge-samples distill_pipeline_output/eval/llm_as_a_judge_samples.json \
-    --val-labeled distill_pipeline_output/labeled/YYYYMMDD_HHMMSS/val_labeled.json \
-    --adapter-path distill_pipeline_output/runs/YYYYMMDD_HHMMSS/adapter \
-    --output distill_pipeline_output/eval/llm_as_a_judge_results.json
+  python scripts/eval_llm_as_judge.py --report eval/YYYYMMDD_HHMMSS/report.json \\
+    --val-labeled labeled/.../val_labeled.json --adapter-path .../adapter --output .../llm_as_a_judge_results.json
+  python scripts/eval_llm_as_judge.py --llm-judge-samples .../llm_as_a_judge_samples.json \\
+    --val-labeled ... --adapter-path ... --output .../llm_as_a_judge_results.json
 """
 from __future__ import annotations
 
@@ -136,7 +136,8 @@ def _call_judge(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="LLM-as-a-Judge: student 추론 + GPT-4o 평가")
-    parser.add_argument("--llm-judge-samples", type=Path, required=True, help="llm_as_a_judge_samples.json (sample_ids)")
+    parser.add_argument("--report", type=Path, default=None, help="eval_distill report.json (meta.llm_judge_sample_ids 사용)")
+    parser.add_argument("--llm-judge-samples", type=Path, default=None, help="llm_as_a_judge_samples.json (sample_ids). --report 없을 때만 사용")
     parser.add_argument("--val-labeled", type=Path, required=True, help="val_labeled.json (instruction+output)")
     parser.add_argument("--adapter-path", type=Path, required=True)
     parser.add_argument("--base-model", type=str, default="Qwen/Qwen2.5-0.5B-Instruct")
@@ -146,7 +147,13 @@ def main() -> None:
     parser.add_argument("--max-samples", type=int, default=0, help="평가할 최대 샘플 수 (0=전부)")
     args = parser.parse_args()
 
-    if not args.llm_judge_samples.exists():
+    if not args.report and not args.llm_judge_samples:
+        raise ValueError("--report 또는 --llm-judge-samples 중 하나 필요")
+    if args.report and args.llm_judge_samples:
+        raise ValueError("--report와 --llm-judge-samples 동시 지정 불가")
+    if args.report and not args.report.exists():
+        raise FileNotFoundError(f"report not found: {args.report}")
+    if args.llm_judge_samples and not args.llm_judge_samples.exists():
         raise FileNotFoundError(f"llm_as_a_judge_samples not found: {args.llm_judge_samples}")
     if not args.val_labeled.exists():
         raise FileNotFoundError(f"val_labeled not found: {args.val_labeled}")
@@ -157,16 +164,22 @@ def main() -> None:
     if not api_key:
         raise ValueError("OPENAI_API_KEY 환경변수 또는 --openai-api-key 필요")
 
-    with open(args.llm_judge_samples, "r", encoding="utf-8") as f:
-        judge_data = json.load(f)
-    sample_ids = set(judge_data.get("sample_ids", []))
+    if args.report:
+        with open(args.report, "r", encoding="utf-8") as f:
+            report_data = json.load(f)
+        sample_ids_list = report_data.get("meta", {}).get("llm_judge_sample_ids", [])
+    else:
+        with open(args.llm_judge_samples, "r", encoding="utf-8") as f:
+            judge_data = json.load(f)
+        sample_ids_list = judge_data.get("sample_ids", [])
+    sample_ids = set(sample_ids_list)
 
     with open(args.val_labeled, "r", encoding="utf-8") as f:
         data = json.load(f)
     all_samples = data.get("samples", data) if isinstance(data, dict) else data
     samples = [s for s in all_samples if s.get("sample_id") in sample_ids]
     # sample_ids 순서 유지
-    sid_order = {sid: i for i, sid in enumerate(judge_data.get("sample_ids", []))}
+    sid_order = {sid: i for i, sid in enumerate(sample_ids_list)}
     samples.sort(key=lambda s: sid_order.get(s.get("sample_id"), 999999))
 
     if args.max_samples > 0:
