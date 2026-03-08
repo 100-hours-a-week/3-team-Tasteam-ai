@@ -27,6 +27,7 @@ Flow (docs/easydistill/distill_by_prefect.md):
   python scripts/distill_flows.py sweep_eval_merge --labeled-path .../train_labeled.json [--sweep-id ...]  # Pod sweep → evaluate → merge (build_dataset/labeling 생략)
   python scripts/distill_flows.py upload_labeled_artifact --labeled-path .../train_labeled.json  # 기존 labeled만 wandb artifact로 업로드
   python scripts/distill_flows.py upload_dataset_artifact --train-path .../datasets/YYYYMMDD_HHMMSS/train.json  # 기존 dataset만 wandb artifact로 업로드
+  python scripts/distill_flows.py upload_eval_artifact --eval-path .../eval/YYYYMMDD_HHMMSS/report.json  # 기존 eval 디렉터리만 wandb artifact로 업로드
   python scripts/distill_flows.py all        # build_dataset → labeling_openai_only(기본; --use-pod 시 labeling_with_pod) → train → evaluate → merge
   python scripts/distill_flows.py all_sweep [--sweep-id <sweep_id>]  # sweep-id 없으면 flow 내부에서 sweep 등록 후 실행
   python scripts/distill_flows.py merge_for_serving --adapter-path .../adapter [--out-dir ...]  # 로컬 merge (파이프라인 기본)
@@ -1359,6 +1360,30 @@ def upload_eval_to_artifact_task(
         return {"skipped": True, "reason": str(e), "eval_dir": str(eval_dir)}
 
 
+@flow(name="upload_eval_artifact_flow", log_prints=True)
+def upload_eval_artifact_flow(
+    eval_path: str | Path,
+    project: str = DEFAULT_WANDB_PROJECT,
+    entity: str | None = None,
+    artifact_name: str = EVAL_ARTIFACT_NAME_DEFAULT,
+) -> dict:
+    """
+    기존 eval 디렉터리를 wandb artifact로만 업로드 (evaluate 없이 올리기만 실행).
+    eval_path: report.json 경로 또는 eval/YYYYMMDD_HHMMSS 디렉터리 경로.
+    """
+    path = Path(eval_path)
+    if path.is_file():
+        eval_dir = path.parent
+    else:
+        eval_dir = path
+    return upload_eval_to_artifact_task(
+        eval_dir=eval_dir,
+        project=project,
+        entity=entity,
+        artifact_name=artifact_name,
+    )
+
+
 @task(name="download-eval-artifact-task", log_prints=True)
 def download_eval_artifact_task(
     artifact_version: str,
@@ -1918,7 +1943,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Prefect flows for summary KD pipeline (distill_by_prefect.md)")
     parser.add_argument(
         "flow",
-        choices=["build_dataset", "labeling_openai_only", "labeling_with_pod", "labeling_pod_only", "train_student_with_pod", "run_sweep", "train_and_evaluate", "sweep_eval_merge", "evaluate", "evaluate_on_pod", "download_eval_artifact", "merge_for_serving", "merge_for_serving_with_pod", "upload_labeled_artifact", "upload_dataset_artifact", "all", "all_sweep"],
+        choices=["build_dataset", "labeling_openai_only", "labeling_with_pod", "labeling_pod_only", "train_student_with_pod", "run_sweep", "train_and_evaluate", "sweep_eval_merge", "evaluate", "evaluate_on_pod", "download_eval_artifact", "merge_for_serving", "merge_for_serving_with_pod", "upload_labeled_artifact", "upload_dataset_artifact", "upload_eval_artifact", "all", "all_sweep"],
         help="Flow to run. evaluate_on_pod: Pod에서 평가 후 결과를 wandb artifact로 올리고 로컬에 다운로드. download_eval_artifact: 평가 artifact를 지정 버전으로 다운로드.",
     )
     parser.add_argument("--gold-path", type=Path, default=None, help="train_labeled_gold_only.json 경로 (labeling_pod_only 필수)")
@@ -1935,6 +1960,7 @@ def main() -> None:
     parser.add_argument("--val-labeled-path", type=Path, default=None, help="val_labeled.json (for evaluate, evaluate_on_pod)")
     parser.add_argument("--test-labeled-path", type=Path, default=None, help="test_labeled.json (for evaluate, evaluate_on_pod)")
     parser.add_argument("--artifact-version", type=str, default="latest", help="For download_eval_artifact: artifact version (latest, v0, v1, ...)")
+    parser.add_argument("--eval-path", type=Path, default=None, help="report.json 또는 eval/YYYYMMDD_HHMMSS 디렉터리 (upload_eval_artifact 필수)")
     parser.add_argument("--openai-cap", type=int, default=500, help="OpenAI labeling cap (for labeling_with_pod, all)")
     parser.add_argument("--use-pod", action="store_true", help="all/all_sweep에서 labeling_with_pod 사용 (기본: labeling_openai_only)")
     parser.add_argument("--public-ip-wait-timeout", type=int, default=180, help="publicIp 할당 대기 초 (labeling_with_pod, labeling_pod_only)")
@@ -2093,6 +2119,15 @@ def main() -> None:
             parser.error("upload_dataset_artifact requires --train-path (e.g. .../datasets/YYYYMMDD_HHMMSS/train.json)")
         result = upload_dataset_artifact_flow(
             dataset_path=args.train_path,
+            project=os.environ.get("WANDB_PROJECT", DEFAULT_WANDB_PROJECT),
+            entity=os.environ.get("WANDB_ENTITY"),
+        )
+        print("Result:", result)
+    elif args.flow == "upload_eval_artifact":
+        if not args.eval_path or not args.eval_path.exists():
+            parser.error("upload_eval_artifact requires --eval-path (e.g. .../eval/YYYYMMDD_HHMMSS/report.json or .../eval/YYYYMMDD_HHMMSS)")
+        result = upload_eval_artifact_flow(
+            eval_path=args.eval_path,
             project=os.environ.get("WANDB_PROJECT", DEFAULT_WANDB_PROJECT),
             entity=os.environ.get("WANDB_ENTITY"),
         )
