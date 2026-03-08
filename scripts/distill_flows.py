@@ -1149,7 +1149,7 @@ def run_sweep_and_evaluate_flow(
     test_labeled_path: str | None = None,
     base_model: str = "Qwen/Qwen2.5-0.5B-Instruct",
     use_pod: bool = True,
-    num_pods: int = 1,
+    num_pods: int = 2,
 ) -> dict:
     """sweep 실행(use_pod=True 시 Pod에서, False 시 로컬 subprocess) → best adapter를 wandb artifact에서 다운로드 → evaluate. sweep_id 없으면 sweep_yaml으로 등록. num_pods>1이면 동일 sweep_id로 N개 Pod 동시 실행(멀티 Pod)."""
     if sweep_id is None:
@@ -1841,7 +1841,7 @@ def distill_pipeline_all_sweep(
     public_ip_wait_timeout_sec: int = 180,
     vllm_ready_timeout_sec: int = 180,
     student_model: str = "Qwen/Qwen2.5-0.5B-Instruct",
-    num_pods: int = 1,
+    num_pods: int = 2,
     openai_only: bool = True,
 ) -> dict:
     """build_dataset → labeling(기본 OpenAI only; --use-pod 시 Pod) → run_sweep → best run adapter로 evaluate → merge(로컬). sweep_id 없으면 sweep_yaml으로 등록. num_pods>1이면 멀티 Pod."""
@@ -1914,7 +1914,7 @@ def sweep_eval_merge_flow(
     sweep_yaml: str | Path | None = None,
     output_dir: str | Path | None = None,
     student_model: str = "Qwen/Qwen2.5-0.5B-Instruct",
-    num_pods: int = 1,
+    num_pods: int = 2,
 ) -> dict:
     """Pod에서 sweep → best adapter로 evaluate → merge(로컬). build_dataset, labeling은 건너뜀. num_pods>1이면 멀티 Pod."""
     out_dir = Path(output_dir or _PROJECT_ROOT / "distill_pipeline_output")
@@ -1966,7 +1966,7 @@ def main() -> None:
     parser.add_argument("--public-ip-wait-timeout", type=int, default=180, help="publicIp 할당 대기 초 (labeling_with_pod, labeling_pod_only)")
     parser.add_argument("--vllm-ready-timeout", type=int, default=180, help="vLLM /v1/models 준비 대기 초 (labeling_with_pod, labeling_pod_only)")
     parser.add_argument("--student-model", type=str, default="Qwen/Qwen2.5-0.5B-Instruct", help="Student model")
-    parser.add_argument("--num-pods", type=int, default=1, help="sweep 시 동시 Pod 개수 (sweep_eval_merge, all_sweep; gpu_parallel.md 권장 2~3)")
+    parser.add_argument("--num-pods", type=int, default=2, help="sweep 시 동시 Pod 개수 (sweep_eval_merge, all_sweep; 기본 2)")
     args = parser.parse_args()
 
     out_dir = Path(args.out_dir or _PROJECT_ROOT / "distill_pipeline_output")
