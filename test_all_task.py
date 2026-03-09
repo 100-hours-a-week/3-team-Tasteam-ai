@@ -178,6 +178,9 @@ SAMPLE_REVIEWS = []
 # 비교: comparison_in_aspect와 맞추기 위해 restaurant_id=4 우선 사용 (test_data_sample에 4가 있으면)
 STRENGTH_TARGET_RESTAURANT_ID: Optional[int] = None
 
+# 로드된 테스트 데이터의 레스토랑 ID 목록 (배치 테스트에서 사용, 미설정 시 SAMPLE_RESTAURANT_ID + i 폴백)
+BATCH_RESTAURANT_IDS: List[int] = []
+
 # 테스트 메트릭 수집용 전역 딕셔너리 (JSON 저장용)
 test_metrics: Dict[str, Any] = {}
 
@@ -588,38 +591,54 @@ def upload_data_to_qdrant(data: Dict[str, Any]):
 def _trim_load_test_data_to_max_reviews(data: Dict[str, Any], max_reviews: int) -> Dict[str, Any]:
     """
     load_test_data를 최대 max_reviews건 리뷰만 남기도록 잘라서 반환.
-    업로드·감성 배치·요약/비교 모두 이 제한된 데이터를 사용하게 함.
-    - Nested: 여러 레스토랑에 고르게 나누기 위해 레스토랑당 상한을 두고 채움 (총 max_reviews개).
-    - Flat: reviews를 max_reviews개로 자르고, 해당하는 restaurant만 유지.
+    레스토랑당 10개씩 채우고, 나머지는 마지막 레스토랑에 할당.
+    예: max_reviews=205 → 20개 레스토랑은 10개씩, 1개 레스토랑은 5개 → 총 21개 레스토랑.
+    - Nested: 앞에서부터 레스토랑당 10개(마지막만 1~10개).
+    - Flat: restaurant_id별 그룹 후 동일.
     """
     if not data or max_reviews <= 0:
         return data or {}
+    # 사용할 레스토랑 수 = ceil(max_reviews/10), 단 기존 레스토랑 수를 넘지 않음
+    num_restaurants_cap = (max_reviews + 9) // 10
     # Nested: {"restaurants": [{restaurant_id, reviews: [...]}, ...]}
     restaurants = data.get("restaurants")
     if restaurants is not None and (not data.get("reviews")):
-        # 레스토랑 1개에 몰리지 않도록: 레스토랑당 최대 (max_reviews / min(50, 레스토랑수))건씩만 채움
         n_rest = len(restaurants)
-        cap = max(1, max_reviews // min(50, n_rest))
+        num_restaurants = min(num_restaurants_cap, n_rest)
         new_restaurants: List[Dict[str, Any]] = []
-        total = 0
-        for r in restaurants:
-            if total >= max_reviews:
-                break
+        for i in range(num_restaurants):
+            r = restaurants[i]
+            quota = 10 if i < num_restaurants - 1 else (max_reviews - 10 * (num_restaurants - 1))
             reviews = r.get("reviews") or []
-            take = min(len(reviews), cap, max_reviews - total)
+            take = min(quota, len(reviews))
             new_reviews = reviews[:take]
-            total += len(new_reviews)
             if new_reviews:
                 new_restaurants.append({
                     **r,
                     "reviews": new_reviews,
                 })
         return {"restaurants": new_restaurants}
-    # Flat: {"reviews": [...], "restaurants": [...]}
+    # Flat: {"reviews": [...], "restaurants": [...]} — 레스토랑당 10개씩 채우기
     flat_reviews = data.get("reviews") or []
     flat_restaurants = data.get("restaurants") or []
     if flat_reviews and flat_restaurants:
-        trimmed_reviews = flat_reviews[:max_reviews]
+        by_rid_flat: Dict[Any, List[Dict[str, Any]]] = {}
+        for rev in flat_reviews:
+            rid = rev.get("restaurant_id")
+            if rid is not None:
+                if rid not in by_rid_flat:
+                    by_rid_flat[rid] = []
+                by_rid_flat[rid].append(rev)
+        n_rest = len(by_rid_flat)
+        num_restaurants = min(num_restaurants_cap, n_rest)
+        trimmed_reviews: List[Dict[str, Any]] = []
+        for i, (rid, revs) in enumerate(by_rid_flat.items()):
+            if i >= num_restaurants:
+                break
+            quota = 10 if i < num_restaurants - 1 else (max_reviews - 10 * (num_restaurants - 1))
+            take = min(quota, len(revs))
+            trimmed_reviews.extend(revs[:take])
+        trimmed_reviews = trimmed_reviews[:max_reviews]
         rids_in_use = {r.get("restaurant_id") for r in trimmed_reviews}
         filtered_restaurants = []
         for r in flat_restaurants:
@@ -1800,8 +1819,12 @@ def test_sentiment_analysis_batch(enable_benchmark: bool = False, num_iterations
     print_header("2. 배치 감성 분석 테스트")
     
     url = f"{get_base_url()}{API_PREFIX}/sentiment/analyze/batch"
-    # 10개 레스토랑 배치 (리뷰는 벡터 DB에서 조회)
-    restaurants_payload = [{"restaurant_id": SAMPLE_RESTAURANT_ID + i} for i in range(10)]
+    # 로드된 테스트 데이터의 레스토랑 최대 10개 사용, 없으면 SAMPLE_RESTAURANT_ID + 0..9
+    if BATCH_RESTAURANT_IDS:
+        rids = BATCH_RESTAURANT_IDS[:10]
+    else:
+        rids = [SAMPLE_RESTAURANT_ID + i for i in range(10)]
+    restaurants_payload = [{"restaurant_id": rid} for rid in rids]
     payload = {"restaurants": restaurants_payload}
     
     try:
@@ -2110,11 +2133,13 @@ def test_summarize_batch(enable_benchmark: bool = False, num_iterations: int = 5
     print_header("4. 배치 리뷰 요약 테스트")
     
     url = f"{get_base_url()}{API_PREFIX}/llm/summarize/batch"
+    # sentiment_batch와 동일: 로드된 테스트 데이터의 레스토랑 최대 10개 사용, 없으면 SAMPLE_RESTAURANT_ID + 0..9
+    if BATCH_RESTAURANT_IDS:
+        rids = BATCH_RESTAURANT_IDS[:10]
+    else:
+        rids = [SAMPLE_RESTAURANT_ID + i for i in range(10)]
     payload = {
-        "restaurants": [
-            {"restaurant_id": SAMPLE_RESTAURANT_ID},
-            {"restaurant_id": SAMPLE_RESTAURANT_ID + 1},
-        ],
+        "restaurants": [{"restaurant_id": rid} for rid in rids],
         "limit": 10,
         "min_score": 0.0,
     }
@@ -2541,12 +2566,15 @@ def test_comparison_batch(enable_benchmark: bool = False, num_iterations: int = 
     print_header("5-2. 배치 비교 테스트")
     
     url = f"{get_base_url()}{API_PREFIX}/llm/comparison/batch"
-    rid = STRENGTH_TARGET_RESTAURANT_ID if STRENGTH_TARGET_RESTAURANT_ID is not None else SAMPLE_RESTAURANT_ID
+    # sentiment_batch와 동일: 로드된 테스트 데이터의 레스토랑 최대 10개 사용.
+    # (데이터가 없으면 STRENGTH_TARGET/SAMPLE_RESTAURANT_ID 기준으로 10개 구성)
+    if BATCH_RESTAURANT_IDS:
+        rids = BATCH_RESTAURANT_IDS[:10]
+    else:
+        base_rid = STRENGTH_TARGET_RESTAURANT_ID if STRENGTH_TARGET_RESTAURANT_ID is not None else SAMPLE_RESTAURANT_ID
+        rids = [base_rid + i for i in range(10)]
     payload = {
-        "restaurants": [
-            {"restaurant_id": rid},
-            {"restaurant_id": rid + 1},
-        ],
+        "restaurants": [{"restaurant_id": rid} for rid in rids],
     }
     
     try:
@@ -3448,6 +3476,9 @@ def main():
                     SAMPLE_REVIEWS.append(review_obj)
             print_info(f"테스트 레스토랑 ID: {SAMPLE_RESTAURANT_ID}")
             print_info(f"테스트 리뷰 수: {len(SAMPLE_REVIEWS)}개")
+            # 배치 테스트에서 로드된 레스토랑 목록 사용
+            global BATCH_RESTAURANT_IDS
+            BATCH_RESTAURANT_IDS = [r.get("restaurant_id") for r in data["restaurants"] if r.get("restaurant_id") is not None]
     
     # 모델 비교 모드 처리
     if args.compare_models:
