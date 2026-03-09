@@ -1,0 +1,14 @@
+{
+  "n_train": 8277,
+  "train_sample_sha256": "96867d8a656b6840db4f0fd6f4c8c097d9eb28215f2de42d1b98dd1a7ac11876",
+  "n_val": 0,
+  "n_test": 2727,
+  "split_meta": {
+    "train_end": null,
+    "valid_end": null,
+    "test_end": null,
+    "time_column": null,
+    "group_column": null,
+    "use_sample_weight": true
+  }
+}

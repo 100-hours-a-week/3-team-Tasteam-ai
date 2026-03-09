@@ -44,6 +44,9 @@ HTTP API 호출만으로 테스트를 수행합니다. hybrid_search/final_pipel
     # kr3.tsv에서 테스트 데이터 생성 후 테스트
     python test_all_task.py --generate-from-kr3 --kr3-sample 500 --kr3-restaurants 10
 
+    # 다른 서버 URL 지정
+    python test_all_task.py --base-url http://192.168.1.100:8001
+
 주요 옵션:
     --benchmark         성능 측정 전체 (메트릭 + CPU + GPU, 기존 동작)
     --benchmark-metrics 서버 요청 메트릭만 (X-Benchmark)
@@ -59,6 +62,7 @@ HTTP API 호출만으로 테스트를 수행합니다. hybrid_search/final_pipel
     --load-test-data    부하테스트용 대형 JSON (예: real_service_simul_review_data_640k.json). 미지정 시 기본 테스트 데이터
     --generate-from-kr3 kr3.tsv 기반 테스트 데이터 생성 (--kr3-sample, --kr3-restaurants)
     --test-data-max-reviews N  test_data_sample.json 로드 시 최대 리뷰 수 제한 (예: 2000)
+    --base-url URL             API 서버 베이스 URL (예: http://192.168.1.100:8001)
 
 측정 지표 (--benchmark / QUANTITATIVE_METRICS.md):
     성능: 처리 시간(평균/P95/P99), TTFT, TPS, 처리량(req/s)
@@ -3302,7 +3306,17 @@ def main():
         nargs="+",
         help="각 모델별 서버 포트 리스트 (--compare-models와 함께 사용). 예: --ports 8001 8002 8003. 지정하지 않으면 8001부터 자동 할당"
     )
+    parser.add_argument(
+        "--base-url",
+        type=str,
+        default=None,
+        help="API 서버 베이스 URL (모든 테스트에서 사용). 미지정 시 http://localhost:8001"
+    )
     args = parser.parse_args()
+
+    # --base-url: API 서버 베이스 URL을 CLI로 지정
+    if args.base_url:
+        _thread_local.base_url = args.base_url.rstrip("/")
 
     # 벤치마크 옵션: --benchmark이면 메트릭+CPU+GPU 모두, 개별 플래그로 분리 가능
     benchmark_metrics = args.benchmark or getattr(args, "benchmark_metrics", False)

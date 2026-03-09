@@ -11,13 +11,15 @@
 
 Flow (docs/easydistill/distill_by_prefect.md):
   1. build_dataset_flow — 식당 단위 split, 윈도우/샘플 생성, train/val/test 저장 + 버전 태깅
-  2. labeling_with_pod_flow — OpenAI 골드 후 Pod에서 teacher 라벨링 + 품질 필터
-  3. train_student_with_pod_flow — 학습용 Pod에서 QLoRA SFT
-  4. evaluate_flow      — val/test: OpenAI 평가 라벨로 ROUGE/BERTScore/GPT-judge + 휴먼 평가
+  2. labeling_openai_only — 전부 OpenAI(gpt-4o-mini)로 라벨링, Pod 미사용
+  3. labeling_with_pod — OpenAI 골드 후 Pod에서 teacher 라벨링 + 품질 필터
+  4. train_student_with_pod_flow — 학습용 Pod에서 QLoRA SFT
+  5. evaluate_flow      — val/test: OpenAI 평가 라벨로 ROUGE/BERTScore/GPT-judge + 휴먼 평가
 
 실행:
   python scripts/distill_flows.py build_dataset [--input path] [--out-dir dir]
-  python scripts/distill_flows.py labeling_with_pod --train-path datasets/xxx/train.json
+  python scripts/distill_flows.py labeling_openai_only --train-path datasets/xxx/train.json  # 전부 OpenAI
+  python scripts/distill_flows.py labeling_with_pod --train-path datasets/xxx/train.json  # OpenAI 골드 + Pod teacher
   python scripts/distill_flows.py labeling_pod_only --train-path .../train.json --gold-path .../train_labeled_gold_only.json  # OpenAI 생략, Pod teacher만
   python scripts/distill_flows.py train_student_with_pod --labeled-path .../train_labeled.json --output-dir ...
   python scripts/distill_flows.py run_sweep [--sweep-id <sweep_id>] --labeled-path .../train_labeled.json [--out-dir ...]
@@ -25,7 +27,8 @@ Flow (docs/easydistill/distill_by_prefect.md):
   python scripts/distill_flows.py sweep_eval_merge --labeled-path .../train_labeled.json [--sweep-id ...]  # Pod sweep → evaluate → merge (build_dataset/labeling 생략)
   python scripts/distill_flows.py upload_labeled_artifact --labeled-path .../train_labeled.json  # 기존 labeled만 wandb artifact로 업로드
   python scripts/distill_flows.py upload_dataset_artifact --train-path .../datasets/YYYYMMDD_HHMMSS/train.json  # 기존 dataset만 wandb artifact로 업로드
-  python scripts/distill_flows.py all        # build_dataset → labeling(Pod) → train(Pod) → evaluate → merge for serving
+  python scripts/distill_flows.py upload_eval_artifact --eval-path .../eval/YYYYMMDD_HHMMSS/report.json  # 기존 eval 디렉터리만 wandb artifact로 업로드
+  python scripts/distill_flows.py all        # build_dataset → labeling_openai_only(기본; --use-pod 시 labeling_with_pod) → train → evaluate → merge
   python scripts/distill_flows.py all_sweep [--sweep-id <sweep_id>]  # sweep-id 없으면 flow 내부에서 sweep 등록 후 실행
   python scripts/distill_flows.py merge_for_serving --adapter-path .../adapter [--out-dir ...]  # 로컬 merge (파이프라인 기본)
   python scripts/distill_flows.py merge_for_serving_with_pod --adapter-path .../adapter  # 수동: Pod에서 merge (볼륨 사용)
@@ -34,6 +37,7 @@ Flow (docs/easydistill/distill_by_prefect.md):
 
 예시:
   python scripts/distill_flows.py build_dataset --input tasteam_app_all_review_data.json --out-dir distill_pipeline_output
+  python scripts/distill_flows.py labeling_openai_only --train-path distill_pipeline_output/datasets/YYYYMMDD_HHMMSS/train.json --out-dir distill_pipeline_output
   python scripts/distill_flows.py labeling_with_pod --train-path distill_pipeline_output/datasets/YYYYMMDD_HHMMSS/train.json --out-dir distill_pipeline_output --openai-cap 500
   python scripts/distill_flows.py labeling_pod_only --train-path .../train.json --gold-path .../labeled/YYYYMMDD_HHMMSS/train_labeled_gold_only.json --out-dir distill_pipeline_output
   python scripts/distill_flows.py train_student_with_pod --labeled-path distill_pipeline_output/labeled/YYYYMMDD_HHMMSS/train_labeled.json --output-dir distill_pipeline_output
@@ -304,10 +308,10 @@ def labeling_with_pod_task(
     pod_wait_timeout_sec: int = 600,
     public_ip_wait_timeout_sec: int = 180,
     vllm_ready_timeout_sec: int = 180,
-    openai_only: bool = False,
+    openai_only: bool = True,
 ) -> dict:
     """
-    openai_only=True: teacher를 4o mini로 단일화 — 전부 OpenAI(gpt-4o-mini)로만 라벨링, Pod 미사용.
+    openai_only=True (기본): teacher를 4o mini로 단일화 — 전부 OpenAI(gpt-4o-mini)로만 라벨링, Pod 미사용.
     openai_only=False: OpenAI 골드 먼저(Pod 없이) → Pod 기동 → self-hosted teacher로 나머지 라벨링 → Pod 삭제.
     RUNPOD_API_KEY는 openai_only=False일 때만 필요.
     """
@@ -446,10 +450,10 @@ def labeling_with_pod_flow(
     pod_wait_timeout_sec: int = 600,
     public_ip_wait_timeout_sec: int = 180,
     vllm_ready_timeout_sec: int = 180,
-    openai_only: bool = False,
+    openai_only: bool = True,
 ) -> dict:
     """
-    openai_only=True: teacher를 4o mini로 단일화(전부 OpenAI, Pod 미사용).
+    openai_only=True (기본): teacher를 4o mini로 단일화(전부 OpenAI, Pod 미사용).
     openai_only=False: OpenAI 골드 먼저 → Pod 기동 → self-hosted teacher 나머지 → Pod 삭제.
     docs/runpod_cli/cli_strategy.md
     """
@@ -1145,7 +1149,7 @@ def run_sweep_and_evaluate_flow(
     test_labeled_path: str | None = None,
     base_model: str = "Qwen/Qwen2.5-0.5B-Instruct",
     use_pod: bool = True,
-    num_pods: int = 1,
+    num_pods: int = 2,
 ) -> dict:
     """sweep 실행(use_pod=True 시 Pod에서, False 시 로컬 subprocess) → best adapter를 wandb artifact에서 다운로드 → evaluate. sweep_id 없으면 sweep_yaml으로 등록. num_pods>1이면 동일 sweep_id로 N개 Pod 동시 실행(멀티 Pod)."""
     if sweep_id is None:
@@ -1211,15 +1215,14 @@ def evaluate_task(
         eval_dir = out_dir / "eval" / run_id
         eval_dir.mkdir(parents=True, exist_ok=True)
         report_path = eval_dir / "report.json"
-        human_path = eval_dir / "human_eval_samples.json"
         json.dump(
-            {"skipped": True, "reason": "no val/test labeled paths"},
+            {"val": {"skipped": True}, "test": {"skipped": True}, "meta": {"reason": "no val/test labeled paths", "llm_judge_sample_ids": []}},
             open(report_path, "w", encoding="utf-8"),
             ensure_ascii=False,
             indent=2,
         )
-        json.dump({"sample_ids": []}, open(human_path, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
-        return {"report_path": str(report_path), "human_eval_sample_path": str(human_path)}
+        art = upload_eval_to_artifact_task(eval_dir=eval_dir)
+        return {"report_path": str(report_path), "eval_dir": str(eval_dir), "artifact": art}
 
     cmd = [
         sys.executable,
@@ -1237,12 +1240,57 @@ def evaluate_task(
     if result.returncode != 0:
         raise RuntimeError(f"eval_distill.py exited with {result.returncode}\n{result.stderr or ''}")
 
+    report_path = None
     for line in reversed((result.stdout or "").strip().splitlines()):
         line = line.strip()
         if line.startswith("{"):
             out = json.loads(line)
-            return {"report_path": out["report_path"], "human_eval_sample_path": out["human_eval_sample_path"]}
-    raise RuntimeError("eval_distill.py did not produce expected output")
+            report_path = out.get("report_path")
+            break
+    if not report_path:
+        raise RuntimeError("eval_distill.py did not produce report_path")
+
+    eval_dir = Path(report_path).parent
+    llm_judge_path = eval_dir / "llm_as_a_judge_results.json"
+    kd_report_path = eval_dir / "kd_sft_analysis_report.json"
+
+    # report.json의 meta.llm_judge_sample_ids로 LLM-as-a-Judge 실행 (별도 samples 파일 없음)
+    with open(report_path, "r", encoding="utf-8") as f:
+        report_data = json.load(f)
+    sample_ids = report_data.get("meta", {}).get("llm_judge_sample_ids", [])
+    if sample_ids and val_labeled_path and Path(val_labeled_path).exists():
+        cmd_judge = [
+            sys.executable,
+            str(_SCRIPT_DIR / "eval_llm_as_judge.py"),
+            "--report", str(report_path),
+            "--val-labeled", str(val_labeled_path),
+            "--adapter-path", str(adapter_path),
+            "--base-model", base_model,
+            "--output", str(llm_judge_path),
+        ]
+        rj = subprocess.run(cmd_judge, cwd=str(_PROJECT_ROOT), capture_output=True, text=True)
+        if rj.returncode != 0:
+            logger.warning("eval_llm_as_judge failed: %s", rj.stderr or rj.stdout)
+        elif llm_judge_path.exists():
+            # kd_sft_analysis
+            cmd_kd = [
+                sys.executable,
+                str(_SCRIPT_DIR / "kd_sft_analysis.py"),
+                "--input", str(llm_judge_path),
+                "--output-dir", str(eval_dir),
+            ]
+            rk = subprocess.run(cmd_kd, cwd=str(_PROJECT_ROOT), capture_output=True, text=True)
+            if rk.returncode != 0:
+                logger.warning("kd_sft_analysis failed: %s", rk.stderr or rk.stdout)
+
+    art = upload_eval_to_artifact_task(eval_dir=eval_dir)
+    return {
+        "report_path": str(report_path),
+        "eval_dir": str(eval_dir),
+        "llm_as_a_judge_results_path": str(llm_judge_path) if llm_judge_path.exists() else None,
+        "kd_sft_analysis_report_path": str(kd_report_path) if kd_report_path.exists() else None,
+        "artifact": art,
+    }
 
 
 @flow(name="evaluate_flow", log_prints=True)
@@ -1253,7 +1301,7 @@ def evaluate_flow(
     output_dir: str | Path | None = None,
     base_model: str = "Qwen/Qwen2.5-0.5B-Instruct",
 ) -> dict:
-    """val/test 평가 (ROUGE/BERTScore), 휴먼 평가 샘플 뽑기."""
+    """val/test 평가 (ROUGE/BERTScore) → LLM-as-a-Judge → kd_sft_analysis → eval 아티팩트 업로드."""
     return evaluate_task(
         adapter_path=adapter_path,
         val_labeled_path=val_labeled_path,
@@ -1264,6 +1312,76 @@ def evaluate_flow(
 
 
 EVAL_ARTIFACT_NAME_DEFAULT = "distill-eval-report"
+
+
+@task(name="upload-eval-to-artifact-task", log_prints=True)
+def upload_eval_to_artifact_task(
+    eval_dir: str | Path,
+    project: str = DEFAULT_WANDB_PROJECT,
+    entity: str | None = None,
+    artifact_name: str = EVAL_ARTIFACT_NAME_DEFAULT,
+) -> dict:
+    """
+    eval 디렉터리(report.json, llm_as_a_judge_results.json, kd_sft_analysis_report.json 등)를 wandb artifact로 업로드.
+    """
+    import wandb
+
+    eval_dir = Path(eval_dir)
+    if not eval_dir.is_dir():
+        raise FileNotFoundError(f"eval_dir is not a directory: {eval_dir}")
+    version = eval_dir.name
+    if not os.environ.get("WANDB_API_KEY"):
+        logger.warning("WANDB_API_KEY not set; skipping eval artifact upload")
+        return {"skipped": True, "reason": "WANDB_API_KEY not set", "eval_dir": str(eval_dir)}
+
+    try:
+        run = wandb.init(
+            project=project,
+            entity=entity or os.environ.get("WANDB_ENTITY"),
+            name=f"upload-eval-{version}",
+            job_type="eval_upload",
+        )
+        artifact = wandb.Artifact(
+            name=artifact_name,
+            type="eval-report",
+            metadata={"version": version, "eval_dir": str(eval_dir)},
+        )
+        artifact.add_dir(str(eval_dir), name="eval")
+        wandb.log_artifact(artifact)
+        wandb.finish()
+        logger.info("Uploaded eval dir to artifact %s (version=%s)", artifact_name, version)
+        return {
+            "artifact_name": artifact_name,
+            "version": version,
+            "eval_dir": str(eval_dir),
+        }
+    except Exception as e:
+        logger.warning("wandb eval artifact upload failed: %s", e)
+        return {"skipped": True, "reason": str(e), "eval_dir": str(eval_dir)}
+
+
+@flow(name="upload_eval_artifact_flow", log_prints=True)
+def upload_eval_artifact_flow(
+    eval_path: str | Path,
+    project: str = DEFAULT_WANDB_PROJECT,
+    entity: str | None = None,
+    artifact_name: str = EVAL_ARTIFACT_NAME_DEFAULT,
+) -> dict:
+    """
+    기존 eval 디렉터리를 wandb artifact로만 업로드 (evaluate 없이 올리기만 실행).
+    eval_path: report.json 경로 또는 eval/YYYYMMDD_HHMMSS 디렉터리 경로.
+    """
+    path = Path(eval_path)
+    if path.is_file():
+        eval_dir = path.parent
+    else:
+        eval_dir = path
+    return upload_eval_to_artifact_task(
+        eval_dir=eval_dir,
+        project=project,
+        entity=entity,
+        artifact_name=artifact_name,
+    )
 
 
 @task(name="download-eval-artifact-task", log_prints=True)
@@ -1287,11 +1405,14 @@ def download_eval_artifact_task(
     art = api.artifact(qualified)
     art.download(root=str(output_dir))
     # artifact는 add_dir(..., name="eval")로 올렸으므로 report는 output_dir/eval/report.json
-    report_path = output_dir / "eval" / "report.json"
-    human_path = output_dir / "eval" / "human_eval_samples.json"
+    eval_subdir = output_dir / "eval"
+    report_path = eval_subdir / "report.json"
+    llm_judge_path = eval_subdir / "llm_as_a_judge_results.json"
+    kd_report_path = eval_subdir / "kd_sft_analysis_report.json"
     return {
         "report_path": str(report_path) if report_path.exists() else None,
-        "human_eval_sample_path": str(human_path) if human_path.exists() else None,
+        "llm_as_a_judge_results_path": str(llm_judge_path) if llm_judge_path.exists() else None,
+        "kd_sft_analysis_report_path": str(kd_report_path) if kd_report_path.exists() else None,
         "artifact_version": artifact_version,
         "qualified_name": qualified,
         "download_root": str(output_dir),
@@ -1406,11 +1527,14 @@ def evaluate_on_pod_task(
         _api = _wandb.Api()
         _art = _api.artifact(qualified_name)
         _art.download(root=str(out_dir))
-        report_path = out_dir / "eval" / "report.json"
-        human_path = out_dir / "eval" / "human_eval_samples.json"
+        eval_subdir = out_dir / "eval"
+        report_path = eval_subdir / "report.json"
+        llm_judge_path = eval_subdir / "llm_as_a_judge_results.json"
+        kd_report_path = eval_subdir / "kd_sft_analysis_report.json"
         return {
             "report_path": str(report_path) if report_path.exists() else None,
-            "human_eval_sample_path": str(human_path) if human_path.exists() else None,
+            "llm_as_a_judge_results_path": str(llm_judge_path) if llm_judge_path.exists() else None,
+            "kd_sft_analysis_report_path": str(kd_report_path) if kd_report_path.exists() else None,
             "artifact_version": artifact_version_str,
             "qualified_name": qualified_name,
             "download_root": str(out_dir),
@@ -1671,9 +1795,9 @@ def distill_pipeline_all(
     public_ip_wait_timeout_sec: int = 180,
     vllm_ready_timeout_sec: int = 180,
     student_model: str = "Qwen/Qwen2.5-0.5B-Instruct",
-    openai_only: bool = False,
+    openai_only: bool = True,
 ) -> dict:
-    """build_dataset → labeling(Pod 또는 openai_only) → train_student(Pod) → evaluate → merge(로컬) 순차 실행."""
+    """build_dataset → labeling(기본 OpenAI only; --use-pod 시 Pod) → train_student(Pod) → evaluate → merge(로컬) 순차 실행."""
     out_dir = Path(out_dir or _PROJECT_ROOT / "distill_pipeline_output")
     input_path = Path(input_path or _PROJECT_ROOT / "tasteam_app_all_review_data.json")
 
@@ -1717,10 +1841,10 @@ def distill_pipeline_all_sweep(
     public_ip_wait_timeout_sec: int = 180,
     vllm_ready_timeout_sec: int = 180,
     student_model: str = "Qwen/Qwen2.5-0.5B-Instruct",
-    num_pods: int = 1,
-    openai_only: bool = False,
+    num_pods: int = 2,
+    openai_only: bool = True,
 ) -> dict:
-    """build_dataset → labeling(Pod 또는 openai_only) → run_sweep → best run adapter로 evaluate → merge(로컬). sweep_id 없으면 sweep_yaml으로 등록. num_pods>1이면 멀티 Pod."""
+    """build_dataset → labeling(기본 OpenAI only; --use-pod 시 Pod) → run_sweep → best run adapter로 evaluate → merge(로컬). sweep_id 없으면 sweep_yaml으로 등록. num_pods>1이면 멀티 Pod."""
     out_dir = Path(out_dir or _PROJECT_ROOT / "distill_pipeline_output")
     input_path = Path(input_path or _PROJECT_ROOT / "tasteam_app_all_review_data.json")
 
@@ -1790,7 +1914,7 @@ def sweep_eval_merge_flow(
     sweep_yaml: str | Path | None = None,
     output_dir: str | Path | None = None,
     student_model: str = "Qwen/Qwen2.5-0.5B-Instruct",
-    num_pods: int = 1,
+    num_pods: int = 2,
 ) -> dict:
     """Pod에서 sweep → best adapter로 evaluate → merge(로컬). build_dataset, labeling은 건너뜀. num_pods>1이면 멀티 Pod."""
     out_dir = Path(output_dir or _PROJECT_ROOT / "distill_pipeline_output")
@@ -1819,7 +1943,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Prefect flows for summary KD pipeline (distill_by_prefect.md)")
     parser.add_argument(
         "flow",
-        choices=["build_dataset", "labeling_with_pod", "labeling_pod_only", "train_student_with_pod", "run_sweep", "train_and_evaluate", "sweep_eval_merge", "evaluate", "evaluate_on_pod", "download_eval_artifact", "merge_for_serving", "merge_for_serving_with_pod", "upload_labeled_artifact", "upload_dataset_artifact", "all", "all_sweep"],
+        choices=["build_dataset", "labeling_openai_only", "labeling_with_pod", "labeling_pod_only", "train_student_with_pod", "run_sweep", "train_and_evaluate", "sweep_eval_merge", "evaluate", "evaluate_on_pod", "download_eval_artifact", "merge_for_serving", "merge_for_serving_with_pod", "upload_labeled_artifact", "upload_dataset_artifact", "upload_eval_artifact", "all", "all_sweep"],
         help="Flow to run. evaluate_on_pod: Pod에서 평가 후 결과를 wandb artifact로 올리고 로컬에 다운로드. download_eval_artifact: 평가 artifact를 지정 버전으로 다운로드.",
     )
     parser.add_argument("--gold-path", type=Path, default=None, help="train_labeled_gold_only.json 경로 (labeling_pod_only 필수)")
@@ -1827,7 +1951,7 @@ def main() -> None:
     parser.add_argument("--sweep-yaml", type=Path, default=None, help="sweep 설정 yaml (sweep-id 없을 때 사용, 기본: scripts/wandb_sweep_qlora.yaml)")
     parser.add_argument("--input", type=Path, default=None, help="Input reviews JSON (default: tasteam_app_all_review_data.json)")
     parser.add_argument("--out-dir", type=Path, default=None, help="Output root (default: distill_pipeline_output)")
-    parser.add_argument("--train-path", type=Path, default=None, help="train.json (for labeling_with_pod)")
+    parser.add_argument("--train-path", type=Path, default=None, help="train.json (for labeling_openai_only, labeling_with_pod)")
     parser.add_argument("--val-path", type=Path, default=None, help="val.json (for labeling_with_pod)")
     parser.add_argument("--test-path", type=Path, default=None, help="test.json (for labeling_with_pod)")
     parser.add_argument("--labeled-path", type=Path, default=None, help="train_labeled.json (for train_student_with_pod, run_sweep)")
@@ -1836,18 +1960,51 @@ def main() -> None:
     parser.add_argument("--val-labeled-path", type=Path, default=None, help="val_labeled.json (for evaluate, evaluate_on_pod)")
     parser.add_argument("--test-labeled-path", type=Path, default=None, help="test_labeled.json (for evaluate, evaluate_on_pod)")
     parser.add_argument("--artifact-version", type=str, default="latest", help="For download_eval_artifact: artifact version (latest, v0, v1, ...)")
-    parser.add_argument("--openai-cap", type=int, default=500, help="OpenAI labeling cap (for labeling_with_pod/all)")
-    parser.add_argument("--openai-only", action="store_true", help="Teacher 4o mini 단일화: 라벨링 전부 OpenAI만 사용, Pod/teacher 미사용 (labeling_with_pod, all)")
+    parser.add_argument("--eval-path", type=Path, default=None, help="report.json 또는 eval/YYYYMMDD_HHMMSS 디렉터리 (upload_eval_artifact 필수)")
+    parser.add_argument("--openai-cap", type=int, default=500, help="OpenAI labeling cap (for labeling_with_pod, all)")
+    parser.add_argument("--use-pod", action="store_true", help="all/all_sweep에서 labeling_with_pod 사용 (기본: labeling_openai_only)")
     parser.add_argument("--public-ip-wait-timeout", type=int, default=180, help="publicIp 할당 대기 초 (labeling_with_pod, labeling_pod_only)")
     parser.add_argument("--vllm-ready-timeout", type=int, default=180, help="vLLM /v1/models 준비 대기 초 (labeling_with_pod, labeling_pod_only)")
     parser.add_argument("--student-model", type=str, default="Qwen/Qwen2.5-0.5B-Instruct", help="Student model")
-    parser.add_argument("--num-pods", type=int, default=1, help="sweep 시 동시 Pod 개수 (sweep_eval_merge, all_sweep; gpu_parallel.md 권장 2~3)")
+    parser.add_argument("--num-pods", type=int, default=2, help="sweep 시 동시 Pod 개수 (sweep_eval_merge, all_sweep; 기본 2)")
     args = parser.parse_args()
 
     out_dir = Path(args.out_dir or _PROJECT_ROOT / "distill_pipeline_output")
 
     if args.flow == "build_dataset":
         result = build_dataset_flow(input_path=args.input, out_dir=out_dir)
+        print("Result:", result)
+    elif args.flow == "labeling_openai_only":
+        if not args.train_path:
+            parser.error("labeling_openai_only requires --train-path")
+        ds_dir = out_dir / "datasets"
+        val_p, test_p = None, None
+        if args.val_path:
+            val_p = str(args.val_path)
+        elif ds_dir.exists():
+            for d in sorted(ds_dir.iterdir(), reverse=True):
+                v = d / "val.json"
+                if v.exists():
+                    val_p = str(v)
+                    break
+        if args.test_path:
+            test_p = str(args.test_path)
+        elif ds_dir.exists():
+            for d in sorted(ds_dir.iterdir(), reverse=True):
+                t = d / "test.json"
+                if t.exists():
+                    test_p = str(t)
+                    break
+        result = labeling_with_pod_flow(
+            train_path=str(args.train_path),
+            val_path=val_p,
+            test_path=test_p,
+            openai_cap=999999,
+            output_labeled_dir=out_dir,
+            public_ip_wait_timeout_sec=args.public_ip_wait_timeout,
+            vllm_ready_timeout_sec=args.vllm_ready_timeout,
+            openai_only=True,
+        )
         print("Result:", result)
     elif args.flow == "labeling_with_pod":
         if not args.train_path:
@@ -1878,7 +2035,7 @@ def main() -> None:
             output_labeled_dir=out_dir,
             public_ip_wait_timeout_sec=args.public_ip_wait_timeout,
             vllm_ready_timeout_sec=args.vllm_ready_timeout,
-            openai_only=args.openai_only,
+            openai_only=False,
         )
         print("Result:", result)
     elif args.flow == "labeling_pod_only":
@@ -1966,6 +2123,15 @@ def main() -> None:
             entity=os.environ.get("WANDB_ENTITY"),
         )
         print("Result:", result)
+    elif args.flow == "upload_eval_artifact":
+        if not args.eval_path or not args.eval_path.exists():
+            parser.error("upload_eval_artifact requires --eval-path (e.g. .../eval/YYYYMMDD_HHMMSS/report.json or .../eval/YYYYMMDD_HHMMSS)")
+        result = upload_eval_artifact_flow(
+            eval_path=args.eval_path,
+            project=os.environ.get("WANDB_PROJECT", DEFAULT_WANDB_PROJECT),
+            entity=os.environ.get("WANDB_ENTITY"),
+        )
+        print("Result:", result)
     elif args.flow == "evaluate":
         if not args.adapter_path:
             parser.error("evaluate requires --adapter-path")
@@ -2027,7 +2193,7 @@ def main() -> None:
             public_ip_wait_timeout_sec=args.public_ip_wait_timeout,
             vllm_ready_timeout_sec=args.vllm_ready_timeout,
             student_model=args.student_model,
-            openai_only=args.openai_only,
+            openai_only=not args.use_pod,
         )
         print("Result keys:", list(result.keys()))
     elif args.flow == "all_sweep":
@@ -2042,7 +2208,7 @@ def main() -> None:
             vllm_ready_timeout_sec=args.vllm_ready_timeout,
             student_model=args.student_model,
             num_pods=args.num_pods,
-            openai_only=args.openai_only,
+            openai_only=not args.use_pod,
         )
         print("Result keys:", list(result.keys()))
 
