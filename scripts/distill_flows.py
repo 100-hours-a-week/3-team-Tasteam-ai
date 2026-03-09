@@ -64,6 +64,8 @@ import tempfile
 import threading
 import time
 import yaml
+
+import requests
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -888,6 +890,7 @@ def run_sweep_on_pod_task(
     """
     학습용 Pod에서 wandb sweep 에이전트 실행 (run_qlora_sweep.py).
     볼륨에 라벨 업로드(skip_upload=False 시) → Pod 생성(ENTRYPOINT/CMD 오버라이드) → Pod 종료까지 대기 → Pod 삭제.
+    대기 중 주기적으로 sweep 완료 여부를 확인하고, 완료 시 API로 Pod를 직접 종료하여 idle 대기 방지.
     완료 후 adapter는 wandb artifact에서 get_best_adapter_from_artifact_task로 수급.
     pod_index: 멀티 Pod 시 Pod 이름 고유화용 (sweep-pod-0, sweep-pod-1, ...).
     skip_upload: True면 업로드 생략 (멀티 Pod에서 업로드는 flow에서 한 번만 수행).
@@ -944,11 +947,38 @@ def run_sweep_on_pod_task(
     logger.info("Sweep Pod created: %s (sweep_id=%s)", pod_id, sweep_id)
     try:
         client.wait_until_running(pod_id, timeout_sec=pod_wait_timeout_sec)
-        client.wait_until_stopped(
-            pod_id,
-            timeout_sec=sweep_timeout_sec,
-            poll_interval_sec=sweep_poll_interval_sec,
-        )
+        # Sweep 완료 시 플로우에서 Pod를 직접 종료: wait 중 주기적으로 sweep 완료 여부 확인
+        deadline = time.time() + sweep_timeout_sec
+        last_pod = None
+        done = False
+        while time.time() < deadline:
+            try:
+                pod = client.get_pod(pod_id)
+                last_pod = pod
+            except requests.HTTPError as e:
+                if e.response is not None and e.response.status_code == 404:
+                    logger.info("Sweep Pod no longer exists (404), treating as stopped: %s", pod_id)
+                    done = True
+                    break
+                raise
+            status = (pod.get("status") or pod.get("runtimeStatus") or "").upper()
+            if status in ("ALREADY_DELETED", "DELETED"):
+                done = True
+                break
+            desired = (pod.get("desiredStatus") or "").upper()
+            if desired != "RUNNING":
+                done = True
+                break
+            if check_sweep_complete_task(sweep_id):
+                logger.info("Sweep %s complete, terminating Pod %s", sweep_id, pod_id)
+                client.delete_pod(pod_id)
+                done = True
+                break
+            time.sleep(sweep_poll_interval_sec)
+        if not done:
+            raise TimeoutError(
+                f"Pod {pod_id} did not stop within {sweep_timeout_sec}s. Last: {last_pod}"
+            )
         logger.info("Sweep Pod finished: %s", pod_id)
     finally:
         logger.info("Cleaning up sweep pod: %s", pod_id)
