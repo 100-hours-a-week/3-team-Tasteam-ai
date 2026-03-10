@@ -58,8 +58,14 @@ class ScoreBatchRequestDto(BaseModel):
     pipeline_version: str = Field(..., description="사용할 모델 pipeline_version (또는 run_dir에 해당하는 버전)")
     run_dir: str | None = Field(None, description="run 디렉터리 경로. 없으면 pipeline_version으로 output 하위에서 탐색")
     candidates_path: str = Field(..., description="후보 CSV 경로 (전처리된 feature 열)")
-    output_path: str = Field(..., description="recommendation 형식 CSV 출력 경로")
-    meta_path: str | None = Field(None, description="선택. member_id, anonymous_id, restaurant_id, context_snapshot 메타 CSV")
+    output_path: str | None = Field(
+        None,
+        description="선택. 로컬/파일 경로 또는 s3://bucket/key. 미지정 시 (env, dt)로 계약된 S3 경로 자동 생성",
+    )
+    env: str | None = Field(None, description="선택. dev/stg/prod (지정 시 tasteam-{env}-analytics 버킷으로 S3 저장)")
+    dt: str | None = Field(None, description="선택. YYYY-MM-DD. 미지정 시 UTC 오늘 날짜")
+    write_success_marker: bool = Field(True, description="S3 저장 시 _SUCCESS 마커 업로드 여부")
+    meta_path: str | None = Field(None, description="선택. user_id, anonymous_id, restaurant_id, context_snapshot 메타 CSV (호환: member_id도 허용)")
     ttl_hours: float = Field(24.0, description="expires_at TTL(시간)")
     batch_size: int = Field(256, description="추론 배치 크기")
 

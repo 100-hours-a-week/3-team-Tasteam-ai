@@ -81,8 +81,9 @@ def run(
     후보에 대해 DeepFM 점수 예측 → (user/anon, restaurant)별 rank 부여 → recommendation 형식 CSV 출력.
 
     - candidates_path: CSV, 컬럼 수 = feature_sizes 개수 (연속+범주 인덱스만, 헤더 없음 또는 있음)
-    - meta_path: CSV, 컬럼 member_id, anonymous_id, restaurant_id, context_snapshot (선택). 행 순서는 candidates와 동일.
-    - output_path: recommendation 행 저장 (member_id, anonymous_id, restaurant_id, score, rank, context_snapshot, pipeline_version, generated_at, expires_at)
+    - meta_path: CSV, 컬럼 user_id, anonymous_id, restaurant_id, context_snapshot (선택). 행 순서는 candidates와 동일.
+      (호환) meta_path에 member_id만 있으면 user_id로 간주.
+    - output_path: recommendation 행 저장 (user_id, anonymous_id, restaurant_id, score, rank, context_snapshot, pipeline_version, generated_at, expires_at)
     """
     run_dir = Path(run_dir)
     candidates_path = Path(candidates_path)
@@ -107,24 +108,24 @@ def run(
         meta = pd.read_csv(meta_path)
         if len(meta) != len(scores):
             raise ValueError(f"Meta rows {len(meta)} != candidate rows {len(scores)}")
-        member_id = meta.get("member_id", pd.Series([""] * len(meta)))
+        user_id = meta.get("user_id", meta.get("member_id", pd.Series([""] * len(meta))))
         anonymous_id = meta.get("anonymous_id", pd.Series([""] * len(meta)))
         restaurant_id = meta["restaurant_id"] if "restaurant_id" in meta.columns else list(range(len(scores)))
         context_snapshot = meta.get("context_snapshot", pd.Series(["{}"] * len(meta)))
     else:
-        member_id = [""] * len(scores)
+        user_id = [""] * len(scores)
         anonymous_id = [""] * len(scores)
         restaurant_id = list(range(len(scores)))
         context_snapshot = ["{}"] * len(scores)
 
     key = []
     for i in range(len(scores)):
-        uid = str(member_id.iloc[i]) if hasattr(member_id, "iloc") else str(member_id[i])
+        uid = str(user_id.iloc[i]) if hasattr(user_id, "iloc") else str(user_id[i])
         aid = str(anonymous_id.iloc[i]) if hasattr(anonymous_id, "iloc") else str(anonymous_id[i])
         key.append(uid if (uid and uid != "nan") else f"a_{aid}")
 
     df_out = pd.DataFrame({
-        "member_id": member_id,
+        "user_id": user_id,
         "anonymous_id": anonymous_id,
         "restaurant_id": restaurant_id,
         "score": scores,
@@ -152,7 +153,7 @@ def main() -> None:
     p = argparse.ArgumentParser(description="DeepFM batch scoring → recommendation CSV (§6-3)")
     p.add_argument("--run-dir", type=str, required=True, help="Run directory (model.pt, feature_sizes.txt, pipeline_version.txt)")
     p.add_argument("--candidates", type=str, required=True, help="Candidates CSV (preprocessed feature columns)")
-    p.add_argument("--meta", type=str, default=None, help="Optional meta CSV: member_id, anonymous_id, restaurant_id, context_snapshot")
+    p.add_argument("--meta", type=str, default=None, help="Optional meta CSV: user_id, anonymous_id, restaurant_id, context_snapshot")
     p.add_argument("--out", type=str, required=True, help="Output recommendation CSV path")
     p.add_argument("--ttl-hours", type=float, default=24.0, help="TTL hours for expires_at")
     p.add_argument("--batch-size", type=int, default=256)
