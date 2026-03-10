@@ -736,7 +736,7 @@ DeepFM **Admin API**는 메인 앱과 별도 서비스로 제공되며, **§16**
 |------|------|
 | **위치** | `ml/deepfm_pipeline/` (FastAPI 앱: `api/main.py`, 라우터: `api/routers/deepfm.py`) |
 | **포트** | 기본 8000 (메인 API 8001과 독립) |
-| **엔드포인트** | `POST /admin/deepfm/train`(학습 트리거), `POST /admin/deepfm/score-batch`(배치 스코어링 → recommendation CSV), `GET /admin/deepfm/models`(모델 목록·활성 버전), `POST /admin/deepfm/activate`(서빙용 버전 활성화) |
+| **엔드포인트** | `POST /admin/deepfm/train`(학습 트리거), `GET /admin/deepfm/models`(모델 목록·활성 버전), `POST /admin/deepfm/activate`(서빙용 버전 활성화) |
 | **학습** | `training_flow.py`의 Prefect `deepfm_training_flow`: 전처리(raw → train/val/test) → DeepFM 학습 → `output/<pipeline_version>/model.pt`, `feature_sizes.txt`, `run_manifest.json` 산출. |
 | **스코어링** | `utils/score_batch.run`: 후보 CSV(S3 등) + 메타 CSV → 모델 추론 → recommendation 형식 CSV 출력. DB INSERT는 호출 측(ETL)에서 수행. |
 | **경로·DTO** | 입출력·CSV 예시는 `ml/deepfm_pipeline/docs/design/api/ML_API_DTO.md`. 경로는 S3 URL 예시 사용(s3://bucket/...). |
@@ -817,7 +817,7 @@ DeepFM **Admin API**는 메인 앱과 별도 서비스로 제공되며, **§16**
     │
     ▼
 [DeepFM API :8000]  FastAPI  ─┬─ POST /admin/deepfm/train        → Prefect 플로우(전처리→학습) → output/<run>/ model.pt, run_manifest.json, pipeline_version
-    │                          ├─ POST /admin/deepfm/score-batch  → run_dir + 후보 CSV → recommendation CSV (INSERT는 호출 측)
+    │                          ├─ (batch job) score_batch_to_s3   → run_dir + 후보 CSV → S3 recommendation CSV + _SUCCESS (API 서버가 import)
     │                          ├─ GET  /admin/deepfm/models      → output/ 하위 run 목록 + active_version
     │                          └─ POST /admin/deepfm/activate     → output/active_pipeline_version.txt 갱신
     │
@@ -830,7 +830,7 @@ DeepFM **Admin API**는 메인 앱과 별도 서비스로 제공되며, **§16**
 | 경로 | 설명 |
 |------|------|
 | `api/main.py` | FastAPI 앱, CORS, 라우터 등록, `GET /health` |
-| `api/schemas.py` | TrainRequestDto, TrainResponseDto, ScoreBatchRequestDto/ResponseDto, ModelInfoDto, ModelsResponseDto, ActivateRequestDto/ResponseDto |
+| `api/schemas.py` | TrainRequestDto, TrainResponseDto, ModelInfoDto, ModelsResponseDto, ActivateRequestDto/ResponseDto |
 | `api/routers/deepfm.py` | `/admin/deepfm` 하위 엔드포인트 구현 |
 | `training_flow.py` | Prefect flow: 전처리 → 학습 → run_manifest·pipeline_version 산출 |
 | `model/`, `data/`, `utils/` | DeepFM 모델, 데이터셋, 전처리·score_batch·wandb 등 |
@@ -841,7 +841,7 @@ DeepFM **Admin API**는 메인 앱과 별도 서비스로 제공되며, **§16**
 | 메서드 | 경로 | 역할 |
 |--------|------|------|
 | POST | `/admin/deepfm/train` | 학습 트리거. Prefect `deepfm_training_flow` 동기 실행 → pipeline_version, model_path, run_manifest_path, metrics 반환 |
-| POST | `/admin/deepfm/score-batch` | 배치 스코어링. `pipeline_version`(또는 run_dir) + candidates_path → recommendation CSV 출력. DB INSERT는 호출 측(ETL) |
+| (batch) | `ml/deepfm_pipeline/scripts/score_batch_to_s3.py` | 배치 스코어링. `pipeline_version`(또는 run_dir) + candidates_path → 계약된 S3 recommendation CSV + `_SUCCESS`. DB INSERT는 API 서버 import |
 | GET | `/admin/deepfm/models` | output 하위 run 목록 + 현재 활성 `active_version` |
 | POST | `/admin/deepfm/activate` | 서빙용 pipeline_version 활성화 → `output/active_pipeline_version.txt` 기록 |
 
@@ -857,7 +857,7 @@ DeepFM **Admin API**는 메인 앱과 별도 서비스로 제공되며, **§16**
 
 ### 16.5 스코어링
 
-- **진입**: `POST /admin/deepfm/score-batch` (pipeline_version, candidates_path, output_path 필수; run_dir 없으면 pipeline_version으로 output 하위에서 run 디렉터리 탐색).
+- **진입**: 배치 잡/스크립트 실행 (`ml/deepfm_pipeline/scripts/score_batch_to_s3.py`).
 - **실행**: `utils.score_batch.run(run_dir, candidates_path, output_path, meta_path, ttl_hours, batch_size)` — run_dir에서 model.pt·feature_sizes 로드 후 배치 추론 → recommendation 형식 CSV 출력.
 - **recommendation 테이블 INSERT**는 API가 하지 않으며, ETL/DB 측에서 수행.
 

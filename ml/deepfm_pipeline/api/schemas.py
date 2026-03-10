@@ -50,34 +50,6 @@ class TrainResponseDto(BaseModel):
     run_manifest_path: str = Field(..., description="run_manifest.json 경로")
     metrics: dict[str, Any] | None = Field(None, description="오프라인 지표 (NDCG@K, AUC 등)")
 
-
-# ----- POST /admin/deepfm/score-batch -----
-class ScoreBatchRequestDto(BaseModel):
-    """배치 스코어링/추천 생성 트리거 요청."""
-
-    pipeline_version: str = Field(..., description="사용할 모델 pipeline_version (또는 run_dir에 해당하는 버전)")
-    run_dir: str | None = Field(None, description="run 디렉터리 경로. 없으면 pipeline_version으로 output 하위에서 탐색")
-    candidates_path: str = Field(..., description="후보 CSV 경로 (전처리된 feature 열)")
-    output_path: str | None = Field(
-        None,
-        description="선택. 로컬/파일 경로 또는 s3://bucket/key. 미지정 시 (env, dt)로 계약된 S3 경로 자동 생성",
-    )
-    env: str | None = Field(None, description="선택. dev/stg/prod (지정 시 tasteam-{env}-analytics 버킷으로 S3 저장)")
-    dt: str | None = Field(None, description="선택. YYYY-MM-DD. 미지정 시 UTC 오늘 날짜")
-    write_success_marker: bool = Field(True, description="S3 저장 시 _SUCCESS 마커 업로드 여부")
-    meta_path: str | None = Field(None, description="선택. user_id, anonymous_id, restaurant_id, context_snapshot 메타 CSV (호환: member_id도 허용)")
-    ttl_hours: float = Field(24.0, description="expires_at TTL(시간)")
-    batch_size: int = Field(256, description="추론 배치 크기")
-
-
-class ScoreBatchResponseDto(BaseModel):
-    """배치 스코어링 응답. recommendation INSERT는 호출 측(ETL/DB)에서 수행."""
-
-    pipeline_version: str
-    output_path: str
-    rows_written: int = Field(..., description="출력된 recommendation 행 수")
-
-
 # ----- GET /admin/deepfm/models -----
 class ModelInfoDto(BaseModel):
     """단일 모델(버전) 정보."""
