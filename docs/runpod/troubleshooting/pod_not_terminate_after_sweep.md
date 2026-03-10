@@ -1,3 +1,31 @@
+(env_ai) js@jinsoos-MacBook-Pro tasteam-new-async % python scripts/distill_flows.py sweep_eval_merge --labeled-path distill_pipeline_output/labeled/20260226_051037/train_labeled.json --out-dir distill_pipeline_output --num-pods 2
+
+20:47:17.062 | INFO    | prefect - Starting temporary server on http://127.0.0.1:8593
+See https://docs.prefect.io/v3/concepts/server#how-to-guides for more information on running a dedicated Prefect server.
+20:47:19.538 | INFO    | Flow run 'armored-bear' - Beginning flow run 'armored-bear' for flow 'sweep_eval_merge_flow'
+20:47:19.612 | INFO    | Flow run 'classic-aardwark' - Beginning subflow run 'classic-aardwark' for flow 'run_sweep_and_evaluate_flow'
+wandb: [wandb.login()] Loaded credentials for https://api.wandb.ai from WANDB_API_KEY.
+wandb: Currently logged in as: jin-soo (jin-soo-none) to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
+wandb: Tracking run with wandb version 0.25.0
+wandb: Run data is saved locally in /Users/js/tasteam-new-async/wandb/run-20260301_204720-pkwb9j13
+wandb: Run `wandb offline` to turn off syncing.
+wandb: Syncing run fanciful-wind-18
+wandb: ⭐️ View project at https://wandb.ai/jin-soo-none/tasteam-distill
+wandb: 🚀 View run at https://wandb.ai/jin-soo-none/tasteam-distill/runs/pkwb9j13
+wandb: 🚀 View run fanciful-wind-18 at: https://wandb.ai/jin-soo-none/tasteam-distill/runs/pkwb9j13
+wandb: ⭐️ View project at: https://wandb.ai/jin-soo-none/tasteam-distill
+wandb: Synced 4 W&B file(s), 0 media file(s), 0 artifact file(s) and 0 other file(s)
+wandb: Find logs at: ./wandb/run-20260301_204720-pkwb9j13/logs
+20:47:23.416 | INFO    | Task run 'ensure-wandb-project-task-86c' - Finished in state Completed()
+20:47:24.265 | INFO    | Task run 'register-sweep-task-ebc' - Create sweep with ID: ollyx0fg
+20:47:24.266 | INFO    | Task run 'register-sweep-task-ebc' - Sweep URL: https://wandb.ai/jin-soo-none/tasteam-distill/sweeps/ollyx0fg
+20:47:24.268 | INFO    | Task run 'register-sweep-task-ebc' - Finished in state Completed()
+20:47:32.018 | INFO    | Task run 'upload-labeled-to-volume-for-sweep-task-c17' - Finished in state Completed()
+
+여기서 프로세스가 대기 상황
+
+---
+
 현재 sweep pod이 utilization이 둘다 0인 상황. sweep은 끝남
 
 ---
