@@ -5,7 +5,7 @@ tasteam_deepfm_data.md + docs/data_designe + recommendation_techspec §스코어
 - 연속형: taste(4), visit_time(4), is_anonymous(1), pref_w_1~3(3) = 12개
   + 스코어 피처 6개(선호 카테고리, 가격대, 맛×긍정구간, 시간대×컨텍스트, 거리, 날씨; 암묵적 피드백 제외·라벨 누수 방지)
   + exp 10개: restaurant_popularity, restaurant_signal_count, restaurant_avg_weight, user_category_count, user_region_count, user_price_mean, user_category_match, user_region_match, price_diff, distance_weight = 28개
-- 범주형: user_id, anon_cohort_id, avg_price_tier, restaurant_id, primary_category,
+- 범주형: member_id, anon_cohort_id, avg_price_tier, restaurant_id, primary_category,
   pref_cat_1~3, price_tier, region_gu, region_dong, geohash, day_of_week, time_slot,
   admin_dong, distance_bucket, weather_bucket, dining_type, first_positive_segment,
   first_comparison_tag = 20개
@@ -34,9 +34,9 @@ CONTINUOUS_FEATURES = (
     CONTINUOUS_FEATURE_KEYS + VISIT_TIME_KEYS + ["is_anonymous"] + PREF_WEIGHT_KEYS
 )  # 12개
 
-# --- 범주형 피처 (user_id / anon_cohort_id 분리, preferred_categories Top-K) ---
+# --- 범주형 피처 (member_id / anon_cohort_id 분리, preferred_categories Top-K) ---
 CATEGORICAL_FEATURES = [
-    "user_id",
+    "member_id",
     "anon_cohort_id",
     "avg_price_tier",
     "restaurant_id",
@@ -168,10 +168,19 @@ def _get_first_comparison_tag(row: dict) -> str:
     return ""
 
 
+def _member_id_value(row: dict) -> Any:
+    """로그인 사용자 식별자. 우선 member_id, 없으면 기존 user_id도 허용(호환)."""
+    mid = row.get("member_id")
+    if mid is None or (isinstance(mid, float) and pd.isna(mid)):
+        mid = row.get("user_id")
+    return mid
+
+
 def _user_id_str(row: dict) -> str:
-    uid = row.get("user_id")
-    if uid is not None and str(uid).strip() != "":
-        return f"u_{uid}"
+    """호환을 위해 함수명은 유지. 내부적으로 member_id(또는 user_id)를 사용."""
+    mid = _member_id_value(row)
+    if mid is not None and str(mid).strip() != "":
+        return f"u_{mid}"
     return ""
 
 
@@ -183,17 +192,17 @@ def _anon_cohort_str(row: dict) -> str:
 
 
 def _is_anonymous(row: dict) -> float:
-    uid = row.get("user_id")
-    if uid is not None and str(uid).strip() != "":
+    mid = _member_id_value(row)
+    if mid is not None and str(mid).strip() != "":
         return 0.0
     return 1.0
 
 
 def _user_key_for_lookup(row: dict) -> str:
-    """user_id 또는 anonymous_id 기반 단일 키 (exp lookups용)."""
-    uid = row.get("user_id")
-    if uid is not None and str(uid).strip():
-        return f"u_{str(uid).strip()}"
+    """member_id(또는 user_id 호환) 또는 anonymous_id 기반 단일 키 (exp lookups용)."""
+    mid = _member_id_value(row)
+    if mid is not None and str(mid).strip():
+        return f"u_{str(mid).strip()}"
     aid = row.get("anonymous_id") or row.get("anonymous_cohort_id")
     if aid is not None and str(aid).strip():
         return f"a_{str(aid).strip()}"
@@ -629,7 +638,7 @@ def _add_negative_samples(
     for r in all_rows:
         if not _is_positive_row(r):
             continue
-        uid = str(r.get("user_id") or r.get("anonymous_id") or r.get("anonymous_cohort_id") or "").strip()
+        uid = str(_member_id_value(r) or r.get("anonymous_id") or r.get("anonymous_cohort_id") or "").strip()
         if not uid:
             uid = "_anon"
         rid = r.get("restaurant_id")
@@ -641,7 +650,7 @@ def _add_negative_samples(
     for row in rows:
         if not _is_positive_row(row):
             continue
-        uid = str(row.get("user_id") or row.get("anonymous_id") or row.get("anonymous_cohort_id") or "").strip()
+        uid = str(_member_id_value(row) or row.get("anonymous_id") or row.get("anonymous_cohort_id") or "").strip()
         if not uid:
             uid = "_anon"
         pos_set = user_positive.get(uid, set())
@@ -664,11 +673,11 @@ def _add_negative_samples(
 
 
 def _row_recommendation_id(row: dict) -> str:
-    """그룹 키: recommendation_id 또는 generated_at 또는 u_{user_id} / a_{aid} / single."""
+    """그룹 키: recommendation_id 또는 generated_at 또는 u_{member_id} / a_{aid} / single."""
     rec_id = row.get("recommendation_id") or row.get("generated_at")
     if rec_id is not None and str(rec_id).strip().lower() not in ("", "nan", "none"):
         return str(rec_id).strip()
-    uid = row.get("user_id")
+    uid = _member_id_value(row)
     aid = row.get("anonymous_id") or row.get("anonymous_cohort_id")
     if uid is not None and str(uid).strip().lower() not in ("", "nan", "none"):
         return f"u_{uid}"
@@ -902,7 +911,7 @@ def preprocess(
     train_restaurant_ids = set()
     restaurant_positive_counts: dict[str, int] = defaultdict(int)
     for row in train_rows:
-        uid = row.get("user_id")
+        uid = _member_id_value(row)
         if uid is not None and str(uid).strip():
             train_user_ids.add(str(uid))
         rid = row.get("restaurant_id")
@@ -916,7 +925,7 @@ def preprocess(
         "test_end": test_end,
         "time_column": time_column,
         "group_column": group_column,
-        "train_user_ids": list(train_user_ids),
+        "train_member_ids": list(train_user_ids),
         "train_restaurant_ids": list(train_restaurant_ids),
         "restaurant_positive_counts": dict(restaurant_positive_counts),
         "use_sample_weight": use_sample_weight,
@@ -938,7 +947,7 @@ def preprocess(
             if not _empty(rec_id):
                 rec_id = str(rec_id).strip()
             else:
-                uid = row.get("user_id")
+                uid = _member_id_value(row)
                 aid = row.get("anonymous_id") or row.get("anonymous_cohort_id")
                 if not _empty(uid):
                     rec_id = f"u_{uid}"
@@ -947,7 +956,7 @@ def preprocess(
                 else:
                     rec_id = "single"
             meta_rows.append({
-                "user_id": row.get("user_id") or "",
+                "member_id": _member_id_value(row) or "",
                 "restaurant_id": row.get("restaurant_id") or "",
                 "recommendation_id": rec_id,
             })

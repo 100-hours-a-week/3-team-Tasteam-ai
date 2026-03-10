@@ -27,7 +27,7 @@
 
 | 요구사항 | 상태 | 비고 |
 |----------|------|------|
-| **§2-1** user_id / anonymous_cohort_id 임베딩 | ✅ | 범주형 `user_id`, `anon_cohort_id` + 연속형 `is_anonymous`. |
+| **§2-1** member_id / anonymous_cohort_id 임베딩 | ✅ | 범주형 `member_id`, `anon_cohort_id` + 연속형 `is_anonymous`. |
 | preferred_categories weighted multi-hot | ⚠️ 부분 | 상위 K=3 슬롯(`pref_cat_1~3`, `pref_w_1~3`)으로 대체. |
 | taste_preferences, visit_time_distribution numeric/top1 | ✅ | 연속형 4+4. |
 | avg_price_tier categorical | ✅ | |
@@ -157,4 +157,4 @@ python -m utils.score_batch \
   --ttl-hours 24
 ```
 
-후보 CSV는 전처리와 동일한 컬럼 순서(연속+범주 인덱스, 32열). meta CSV는 user_id, anonymous_id, restaurant_id, context_snapshot.
+후보 CSV는 전처리와 동일한 컬럼 순서(연속+범주 인덱스, 32열). meta CSV는 member_id, anonymous_id, restaurant_id, context_snapshot.

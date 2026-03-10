@@ -32,7 +32,7 @@
 
 ## 2-1. User fields
 
-* 로그인: `user_id` 임베딩 (nullable) 
+* 로그인: `member_id` 임베딩 (nullable) 
 * 익명: `anonymous_cohort_id` 임베딩 (user_feature에 존재, unique 인덱스도 있음)  
 * JSONB:
 
@@ -144,7 +144,7 @@
 
 **매일/몇 시간 단위 배치**로:
 
-1. 대상 사용자 리스트(로그인 user_id + 익명 cohort) 수집 
+1. 대상 사용자 리스트(로그인 member_id + 익명 cohort) 수집
 2. 후보 음식점 생성(지역/가격대/카테고리 필터 + 간단 인기 기반)
 3. (user,item,context) 조합에 대해 DeepFM score 예측
 4. TopN 저장 → `recommendation` row insert

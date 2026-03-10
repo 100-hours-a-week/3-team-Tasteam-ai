@@ -246,9 +246,9 @@
 전처리 스크립트가 기대하는 컬럼 예시 (tasteam_deepfm_data.md / dataPreprocess 기준).
 
 ```csv
-user_id,anonymous_id,restaurant_id,taste_preferences,visit_time_distribution,is_anonymous,avg_price_tier,primary_category,pref_cat_1,pref_cat_2,pref_cat_3,price_tier,region_gu,region_dong,geohash,day_of_week,time_slot,admin_dong,distance_bucket,weather_bucket,dining_type,first_positive_segment,first_comparison_tag,pref_w_1,pref_w_2,pref_w_3,signal_type,generated_at,recommendation_id
-user_001,,rest_101,"{""spicy"":0.2,""sweet"":0.5}","{""breakfast"":0.1,""lunch"":0.6}",0,2,한식,한식,중식,,강남구,역삼동,wydm7,,lunch,,,1,2,1,,0.5,0.3,0.2,REVIEW,2026-02-27T10:00:00,rec_001
-a_anon_002,anon_002,rest_202,"{""spicy"":0.8}","{""dinner"":0.9}",1,1,중식,중식,,,1,서초구,서초동,wydm6,,dinner,,,2,1,0,,0.6,0.2,0.2,CLICK,2026-02-27T11:00:00,
+member_id,anonymous_id,restaurant_id,taste_preferences,visit_time_distribution,is_anonymous,avg_price_tier,primary_category,pref_cat_1,pref_cat_2,pref_cat_3,price_tier,region_gu,region_dong,geohash,day_of_week,time_slot,admin_dong,distance_bucket,weather_bucket,dining_type,first_positive_segment,first_comparison_tag,pref_w_1,pref_w_2,pref_w_3,signal_type,generated_at,recommendation_id
+1001,,rest_101,"{""spicy"":0.2,""sweet"":0.5}","{""breakfast"":0.1,""lunch"":0.6}",0,2,한식,한식,중식,,강남구,역삼동,wydm7,,lunch,,,1,2,1,,0.5,0.3,0.2,REVIEW,2026-02-27T10:00:00,rec_001
+,anon_002,rest_202,"{""spicy"":0.8}","{""dinner"":0.9}",1,1,중식,중식,,,1,서초구,서초동,wydm6,,dinner,,,2,1,0,,0.6,0.2,0.2,CLICK,2026-02-27T11:00:00,
 ```
 
 - 실제 컬럼 집합은 파이프라인/전처리 스키마에 따라 다를 수 있음.  
@@ -274,16 +274,16 @@ a_anon_002,anon_002,rest_202,"{""spicy"":0.8}","{""dinner"":0.9}",1,1,중식,중
 
 ### 스코어링 입력: 메타 CSV (meta_path, 선택)
 
-후보별 user_id, anonymous_id, restaurant_id, context_snapshot. **행 순서는 candidates_path와 동일.**
+후보별 member_id, anonymous_id, restaurant_id, context_snapshot. **행 순서는 candidates_path와 동일.**
 
 ```csv
-user_id,anonymous_id,restaurant_id,context_snapshot
-user_001,,rest_101,{}
-a_anon_002,anon_002,rest_202,"{""lat"":37.5,""lng"":127.0}"
+member_id,anonymous_id,restaurant_id,context_snapshot
+1001,,rest_101,{}
+,anon_002,rest_202,"{""lat"":37.5,""lng"":127.0}"
 ,anon_003,rest_303,{}
 ```
 
-- `user_id`·`anonymous_id` 비어 있으면 anonymous_id로 그룹핑.  
+- `member_id`·`anonymous_id` 비어 있으면 anonymous_id로 그룹핑.  
 - `context_snapshot`은 JSON 문자열 또는 빈 값/`{}`.
 
 ---
@@ -293,14 +293,14 @@ a_anon_002,anon_002,rest_202,"{""lat"":37.5,""lng"":127.0}"
 배치 스코어링 응답으로 쓰이는 CSV(S3에 저장). DB recommendation 테이블 INSERT는 호출 측(ETL)에서 수행.
 
 ```csv
-user_id,anonymous_id,restaurant_id,score,rank,context_snapshot,pipeline_version,generated_at,expires_at
-user_001,,rest_101,0.892,1,{},deepfm-1.0.20260227120000,2026-02-27T14:00:00.000000+00:00,2026-02-28T14:00:00.000000+00:00
-user_001,,rest_205,0.654,2,{},deepfm-1.0.20260227120000,2026-02-27T14:00:00.000000+00:00,2026-02-28T14:00:00.000000+00:00
-a_anon_002,anon_002,rest_202,0.771,1,"{""lat"":37.5,""lng"":127.0}",deepfm-1.0.20260227120000,2026-02-27T14:00:00.000000+00:00,2026-02-28T14:00:00.000000+00:00
+member_id,anonymous_id,restaurant_id,score,rank,context_snapshot,pipeline_version,generated_at,expires_at
+1001,,rest_101,0.892,1,{},deepfm-1.0.20260227120000,2026-02-27T14:00:00.000000+00:00,2026-02-28T14:00:00.000000+00:00
+1001,,rest_205,0.654,2,{},deepfm-1.0.20260227120000,2026-02-27T14:00:00.000000+00:00,2026-02-28T14:00:00.000000+00:00
+,anon_002,rest_202,0.771,1,"{""lat"":37.5,""lng"":127.0}",deepfm-1.0.20260227120000,2026-02-27T14:00:00.000000+00:00,2026-02-28T14:00:00.000000+00:00
 ,anon_003,rest_303,0.543,1,{},deepfm-1.0.20260227120000,2026-02-27T14:00:00.000000+00:00,2026-02-28T14:00:00.000000+00:00
 ```
 
-- `rank`: (user_id 또는 anonymous_id 기준) 그룹 내 점수 순위.  
+- `rank`: (member_id 또는 anonymous_id 기준) 그룹 내 점수 순위.  
 - `generated_at` / `expires_at`: ISO 8601. `expires_at` = generated_at + ttl_hours.
 
 ---

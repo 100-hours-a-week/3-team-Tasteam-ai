@@ -90,7 +90,7 @@ def run_evaluation(
     if split_meta_path.exists():
         with open(split_meta_path, encoding="utf-8") as f:
             split_meta = json.load(f)
-    train_user_ids = set(split_meta.get("train_user_ids", []))
+    train_user_ids = set(split_meta.get("train_member_ids") or split_meta.get("train_user_ids", []))
     train_restaurant_ids = set(split_meta.get("train_restaurant_ids", []))
 
     device = torch.device("cuda" if use_cuda and torch.cuda.is_available() else "cpu")
@@ -206,7 +206,7 @@ def run_evaluation(
             group_weights[f"recall@{k}"].append(gw)
 
         if meta is not None and len(meta) == len(y_true):
-            u = str(meta.iloc[idx[0]].get("user_id", ""))
+            u = str(meta.iloc[idx[0]].get("member_id", meta.iloc[idx[0]].get("user_id", "")))
             r = str(meta.iloc[idx[0]].get("restaurant_id", ""))
             in_train_user = u in train_user_ids
             in_train_item = r in train_restaurant_ids

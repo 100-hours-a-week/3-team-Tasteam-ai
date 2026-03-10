@@ -59,7 +59,7 @@ class ScoreBatchRequestDto(BaseModel):
     run_dir: str | None = Field(None, description="run 디렉터리 경로. 없으면 pipeline_version으로 output 하위에서 탐색")
     candidates_path: str = Field(..., description="후보 CSV 경로 (전처리된 feature 열)")
     output_path: str = Field(..., description="recommendation 형식 CSV 출력 경로")
-    meta_path: str | None = Field(None, description="선택. user_id, anonymous_id, restaurant_id, context_snapshot 메타 CSV")
+    meta_path: str | None = Field(None, description="선택. member_id, anonymous_id, restaurant_id, context_snapshot 메타 CSV")
     ttl_hours: float = Field(24.0, description="expires_at TTL(시간)")
     batch_size: int = Field(256, description="추론 배치 크기")
 
