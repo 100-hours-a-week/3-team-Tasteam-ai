@@ -500,6 +500,61 @@ def _save_categorical_dicts(dicts: list[dict[str, int]], path: str) -> None:
         json.dump([dict(d) for d in dicts], f, ensure_ascii=False)
 
 
+def _serialize_exp_lookups(lookups: dict[str, Any]) -> dict[str, Any]:
+    """tuple 키를 JSON 호환 키로 변환 (리스트를 JSON 문자열로)."""
+    out = {}
+    for k, v in lookups.items():
+        if k == "user_category_count":
+            out[k] = {json.dumps([a, b], ensure_ascii=False): c for (a, b), c in v.items()}
+        elif k == "user_region_count":
+            out[k] = {json.dumps([a, b], ensure_ascii=False): c for (a, b), c in v.items()}
+        else:
+            out[k] = v
+    return out
+
+
+def _deserialize_exp_lookups(data: dict[str, Any]) -> dict[str, Any]:
+    """저장된 키를 tuple 키로 복원."""
+    out = {}
+    for k, v in data.items():
+        if k == "user_category_count" and isinstance(v, dict):
+            out[k] = {tuple(json.loads(s)): c for s, c in v.items()}
+        elif k == "user_region_count" and isinstance(v, dict):
+            out[k] = {tuple(json.loads(s)): c for s, c in v.items()}
+        else:
+            out[k] = v
+    return out
+
+
+def _save_exp_lookups(
+    lookups: dict[str, Any],
+    exp_ablation: list[str] | None,
+    path: str,
+) -> None:
+    """exp lookups + exp_ablation을 JSON으로 저장."""
+    payload = {
+        "exp_ablation": exp_ablation,
+        "lookups": _serialize_exp_lookups(lookups),
+    }
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False)
+
+
+def load_exp_lookups(run_dir: str | Path) -> tuple[dict[str, Any], list[str] | None] | None:
+    """
+    run_dir에서 exp_lookups.json 로드.
+    반환: (lookups, exp_ablation) 또는 없으면 None.
+    """
+    path = Path(run_dir) / "exp_lookups.json"
+    if not path.exists():
+        return None
+    with open(path, encoding="utf-8") as f:
+        payload = json.load(f)
+    lookups = _deserialize_exp_lookups(payload.get("lookups", {}))
+    exp_ablation = payload.get("exp_ablation")
+    return lookups, exp_ablation
+
+
 def load_categorical_dicts(run_dir: str | Path) -> CategoryDictGenerator | None:
     """
     run 디렉터리(또는 processed_data_dir)에서 categorical_dicts.json 로드.
@@ -537,8 +592,8 @@ def raw_rows_to_feature_matrix(
     run_dir: str | Path,
 ) -> list[list[float]]:
     """
-    raw 행 리스트를 run_dir의 vocab으로 학습 시와 동일한 feature 벡터로 변환.
-    - 연속형: _extract_continuous(row) (18) + exp 10개는 0으로 채움(학습 시 lookups 없음).
+    raw 행 리스트를 run_dir의 vocab·exp_lookups로 학습 시와 동일한 feature 벡터로 변환.
+    - 연속형: _extract_continuous(row) (18) + exp는 exp_lookups.json 있으면 _extract_exp_features, 없으면 0.
     - 범주형: load_categorical_dicts(run_dir)로 인코딩.
     categorical_dicts.json이 없으면 ValueError.
     """
@@ -547,11 +602,18 @@ def raw_rows_to_feature_matrix(
         raise ValueError(f"categorical_dicts.json not found in run_dir: {run_dir}")
     n_cont = _n_continuous_from_run_dir(run_dir)
     n_cont_from_row = len(CONTINUOUS_FEATURES) + NUM_SCORING_FEATURES  # 18
-    n_exp_pad = max(0, n_cont - n_cont_from_row)  # 10
+    n_exp = max(0, n_cont - n_cont_from_row)
     n_cat = len(CATEGORICAL_FEATURES)
+    exp_loaded = load_exp_lookups(run_dir)
     out = []
     for row in raw_rows:
-        cont = _extract_continuous(row) + [0.0] * n_exp_pad
+        cont_base = _extract_continuous(row)
+        if exp_loaded is not None:
+            lookups, exp_ablation = exp_loaded
+            exp_vals = _extract_exp_features(row, lookups, include_names=exp_ablation)
+            cont = cont_base + exp_vals
+        else:
+            cont = cont_base + [0.0] * n_exp
         cat_vals = _extract_categorical(row)
         cat_idx = [float(dicts.gen(i, cat_vals[i])) for i in range(n_cat)]
         out.append(cont + cat_idx)
@@ -949,6 +1011,7 @@ def preprocess(
     _save_categorical_dicts(dicts.dicts, os.path.join(outdir, "categorical_dicts.json"))
 
     exp_lookups = build_exp_lookups(train_rows)
+    _save_exp_lookups(exp_lookups, exp_ablation, os.path.join(outdir, "exp_lookups.json"))
 
     def write_rows(rows: list[dict], path: str, include_sw: bool) -> None:
         with open(os.path.join(outdir, path), "w") as f:

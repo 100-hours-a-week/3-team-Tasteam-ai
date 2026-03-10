@@ -269,10 +269,13 @@ def train_task(
     torch.save(model.state_dict(), model_path)
     meta_path = out_run / "feature_sizes.txt"
     np.savetxt(str(meta_path), feature_sizes, fmt="%d", delimiter=",")
-    # 범주형 vocab 복사(추론 시 raw→feature 인코딩용)
+    # 범주형 vocab·exp lookups 복사(추론 시 raw→feature 인코딩용)
     _src = data_path / "categorical_dicts.json"
     if _src.exists():
         shutil.copy2(_src, out_run / "categorical_dicts.json")
+    _exp_src = data_path / "exp_lookups.json"
+    if _exp_src.exists():
+        shutil.copy2(_exp_src, out_run / "exp_lookups.json")
     print(f"Model saved: {model_path}, pipeline_version: {pipeline_version}")
 
     # §6-2: 오프라인 지표 산출(NDCG@K / Recall@K / AUC) + popularity baseline 기록
