@@ -1,0 +1,7 @@
+# DeepFM 추론 전용 (score_batch, score_batch_to_s3)
+# 학습용(prefect 등) 제외로 이미지 경량화
+
+torch>=2.0.0
+numpy>=1.24.0
+pandas>=2.0.0
+boto3>=1.28.0

@@ -1,0 +1,31 @@
+# DeepFM 추론용 이미지 (score_batch / score_batch_to_s3)
+# 빌드: docker build -f Dockerfile.inference -t deepfm-inference .
+#
+# 사용 예 (로컬 CSV → CSV):
+#   docker run --rm -v /path/to/run:/model -v /path/to/candidates:/data deepfm-inference \
+#     --run-dir /model --candidates /data/candidates.csv --out /data/recommendations.csv
+#
+# 사용 예 (S3 업로드, score_batch_to_s3): --entrypoint 로 실행 파일만 바꿈
+#   docker run --rm -v /path/to/run:/model -v /path/to/candidates:/data \
+#     -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION \
+#     --entrypoint python deepfm-inference scripts/score_batch_to_s3.py \
+#       --pipeline-version deepfm-1.0.xxx --run-dir /model \
+#       --candidates-path /data/candidates.csv --env dev
+
+FROM python:3.11-slim
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements-inference.txt .
+RUN pip install --no-cache-dir -r requirements-inference.txt
+
+COPY . .
+
+ENV PYTHONPATH=/app
+
+# 기본: score_batch. 인자만 넘기면 됨 (--run-dir, --candidates/--raw-candidates, --out 등)
+ENTRYPOINT ["python", "-m", "utils.score_batch"]
