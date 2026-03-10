@@ -27,6 +27,7 @@ if str(_ROOT) not in sys.path:
 
 from data.dataset import _get_continuous_feature_count
 from model.DeepFM import DeepFM
+from utils.dataPreprocess import raw_rows_to_feature_matrix
 
 
 def load_run(run_dir: Path) -> tuple[DeepFM, list[int], str]:
@@ -74,28 +75,44 @@ def run(
     candidates_path: str | Path,
     output_path: str | Path,
     meta_path: str | Path | None = None,
+    raw_candidates_path: str | Path | None = None,
     ttl_hours: float = 24.0,
     batch_size: int = 256,
 ) -> None:
     """
     후보에 대해 DeepFM 점수 예측 → (user/anon, restaurant)별 rank 부여 → recommendation 형식 CSV 출력.
 
-    - candidates_path: CSV, 컬럼 수 = feature_sizes 개수 (연속+범주 인덱스만, 헤더 없음 또는 있음)
-    - meta_path: CSV, 컬럼 user_id, anonymous_id, restaurant_id, context_snapshot (선택). 행 순서는 candidates와 동일.
-      (호환) meta_path에 member_id만 있으면 user_id로 간주.
-    - output_path: recommendation 행 저장 (user_id, anonymous_id, restaurant_id, score, rank, context_snapshot, pipeline_version, generated_at, expires_at)
+    - candidates_path: CSV, 컬럼 수 = feature_sizes 개수 (연속+범주 인덱스만, 헤더 없음 또는 있음).
+      raw_candidates_path가 있으면 무시됨.
+    - raw_candidates_path: (선택) 전처리 전 raw CSV 경로. run_dir의 categorical_dicts.json으로 인코딩 후 추론.
+      지정 시 meta는 raw CSV의 member_id/user_id, anonymous_id, restaurant_id에서 추출.
+    - meta_path: CSV, 컬럼 user_id, anonymous_id, restaurant_id, context_snapshot (선택). raw_candidates_path 미사용 시만 사용.
+    - output_path: recommendation 행 저장 (user_id, anonymous_id, restaurant_id, score, rank, ...)
     """
     run_dir = Path(run_dir)
-    candidates_path = Path(candidates_path)
     output_path = Path(output_path)
     model, feature_sizes, pipeline_version = load_run(run_dir)
     n_cont = _get_continuous_feature_count(str(run_dir))
     n_fields = len(feature_sizes)
 
-    df = pd.read_csv(candidates_path)
-    if df.shape[1] != n_fields:
-        raise ValueError(f"Candidates have {df.shape[1]} columns, expected {n_fields} (feature_sizes)")
-    X = df.values.astype(np.float32)
+    if raw_candidates_path is not None:
+        raw_path = Path(raw_candidates_path)
+        if not raw_path.exists():
+            raise FileNotFoundError(f"raw_candidates_path not found: {raw_path}")
+        raw_df = pd.read_csv(raw_path)
+        raw_rows = raw_df.to_dict("records")
+        feature_rows = raw_rows_to_feature_matrix(raw_rows, run_dir)
+        X = np.array(feature_rows, dtype=np.float32)
+        if X.shape[1] != n_fields:
+            raise ValueError(f"Raw→feature columns {X.shape[1]}, expected {n_fields} (feature_sizes)")
+        meta_from_raw = True
+    else:
+        candidates_path = Path(candidates_path)
+        df = pd.read_csv(candidates_path)
+        if df.shape[1] != n_fields:
+            raise ValueError(f"Candidates have {df.shape[1]} columns, expected {n_fields} (feature_sizes)")
+        X = df.values.astype(np.float32)
+        meta_from_raw = False
 
     scores = score_candidates(model, feature_sizes, X, n_cont, batch_size=batch_size)
 
@@ -104,7 +121,12 @@ def run(
     gen_ts = generated_at.isoformat()
     exp_ts = expires_at.isoformat()
 
-    if meta_path and Path(meta_path).exists():
+    if meta_from_raw:
+        user_id = raw_df.get("user_id", raw_df.get("member_id", pd.Series([""] * len(raw_df))))
+        anonymous_id = raw_df.get("anonymous_id", pd.Series([""] * len(raw_df)))
+        restaurant_id = raw_df["restaurant_id"] if "restaurant_id" in raw_df.columns else list(range(len(scores)))
+        context_snapshot = raw_df.get("context_snapshot", pd.Series(["{}"] * len(raw_df)))
+    elif meta_path and Path(meta_path).exists():
         meta = pd.read_csv(meta_path)
         if len(meta) != len(scores):
             raise ValueError(f"Meta rows {len(meta)} != candidate rows {len(scores)}")
@@ -151,18 +173,22 @@ def run(
 
 def main() -> None:
     p = argparse.ArgumentParser(description="DeepFM batch scoring → recommendation CSV (§6-3)")
-    p.add_argument("--run-dir", type=str, required=True, help="Run directory (model.pt, feature_sizes.txt, pipeline_version.txt)")
-    p.add_argument("--candidates", type=str, required=True, help="Candidates CSV (preprocessed feature columns)")
-    p.add_argument("--meta", type=str, default=None, help="Optional meta CSV: user_id, anonymous_id, restaurant_id, context_snapshot")
+    p.add_argument("--run-dir", type=str, required=True, help="Run directory (model.pt, feature_sizes.txt, categorical_dicts.json, pipeline_version.txt)")
+    p.add_argument("--candidates", type=str, default=None, help="Candidates CSV (preprocessed feature columns). --raw-candidates 사용 시 생략 가능.")
+    p.add_argument("--raw-candidates", type=str, default=None, help="Raw CSV 경로. run_dir의 vocab으로 인코딩 후 추론. meta는 raw CSV 컬럼에서 추출.")
+    p.add_argument("--meta", type=str, default=None, help="Optional meta CSV: user_id, anonymous_id, restaurant_id (--raw-candidates 미사용 시)")
     p.add_argument("--out", type=str, required=True, help="Output recommendation CSV path")
     p.add_argument("--ttl-hours", type=float, default=24.0, help="TTL hours for expires_at")
     p.add_argument("--batch-size", type=int, default=256)
     args = p.parse_args()
+    if not args.candidates and not args.raw_candidates:
+        p.error("One of --candidates or --raw-candidates is required")
     run(
         run_dir=args.run_dir,
-        candidates_path=args.candidates,
+        candidates_path=args.candidates or "",
         output_path=args.out,
         meta_path=args.meta,
+        raw_candidates_path=args.raw_candidates,
         ttl_hours=args.ttl_hours,
         batch_size=args.batch_size,
     )

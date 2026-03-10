@@ -494,6 +494,70 @@ class CategoryDictGenerator:
         return [len(self.dicts[i]) for i in range(self.num_feature)]
 
 
+def _save_categorical_dicts(dicts: list[dict[str, int]], path: str) -> None:
+    """범주형 필드별 vocab(문자열→인덱스)를 JSON으로 저장."""
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump([dict(d) for d in dicts], f, ensure_ascii=False)
+
+
+def load_categorical_dicts(run_dir: str | Path) -> CategoryDictGenerator | None:
+    """
+    run 디렉터리(또는 processed_data_dir)에서 categorical_dicts.json 로드.
+    추론 시 raw CSV를 같은 인코딩으로 변환할 때 사용. 없으면 None.
+    """
+    path = Path(run_dir) / "categorical_dicts.json"
+    if not path.exists():
+        return None
+    with open(path, encoding="utf-8") as f:
+        raw = json.load(f)
+    num_feature = len(raw)
+    gen = CategoryDictGenerator(num_feature)
+    gen.dicts = [dict(x) for x in raw]
+    return gen
+
+
+def _n_continuous_from_run_dir(run_dir: str | Path) -> int:
+    """feature_sizes.txt에서 연속형 필드 개수(선두 1의 개수) 반환."""
+    path = Path(run_dir) / "feature_sizes.txt"
+    if not path.exists():
+        return len(CONTINUOUS_FEATURES) + NUM_SCORING_FEATURES + NUM_EXP_FEATURES
+    line = path.read_text(encoding="utf-8").strip()
+    sizes = [int(x.strip()) for x in line.split(",") if x.strip()]
+    n = 0
+    for s in sizes:
+        if s == 1:
+            n += 1
+        else:
+            break
+    return n if n > 0 else (len(CONTINUOUS_FEATURES) + NUM_SCORING_FEATURES + NUM_EXP_FEATURES)
+
+
+def raw_rows_to_feature_matrix(
+    raw_rows: list[dict],
+    run_dir: str | Path,
+) -> list[list[float]]:
+    """
+    raw 행 리스트를 run_dir의 vocab으로 학습 시와 동일한 feature 벡터로 변환.
+    - 연속형: _extract_continuous(row) (18) + exp 10개는 0으로 채움(학습 시 lookups 없음).
+    - 범주형: load_categorical_dicts(run_dir)로 인코딩.
+    categorical_dicts.json이 없으면 ValueError.
+    """
+    dicts = load_categorical_dicts(run_dir)
+    if dicts is None:
+        raise ValueError(f"categorical_dicts.json not found in run_dir: {run_dir}")
+    n_cont = _n_continuous_from_run_dir(run_dir)
+    n_cont_from_row = len(CONTINUOUS_FEATURES) + NUM_SCORING_FEATURES  # 18
+    n_exp_pad = max(0, n_cont - n_cont_from_row)  # 10
+    n_cat = len(CATEGORICAL_FEATURES)
+    out = []
+    for row in raw_rows:
+        cont = _extract_continuous(row) + [0.0] * n_exp_pad
+        cat_vals = _extract_categorical(row)
+        cat_idx = [float(dicts.gen(i, cat_vals[i])) for i in range(n_cat)]
+        out.append(cont + cat_idx)
+    return out
+
+
 def _label_from_row(row: dict) -> str:
     """
     implicit_feedback 유무로 0/1 라벨.
@@ -880,6 +944,9 @@ def preprocess(
     sizes = [1] * (len(CONTINUOUS_FEATURES) + NUM_SCORING_FEATURES + num_exp) + dict_sizes
     with open(os.path.join(outdir, "feature_sizes.txt"), "w") as f:
         f.write(",".join(map(str, sizes)))
+
+    # 범주형 vocab(문자열→인덱스) 저장. 추론 시 raw→feature 인코딩 재사용용.
+    _save_categorical_dicts(dicts.dicts, os.path.join(outdir, "categorical_dicts.json"))
 
     exp_lookups = build_exp_lookups(train_rows)
 
