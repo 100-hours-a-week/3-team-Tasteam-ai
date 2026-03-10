@@ -1,16 +1,13 @@
 # DeepFM 추론용 이미지 (score_batch / score_batch_to_s3)
 # 빌드: docker build -f Dockerfile.inference -t deepfm-inference .
 #
-# 사용 예 (로컬 CSV → CSV):
-#   docker run --rm -v /path/to/run:/model -v /path/to/candidates:/data deepfm-inference \
-#     --run-dir /model --candidates /data/candidates.csv --out /data/recommendations.csv
+# 기본 흐름: S3 폴링(_SUCCESS 기준) → Raw 다운로드 → 파이프라인 CSV 변환 → score_batch --raw-candidates
+# 환경변수: S3_ENV 또는 S3_BUCKET, RUN_DIR(/model), OUT_PATH(/data/recommendations.csv)
+#           SKIP_S3_POLL=1 이면 다운로드/변환 생략, CANDIDATES_CSV 또는 인자로 후보 전달
 #
-# 사용 예 (S3 업로드, score_batch_to_s3): --entrypoint 로 실행 파일만 바꿈
-#   docker run --rm -v /path/to/run:/model -v /path/to/candidates:/data \
-#     -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION \
-#     --entrypoint python deepfm-inference scripts/score_batch_to_s3.py \
-#       --pipeline-version deepfm-1.0.xxx --run-dir /model \
-#       --candidates-path /data/candidates.csv --env dev
+# 사용 예 (S3 → 추론): docker run --rm -e S3_ENV=dev -v /path/to/run:/model -v /path/to/data:/data ...
+# 사용 예 (로컬만): docker run --rm -e SKIP_S3_POLL=1 -e CANDIDATES_CSV=/data/cand.csv -v ... --run-dir /model --out /data/out.csv
+# S3 업로드: --entrypoint python deepfm-inference scripts/score_batch_to_s3.py ...
 
 FROM python:3.11-slim
 
@@ -24,8 +21,9 @@ COPY requirements-inference.txt .
 RUN pip install --no-cache-dir -r requirements-inference.txt
 
 COPY . .
+RUN chmod +x scripts/entrypoint_inference.sh
 
 ENV PYTHONPATH=/app
 
-# 기본: score_batch. 인자만 넘기면 됨 (--run-dir, --candidates/--raw-candidates, --out 등)
-ENTRYPOINT ["python", "-m", "utils.score_batch"]
+ENTRYPOINT ["/app/scripts/entrypoint_inference.sh"]
+CMD []
