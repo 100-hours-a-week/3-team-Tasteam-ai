@@ -91,67 +91,52 @@
 
 ---
 
-## 2) POST /admin/deepfm/score-batch
+## 2) (폴링) 추천 결과 생성/적재 계약
 
-배치 스코어링/추천 생성 트리거. recommendation 형식 CSV 출력.  
-**recommendation 테이블 INSERT는 호출 측(ETL/DB)에서 수행.**
+본 시스템에서 추천 결과 생성 트리거는 **HTTP POST가 아니라 S3 폴링 기반**이다.  
+AI 서버는 배치로 추천 결과를 생성하여 **S3에 결과 파일 + 완료 마커(`_SUCCESS`)** 를 저장하고, API 서버는 S3를 **polling** 하여 DB로 import 한다.
 
-### Request body (JSON)
+> 단일 문서 기준: `ml/deepfm_pipeline/docs/service_extraction/service_constract.md`의 **§5 추천 결과 계약**, **§6 추천 결과 Import 계약**을 따른다.
 
-| 필드 | 타입 | 필수 | 기본값 | 설명 |
-|------|------|------|--------|------|
-| `pipeline_version` | string | O | - | 사용할 모델 버전 |
-| `run_dir` | string \| null | - | null | run 디렉터리 S3 URL. 없으면 pipeline_version으로 output 하위에서 탐색 |
-| `candidates_path` | string | O | - | 후보 CSV S3 URL (전처리된 feature 열) |
-| `output_path` | string | O | - | recommendation CSV 출력 S3 URL |
-| `meta_path` | string \| null | - | null | user_id, anonymous_id, restaurant_id, context_snapshot 메타 CSV S3 URL |
-| `ttl_hours` | number | - | 24 | expires_at TTL(시간) |
-| `batch_size` | integer | - | 256 | 추론 배치 크기 |
+### 2-1) AI 서버 → S3 (추천 결과 저장)
 
-### Response (200)
+- **Bucket**: `tasteam-{env}-analytics` (`env` = `dev`/`stg`/`prod`)
+- **Prefix / 경로 규칙**
 
-| 필드 | 타입 | 설명 |
-|------|------|------|
-| `pipeline_version` | string | 사용된 pipeline_version |
-| `output_path` | string | 출력 CSV S3 URL |
-| `rows_written` | integer | 출력된 recommendation 행 수 |
-
-### 입출력 예시
-
-**Request:**
-```json
-{
-  "pipeline_version": "deepfm-1.0.20260227120000",
-  "candidates_path": "s3://my-bucket/deepfm/candidates.csv",
-  "output_path": "s3://my-bucket/deepfm/recommendations.csv",
-  "meta_path": "s3://my-bucket/deepfm/candidates_meta.csv",
-  "ttl_hours": 24,
-  "batch_size": 256
-}
+```
+s3://tasteam-{env}-analytics/
+  recommendations/
+    pipeline_version=VERSION/
+      dt=YYYY-MM-DD/
+        part-00001.csv
+        _SUCCESS
 ```
 
-**Request (meta_path 생략):**
-```json
-{
-  "pipeline_version": "deepfm-1.0.20260227120000",
-  "candidates_path": "s3://my-bucket/deepfm/candidates.csv",
-  "output_path": "s3://my-bucket/deepfm/recommendations.csv"
-}
-```
+- **추천 결과 CSV 스키마**
+  - `user_id` (nullable)
+  - `anonymous_id` (nullable)
+  - `restaurant_id`
+  - `score`
+  - `rank` (1-indexed)
+  - `context_snapshot`
+  - `pipeline_version`
+  - `generated_at` (ISO-8601)
+  - `expires_at` (ISO-8601, 기본 24h TTL)
 
-**Response (200):**
-```json
-{
-  "pipeline_version": "deepfm-1.0.20260227120000",
-  "output_path": "s3://my-bucket/deepfm/recommendations.csv",
-  "rows_written": 15230
-}
-```
+### 2-2) API 서버 → S3 polling → DB import
 
-### Error
+API 서버는 아래 절차로 신규 결과를 탐색/적재한다.
 
-- **404**: run_dir/pipeline_version에 해당하는 run 없음, 또는 candidates_path 없음
-- **500**: 스코어링 중 예외
+1. `recommendations/` prefix를 polling
+2. 새로운 `(pipeline_version, dt)` 탐색
+3. `_SUCCESS` 존재 확인
+4. `part-*.csv` 다운로드 및 파싱
+5. DB에 insert (추천 조회는 ACTIVE pipeline_version만)
+
+### 2-3) 참고 (운영)
+
+- `_SUCCESS`는 **`part-00001.csv` 업로드가 성공한 뒤** 생성되어야 한다.
+- `dt`는 보통 `generated_at`의 UTC 날짜를 사용한다.
 
 ---
 
@@ -247,8 +232,8 @@
 
 ```csv
 user_id,anonymous_id,restaurant_id,taste_preferences,visit_time_distribution,is_anonymous,avg_price_tier,primary_category,pref_cat_1,pref_cat_2,pref_cat_3,price_tier,region_gu,region_dong,geohash,day_of_week,time_slot,admin_dong,distance_bucket,weather_bucket,dining_type,first_positive_segment,first_comparison_tag,pref_w_1,pref_w_2,pref_w_3,signal_type,generated_at,recommendation_id
-user_001,,rest_101,"{""spicy"":0.2,""sweet"":0.5}","{""breakfast"":0.1,""lunch"":0.6}",0,2,한식,한식,중식,,강남구,역삼동,wydm7,,lunch,,,1,2,1,,0.5,0.3,0.2,REVIEW,2026-02-27T10:00:00,rec_001
-a_anon_002,anon_002,rest_202,"{""spicy"":0.8}","{""dinner"":0.9}",1,1,중식,중식,,,1,서초구,서초동,wydm6,,dinner,,,2,1,0,,0.6,0.2,0.2,CLICK,2026-02-27T11:00:00,
+1001,,rest_101,"{""spicy"":0.2,""sweet"":0.5}","{""breakfast"":0.1,""lunch"":0.6}",0,2,한식,한식,중식,,강남구,역삼동,wydm7,,lunch,,,1,2,1,,0.5,0.3,0.2,REVIEW,2026-02-27T10:00:00,rec_001
+,anon_002,rest_202,"{""spicy"":0.8}","{""dinner"":0.9}",1,1,중식,중식,,,1,서초구,서초동,wydm6,,dinner,,,2,1,0,,0.6,0.2,0.2,CLICK,2026-02-27T11:00:00,
 ```
 
 - 실제 컬럼 집합은 파이프라인/전처리 스키마에 따라 다를 수 있음.  
@@ -278,8 +263,8 @@ a_anon_002,anon_002,rest_202,"{""spicy"":0.8}","{""dinner"":0.9}",1,1,중식,중
 
 ```csv
 user_id,anonymous_id,restaurant_id,context_snapshot
-user_001,,rest_101,{}
-a_anon_002,anon_002,rest_202,"{""lat"":37.5,""lng"":127.0}"
+1001,,rest_101,{}
+,anon_002,rest_202,"{""lat"":37.5,""lng"":127.0}"
 ,anon_003,rest_303,{}
 ```
 
@@ -294,9 +279,9 @@ a_anon_002,anon_002,rest_202,"{""lat"":37.5,""lng"":127.0}"
 
 ```csv
 user_id,anonymous_id,restaurant_id,score,rank,context_snapshot,pipeline_version,generated_at,expires_at
-user_001,,rest_101,0.892,1,{},deepfm-1.0.20260227120000,2026-02-27T14:00:00.000000+00:00,2026-02-28T14:00:00.000000+00:00
-user_001,,rest_205,0.654,2,{},deepfm-1.0.20260227120000,2026-02-27T14:00:00.000000+00:00,2026-02-28T14:00:00.000000+00:00
-a_anon_002,anon_002,rest_202,0.771,1,"{""lat"":37.5,""lng"":127.0}",deepfm-1.0.20260227120000,2026-02-27T14:00:00.000000+00:00,2026-02-28T14:00:00.000000+00:00
+1001,,rest_101,0.892,1,{},deepfm-1.0.20260227120000,2026-02-27T14:00:00.000000+00:00,2026-02-28T14:00:00.000000+00:00
+1001,,rest_205,0.654,2,{},deepfm-1.0.20260227120000,2026-02-27T14:00:00.000000+00:00,2026-02-28T14:00:00.000000+00:00
+,anon_002,rest_202,0.771,1,"{""lat"":37.5,""lng"":127.0}",deepfm-1.0.20260227120000,2026-02-27T14:00:00.000000+00:00,2026-02-28T14:00:00.000000+00:00
 ,anon_003,rest_303,0.543,1,{},deepfm-1.0.20260227120000,2026-02-27T14:00:00.000000+00:00,2026-02-28T14:00:00.000000+00:00
 ```
 

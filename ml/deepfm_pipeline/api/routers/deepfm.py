@@ -2,7 +2,6 @@
 Admin DeepFM API (api_design.md).
 
 - POST /admin/deepfm/train
-- POST /admin/deepfm/score-batch
 - GET  /admin/deepfm/models
 - POST /admin/deepfm/activate
 """
@@ -18,8 +17,6 @@ from api.schemas import (
     ActivateResponseDto,
     ModelInfoDto,
     ModelsResponseDto,
-    ScoreBatchRequestDto,
-    ScoreBatchResponseDto,
     TrainRequestDto,
     TrainResponseDto,
 )
@@ -108,58 +105,6 @@ def trigger_train(body: TrainRequestDto | None = None) -> TrainResponseDto:
         model_path=result["model_path"],
         run_manifest_path=result["run_manifest_path"],
         metrics=result.get("metrics") if result.get("metrics") and "error" not in result.get("metrics", {}) else None,
-    )
-
-
-@router.post("/score-batch", response_model=ScoreBatchResponseDto)
-def trigger_score_batch(body: ScoreBatchRequestDto) -> ScoreBatchResponseDto:
-    """
-    배치 스코어링/추천 생성 트리거.
-    입력: pipeline_version, 후보 경로, TTL 등.
-    출력: recommendation CSV. INSERT는 호출 측(ETL/DB)에서 수행.
-    """
-    run_dir: Path | None = None
-    if body.run_dir:
-        run_dir = Path(body.run_dir)
-    else:
-        run_dir = _find_run_dir_by_version(body.pipeline_version)
-    if not run_dir or not run_dir.exists():
-        raise HTTPException(
-            status_code=404,
-            detail=f"Run not found for pipeline_version={body.pipeline_version}. Set run_dir or ensure version exists under output/.",
-        )
-
-    out_path = Path(body.output_path)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-
-    import sys
-    if str(_ROOT) not in sys.path:
-        sys.path.insert(0, str(_ROOT))
-    from utils.score_batch import run as score_batch_run
-
-    try:
-        score_batch_run(
-            run_dir=run_dir,
-            candidates_path=Path(body.candidates_path),
-            output_path=out_path,
-            meta_path=Path(body.meta_path) if body.meta_path else None,
-            ttl_hours=body.ttl_hours,
-            batch_size=body.batch_size,
-        )
-    except FileNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-    n_rows = 0
-    if out_path.exists():
-        n_rows = sum(1 for _ in open(out_path, encoding="utf-8")) - 1  # minus header
-    pv = (run_dir / "pipeline_version.txt").read_text(encoding="utf-8").strip() if (run_dir / "pipeline_version.txt").exists() else body.pipeline_version
-
-    return ScoreBatchResponseDto(
-        pipeline_version=pv,
-        output_path=str(out_path),
-        rows_written=max(0, n_rows),
     )
 
 

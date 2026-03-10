@@ -1,0 +1,28 @@
+# DeepFM 학습용 이미지
+# 빌드: docker build -f Dockerfile.training -t deepfm-training .
+#
+# S3 폴링 → Raw 다운로드(_SUCCESS 기준) → 파이프라인 CSV 변환 → training_flow
+# 환경변수: S3_ENV(dev|stg|prod) 또는 S3_BUCKET, RAW_DOWNLOAD_DIR, DATA_DIR, OUTPUT_DIR
+#           SKIP_S3_POLL=1 이면 다운로드/변환 생략 (기존 data 마운트 사용)
+# 실행 예: docker run --rm -e S3_ENV=dev -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY \
+#   -v $(pwd)/data:/data -v $(pwd)/output:/output deepfm-training
+# 실행 예(옵션): ... deepfm-training --epochs 10 --exp-ablation "user_category_match,user_region_match,price_diff"
+
+FROM python:3.11-slim
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY ml-requirements.txt .
+RUN pip install --no-cache-dir -r ml-requirements.txt
+
+COPY . .
+RUN chmod +x scripts/entrypoint_training.sh
+
+ENV PYTHONPATH=/app
+
+ENTRYPOINT ["/app/scripts/entrypoint_training.sh"]
+CMD []

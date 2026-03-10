@@ -5,7 +5,7 @@ tasteam_deepfm_data.md + docs/data_designe + recommendation_techspec §스코어
 - 연속형: taste(4), visit_time(4), is_anonymous(1), pref_w_1~3(3) = 12개
   + 스코어 피처 6개(선호 카테고리, 가격대, 맛×긍정구간, 시간대×컨텍스트, 거리, 날씨; 암묵적 피드백 제외·라벨 누수 방지)
   + exp 10개: restaurant_popularity, restaurant_signal_count, restaurant_avg_weight, user_category_count, user_region_count, user_price_mean, user_category_match, user_region_match, price_diff, distance_weight = 28개
-- 범주형: user_id, anon_cohort_id, avg_price_tier, restaurant_id, primary_category,
+- 범주형: member_id, anon_cohort_id, avg_price_tier, restaurant_id, primary_category,
   pref_cat_1~3, price_tier, region_gu, region_dong, geohash, day_of_week, time_slot,
   admin_dong, distance_bucket, weather_bucket, dining_type, first_positive_segment,
   first_comparison_tag = 20개
@@ -34,9 +34,9 @@ CONTINUOUS_FEATURES = (
     CONTINUOUS_FEATURE_KEYS + VISIT_TIME_KEYS + ["is_anonymous"] + PREF_WEIGHT_KEYS
 )  # 12개
 
-# --- 범주형 피처 (user_id / anon_cohort_id 분리, preferred_categories Top-K) ---
+# --- 범주형 피처 (member_id / anon_cohort_id 분리, preferred_categories Top-K) ---
 CATEGORICAL_FEATURES = [
-    "user_id",
+    "member_id",
     "anon_cohort_id",
     "avg_price_tier",
     "restaurant_id",
@@ -168,10 +168,19 @@ def _get_first_comparison_tag(row: dict) -> str:
     return ""
 
 
+def _member_id_value(row: dict) -> Any:
+    """로그인 사용자 식별자. 우선 member_id, 없으면 기존 user_id도 허용(호환)."""
+    mid = row.get("member_id")
+    if mid is None or (isinstance(mid, float) and pd.isna(mid)):
+        mid = row.get("user_id")
+    return mid
+
+
 def _user_id_str(row: dict) -> str:
-    uid = row.get("user_id")
-    if uid is not None and str(uid).strip() != "":
-        return f"u_{uid}"
+    """호환을 위해 함수명은 유지. 내부적으로 member_id(또는 user_id)를 사용."""
+    mid = _member_id_value(row)
+    if mid is not None and str(mid).strip() != "":
+        return f"u_{mid}"
     return ""
 
 
@@ -183,17 +192,17 @@ def _anon_cohort_str(row: dict) -> str:
 
 
 def _is_anonymous(row: dict) -> float:
-    uid = row.get("user_id")
-    if uid is not None and str(uid).strip() != "":
+    mid = _member_id_value(row)
+    if mid is not None and str(mid).strip() != "":
         return 0.0
     return 1.0
 
 
 def _user_key_for_lookup(row: dict) -> str:
-    """user_id 또는 anonymous_id 기반 단일 키 (exp lookups용)."""
-    uid = row.get("user_id")
-    if uid is not None and str(uid).strip():
-        return f"u_{str(uid).strip()}"
+    """member_id(또는 user_id 호환) 또는 anonymous_id 기반 단일 키 (exp lookups용)."""
+    mid = _member_id_value(row)
+    if mid is not None and str(mid).strip():
+        return f"u_{str(mid).strip()}"
     aid = row.get("anonymous_id") or row.get("anonymous_cohort_id")
     if aid is not None and str(aid).strip():
         return f"a_{str(aid).strip()}"
@@ -485,6 +494,132 @@ class CategoryDictGenerator:
         return [len(self.dicts[i]) for i in range(self.num_feature)]
 
 
+def _save_categorical_dicts(dicts: list[dict[str, int]], path: str) -> None:
+    """범주형 필드별 vocab(문자열→인덱스)를 JSON으로 저장."""
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump([dict(d) for d in dicts], f, ensure_ascii=False)
+
+
+def _serialize_exp_lookups(lookups: dict[str, Any]) -> dict[str, Any]:
+    """tuple 키를 JSON 호환 키로 변환 (리스트를 JSON 문자열로)."""
+    out = {}
+    for k, v in lookups.items():
+        if k == "user_category_count":
+            out[k] = {json.dumps([a, b], ensure_ascii=False): c for (a, b), c in v.items()}
+        elif k == "user_region_count":
+            out[k] = {json.dumps([a, b], ensure_ascii=False): c for (a, b), c in v.items()}
+        else:
+            out[k] = v
+    return out
+
+
+def _deserialize_exp_lookups(data: dict[str, Any]) -> dict[str, Any]:
+    """저장된 키를 tuple 키로 복원."""
+    out = {}
+    for k, v in data.items():
+        if k == "user_category_count" and isinstance(v, dict):
+            out[k] = {tuple(json.loads(s)): c for s, c in v.items()}
+        elif k == "user_region_count" and isinstance(v, dict):
+            out[k] = {tuple(json.loads(s)): c for s, c in v.items()}
+        else:
+            out[k] = v
+    return out
+
+
+def _save_exp_lookups(
+    lookups: dict[str, Any],
+    exp_ablation: list[str] | None,
+    path: str,
+) -> None:
+    """exp lookups + exp_ablation을 JSON으로 저장."""
+    payload = {
+        "exp_ablation": exp_ablation,
+        "lookups": _serialize_exp_lookups(lookups),
+    }
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False)
+
+
+def load_exp_lookups(run_dir: str | Path) -> tuple[dict[str, Any], list[str] | None] | None:
+    """
+    run_dir에서 exp_lookups.json 로드.
+    반환: (lookups, exp_ablation) 또는 없으면 None.
+    """
+    path = Path(run_dir) / "exp_lookups.json"
+    if not path.exists():
+        return None
+    with open(path, encoding="utf-8") as f:
+        payload = json.load(f)
+    lookups = _deserialize_exp_lookups(payload.get("lookups", {}))
+    exp_ablation = payload.get("exp_ablation")
+    return lookups, exp_ablation
+
+
+def load_categorical_dicts(run_dir: str | Path) -> CategoryDictGenerator | None:
+    """
+    run 디렉터리(또는 processed_data_dir)에서 categorical_dicts.json 로드.
+    추론 시 raw CSV를 같은 인코딩으로 변환할 때 사용. 없으면 None.
+    """
+    path = Path(run_dir) / "categorical_dicts.json"
+    if not path.exists():
+        return None
+    with open(path, encoding="utf-8") as f:
+        raw = json.load(f)
+    num_feature = len(raw)
+    gen = CategoryDictGenerator(num_feature)
+    gen.dicts = [dict(x) for x in raw]
+    return gen
+
+
+def _n_continuous_from_run_dir(run_dir: str | Path) -> int:
+    """feature_sizes.txt에서 연속형 필드 개수(선두 1의 개수) 반환."""
+    path = Path(run_dir) / "feature_sizes.txt"
+    if not path.exists():
+        return len(CONTINUOUS_FEATURES) + NUM_SCORING_FEATURES + NUM_EXP_FEATURES
+    line = path.read_text(encoding="utf-8").strip()
+    sizes = [int(x.strip()) for x in line.split(",") if x.strip()]
+    n = 0
+    for s in sizes:
+        if s == 1:
+            n += 1
+        else:
+            break
+    return n if n > 0 else (len(CONTINUOUS_FEATURES) + NUM_SCORING_FEATURES + NUM_EXP_FEATURES)
+
+
+def raw_rows_to_feature_matrix(
+    raw_rows: list[dict],
+    run_dir: str | Path,
+) -> list[list[float]]:
+    """
+    raw 행 리스트를 run_dir의 vocab·exp_lookups로 학습 시와 동일한 feature 벡터로 변환.
+    - 연속형: _extract_continuous(row) (18) + exp는 exp_lookups.json 있으면 _extract_exp_features, 없으면 0.
+    - 범주형: load_categorical_dicts(run_dir)로 인코딩.
+    categorical_dicts.json이 없으면 ValueError.
+    """
+    dicts = load_categorical_dicts(run_dir)
+    if dicts is None:
+        raise ValueError(f"categorical_dicts.json not found in run_dir: {run_dir}")
+    n_cont = _n_continuous_from_run_dir(run_dir)
+    n_cont_from_row = len(CONTINUOUS_FEATURES) + NUM_SCORING_FEATURES  # 18
+    n_exp = max(0, n_cont - n_cont_from_row)
+    n_cat = len(CATEGORICAL_FEATURES)
+    exp_loaded = load_exp_lookups(run_dir)
+    out = []
+    for row in raw_rows:
+        cont_base = _extract_continuous(row)
+        if exp_loaded is not None:
+            lookups, exp_ablation = exp_loaded
+            exp_vals = _extract_exp_features(row, lookups, include_names=exp_ablation)
+            cont = cont_base + exp_vals
+        else:
+            cont = cont_base + [0.0] * n_exp
+        cat_vals = _extract_categorical(row)
+        cat_idx = [float(dicts.gen(i, cat_vals[i])) for i in range(n_cat)]
+        out.append(cont + cat_idx)
+    return out
+
+
 def _label_from_row(row: dict) -> str:
     """
     implicit_feedback 유무로 0/1 라벨.
@@ -629,7 +764,7 @@ def _add_negative_samples(
     for r in all_rows:
         if not _is_positive_row(r):
             continue
-        uid = str(r.get("user_id") or r.get("anonymous_id") or r.get("anonymous_cohort_id") or "").strip()
+        uid = str(_member_id_value(r) or r.get("anonymous_id") or r.get("anonymous_cohort_id") or "").strip()
         if not uid:
             uid = "_anon"
         rid = r.get("restaurant_id")
@@ -641,7 +776,7 @@ def _add_negative_samples(
     for row in rows:
         if not _is_positive_row(row):
             continue
-        uid = str(row.get("user_id") or row.get("anonymous_id") or row.get("anonymous_cohort_id") or "").strip()
+        uid = str(_member_id_value(row) or row.get("anonymous_id") or row.get("anonymous_cohort_id") or "").strip()
         if not uid:
             uid = "_anon"
         pos_set = user_positive.get(uid, set())
@@ -664,11 +799,11 @@ def _add_negative_samples(
 
 
 def _row_recommendation_id(row: dict) -> str:
-    """그룹 키: recommendation_id 또는 generated_at 또는 u_{user_id} / a_{aid} / single."""
+    """그룹 키: recommendation_id 또는 generated_at 또는 u_{member_id} / a_{aid} / single."""
     rec_id = row.get("recommendation_id") or row.get("generated_at")
     if rec_id is not None and str(rec_id).strip().lower() not in ("", "nan", "none"):
         return str(rec_id).strip()
-    uid = row.get("user_id")
+    uid = _member_id_value(row)
     aid = row.get("anonymous_id") or row.get("anonymous_cohort_id")
     if uid is not None and str(uid).strip().lower() not in ("", "nan", "none"):
         return f"u_{uid}"
@@ -872,7 +1007,11 @@ def preprocess(
     with open(os.path.join(outdir, "feature_sizes.txt"), "w") as f:
         f.write(",".join(map(str, sizes)))
 
+    # 범주형 vocab(문자열→인덱스) 저장. 추론 시 raw→feature 인코딩 재사용용.
+    _save_categorical_dicts(dicts.dicts, os.path.join(outdir, "categorical_dicts.json"))
+
     exp_lookups = build_exp_lookups(train_rows)
+    _save_exp_lookups(exp_lookups, exp_ablation, os.path.join(outdir, "exp_lookups.json"))
 
     def write_rows(rows: list[dict], path: str, include_sw: bool) -> None:
         with open(os.path.join(outdir, path), "w") as f:
@@ -902,7 +1041,7 @@ def preprocess(
     train_restaurant_ids = set()
     restaurant_positive_counts: dict[str, int] = defaultdict(int)
     for row in train_rows:
-        uid = row.get("user_id")
+        uid = _member_id_value(row)
         if uid is not None and str(uid).strip():
             train_user_ids.add(str(uid))
         rid = row.get("restaurant_id")
@@ -916,7 +1055,7 @@ def preprocess(
         "test_end": test_end,
         "time_column": time_column,
         "group_column": group_column,
-        "train_user_ids": list(train_user_ids),
+        "train_member_ids": list(train_user_ids),
         "train_restaurant_ids": list(train_restaurant_ids),
         "restaurant_positive_counts": dict(restaurant_positive_counts),
         "use_sample_weight": use_sample_weight,
@@ -938,7 +1077,7 @@ def preprocess(
             if not _empty(rec_id):
                 rec_id = str(rec_id).strip()
             else:
-                uid = row.get("user_id")
+                uid = _member_id_value(row)
                 aid = row.get("anonymous_id") or row.get("anonymous_cohort_id")
                 if not _empty(uid):
                     rec_id = f"u_{uid}"
@@ -947,7 +1086,7 @@ def preprocess(
                 else:
                     rec_id = "single"
             meta_rows.append({
-                "user_id": row.get("user_id") or "",
+                "member_id": _member_id_value(row) or "",
                 "restaurant_id": row.get("restaurant_id") or "",
                 "recommendation_id": rec_id,
             })

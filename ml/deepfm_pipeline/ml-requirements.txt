@@ -1,8 +1,9 @@
-# DeepFM training + Admin API
+# DeepFM training + Admin API (+ S3 raw 폴링/다운로드)
 
 torch>=2.0.0
 numpy>=1.24.0
 pandas>=2.0.0
+boto3>=1.28.0
 prefect>=2.0.0
 click>=8.0.0
 fastapi>=0.100.0

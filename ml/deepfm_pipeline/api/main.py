@@ -10,7 +10,7 @@ from api.routers import deepfm
 
 app = FastAPI(
     title="DeepFM Pipeline Admin API",
-    description="학습 트리거, 배치 스코어링, 모델/버전 조회, 활성화 (api_design.md)",
+    description="학습 트리거, 모델/버전 조회, 활성화 (api_design.md)",
     version="1.0.0",
 )
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
