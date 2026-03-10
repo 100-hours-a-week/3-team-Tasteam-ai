@@ -1461,7 +1461,7 @@ def evaluate_on_pod_task(
     entity: str | None = None,
     volume_id: str | None = None,
     eval_poll_interval_sec: int = 60,
-    eval_timeout_sec: int = 7200,
+    eval_timeout_sec: int = 14400,
     pod_wait_timeout_sec: int = 600,
 ) -> dict:
     """
@@ -1586,7 +1586,7 @@ def evaluate_on_pod_flow(
     project: str = DEFAULT_WANDB_PROJECT,
     entity: str | None = None,
     volume_id: str | None = None,
-    eval_timeout_sec: int = 7200,
+    eval_timeout_sec: int = 14400,
 ) -> dict:
     """Pod에서 평가 실행 후 결과를 artifact로 올리고, 로컬에서 해당 버전으로 다운로드."""
     return evaluate_on_pod_task(
