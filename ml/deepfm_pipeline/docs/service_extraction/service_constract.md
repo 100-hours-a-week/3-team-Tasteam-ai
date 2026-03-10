@@ -83,6 +83,8 @@ AI 서버는 다음을 수행하지 않는다.
 
 API 서버는 다음 데이터를 **S3 Data Lake**에 저장한다.
 
+**폴링·다운로드 기준**: AI 서버(또는 배치)가 raw를 다운로드할 때는, 각 파티션(`dt=YYYY-MM-DD`)에 **`_SUCCESS` 마커가 있을 때만** 해당 파티션을 유효로 보고 데이터 파일을 내려받는다. 구현: `ml/deepfm_pipeline/scripts/s3_raw_poll_download.py`.
+
 환경별 bucket
 
 ```
