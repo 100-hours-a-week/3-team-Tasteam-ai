@@ -1565,8 +1565,15 @@ def evaluate_on_pod_task(
             eval_output_prefix = f"distill_pipeline_output/eval_output/{version}"
             n_files = download_directory_from_runpod(vol_id, eval_output_prefix, out_dir)
             logger.info("Downloaded %s files from volume (prefix=%s)", n_files, eval_output_prefix)
-            deleted = delete_prefix_from_volume(vol_id, eval_output_prefix)
-            logger.info("Deleted %s objects from volume (prefix=%s)", deleted, eval_output_prefix)
+            try:
+                deleted = delete_prefix_from_volume(vol_id, eval_output_prefix)
+                logger.info("Deleted %s objects from volume (prefix=%s)", deleted, eval_output_prefix)
+            except Exception as e:
+                logger.warning(
+                    "Failed to delete prefix from volume (prefix=%s), continuing: %s",
+                    eval_output_prefix,
+                    e,
+                )
 
             report_path = next(Path(out_dir).rglob("report.json"), None)
             if not report_path or not report_path.is_file():
@@ -1740,8 +1747,15 @@ def download_eval_from_volume_and_finish_task(
     n_files = download_directory_from_runpod(vol_id, eval_output_prefix, out_dir)
     logger.info("Downloaded %s files from volume (prefix=%s)", n_files, eval_output_prefix)
     if delete_after_download:
-        deleted = delete_prefix_from_volume(vol_id, eval_output_prefix)
-        logger.info("Deleted %s objects from volume (prefix=%s)", deleted, eval_output_prefix)
+        try:
+            deleted = delete_prefix_from_volume(vol_id, eval_output_prefix)
+            logger.info("Deleted %s objects from volume (prefix=%s)", deleted, eval_output_prefix)
+        except Exception as e:
+            logger.warning(
+                "Failed to delete prefix from volume (prefix=%s), continuing: %s",
+                eval_output_prefix,
+                e,
+            )
 
     report_path = next(Path(out_dir).rglob("report.json"), None)
     if not report_path or not report_path.is_file():
