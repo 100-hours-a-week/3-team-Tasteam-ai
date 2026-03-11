@@ -1,4 +1,4 @@
-현재 프롬프트 (260311_064215)
+현재 프롬프트, 메시지 구성 (260311_064215)
 
 _SCHEMA_ENFORCEMENT_SYSTEM = """You are a JSON generator for review summarization.
 
@@ -30,6 +30,37 @@ _TINY_FEWSHOT_USER = """Example input:
 """
 
 _TINY_FEWSHOT_ASSISTANT = """{"service":{"summary":"직원분이 친절해요.","bullets":["직원 응대가 친절해요"],"evidence":[0]},"price":{"summary":"","bullets":[],"evidence":[]},"food":{"summary":"국물이 진해요.","bullets":["국물이 진하고 맛있어요"],"evidence":[0]}}"""
+
+
+def _generate_one(
+    model: Any,
+    tokenizer: Any,
+    instruction: str,
+    max_new_tokens: int = 1024,
+) -> str:
+    """이미 로드된 model/tokenizer로 instruction 한 건만 추론."""
+    # instruction은 payload JSON 문자열. system prompt + tiny few-shot으로 스키마 계약을 강화한다.
+    messages = [
+        {"role": "system", "content": _SCHEMA_ENFORCEMENT_SYSTEM},
+        {"role": "user", "content": _TINY_FEWSHOT_USER},
+        {"role": "assistant", "content": _TINY_FEWSHOT_ASSISTANT},
+        {"role": "user", "content": instruction},
+    ]
+    text = tokenizer.apply_chat_template(
+        messages,
+        tokenize=False,
+        add_generation_prompt=True,
+    )
+    inputs = tokenizer(text, return_tensors="pt").to(model.device)
+    out = model.generate(
+        **inputs,
+        max_new_tokens=max_new_tokens,
+        do_sample=False,
+        pad_token_id=tokenizer.eos_token_id,
+    )
+    generated = tokenizer.decode(out[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True)
+    raw = generated.strip()
+    return _extract_json_for_rouge(raw)
 
 ---
 
