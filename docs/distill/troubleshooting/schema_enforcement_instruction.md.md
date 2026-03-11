@@ -1,3 +1,32 @@
+현재 상황:
+
+
+문서 권장 항목별로 코드 기준 충족 여부만 정리했습니다.
+
+---
+
+## schema_enforcement.md 대비 현재 충족도
+
+| 항목 | 문서 권장 | 현재 구현 | 충족도 |
+|------|-----------|-----------|--------|
+| **1. 추론 프롬프트 강화** | "Return ONLY a valid JSON...", "top-level keys must be exactly: service, food, price", "Do not write any text before or after the JSON" 등 **강한 문구** | Distill 추론 시 **instruction = `json.dumps(payload)`** 만 사용. payload는 service/price/food 리뷰 목록. **스키마/출력 형식을 강제하는 문장이 없음** (`eval_distill.py` 91라인, `label_for_distill.py` 219·272·333라인) | ❌ **미충족** |
+| **2. Few-shot 예시 1~2개** | 완벽한 정답 포맷 + 빈 리스트 + bullets/evidence 대응 예시 | 추론 시 **단일 메시지(instruction만)** 사용. 예시를 앞에 붙이는 코드 없음 (`eval_distill.py` 90–91라인) | ❌ **미충족** |
+| **3. 후처리 validation / repair** | JSON parse, 최상위 키 채우기, 허용 키 외 제거, `examples`→`bullets` 보정, summary/bullets/evidence 기본값, evidence 숫자 리스트 정리, bullets·evidence 개수 맞추기 | **Parse**: `_extract_json_for_rouge`에서 `extract_json_block` + `parse_json_relaxed`로 JSON 블록 추출·파싱만 수행 (`eval_distill.py` 67–81라인). **Repair**: 키 채우기/제거/alias/기본값/evidence 정리/bullets–evidence 맞추기 등 **어디에도 없음**. `comparison_lib/json_parse_utils.py`는 문법만 보정(trailing comma, 따옴표). `kd_sft_analysis.py`는 스키마 **검사**만 하고 수정하지 않음 | ⚠️ **부분 충족** (parse만, repair 없음) |
+| **4. Length control** | summary 1문장, bullets 최대 3개, evidence=bullets 길이, bullet 25자 이하 등 | 라벨링용 `SUMMARY_INSTRUCTIONS`에 "bullets: 3~5개", "summary: 1문장" 있음 (`label_for_distill.py` 45–66라인). **추론 경로**에는 길이 제한/잘라내기 없음 | ❌ **미충족** (inference 쪽) |
+
+---
+
+## 요약
+
+- **추론 프롬프트 강화**: 구현 안 됨. 지금은 “입력 payload JSON”만 넣고, “JSON만 출력하라 / 키는 service·food·price만” 같은 문구 없음.
+- **Few-shot**: 구현 안 됨. 추론 시 예시 1~2개를 붙이는 부분 없음.
+- **후처리 repair**: **JSON 파싱(블록 추출 + 완화 파싱)만 있고**, 문서에서 말한 **스키마 보정(키 채우기, alias, 기본값, evidence 정리, bullets–evidence 맞추기)** 는 없음.
+- **Length control**: 라벨링 가이드에는 일부 있으나, **추론 시점**에는 길이 제한·자르기 없음.
+
+문서에서 말한 “추론 프롬프트 + few-shot + 후처리 repair” 3가지 중, **실제로 잘 갖춰진 것은 “parse만 있는 후처리” 한 부분**이고, 나머지는 아직 미구현에 가깝습니다.
+
+---
+
 맞습니다. 지금 설명한 상태면 사실상
 
 **“모델이 알아서 잘 해주길 기대하는 추론”**에 가깝습니다.
