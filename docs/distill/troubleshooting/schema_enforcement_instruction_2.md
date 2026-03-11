@@ -278,3 +278,83 @@ food
 소형 모델은 이런 사소한 일관성 차이에도 영향받습니다.
 
 지금 시스템 프롬프트엔 `service, food, price`라고 썼으니 예시도 그 순서로 통일하는 걸 추천합니다.
+
+---
+
+적용 후 프롬프트, 메시지 구성
+
+_SCHEMA_ENFORCEMENT_SYSTEM = """You are a JSON generator for review summarization.
+
+Return ONLY one valid JSON object.
+Do not output any text before or after the JSON.
+Do not output markdown.
+Do not output explanations.
+
+The top-level keys must be exactly:
+service, food, price
+
+Each of service, food, and price must be a JSON object with exactly these keys:
+summary, bullets, evidence
+
+Never add any other keys.
+Never use keys such as:
+examples, impact, weight, title, body, rating, overall_summary
+
+Rules:
+- summary must be exactly 1 Korean sentence, or "" if there is not enough evidence
+- bullets must be a list of 0 to 3 short Korean strings
+- evidence must be a list of 0-based integer indices into the corresponding category list
+- evidence must have the same number of items as bullets
+- If bullets is [], evidence must be []
+- If there is not enough evidence, use:
+  "summary": "",
+  "bullets": [],
+  "evidence": []
+
+Output only JSON.
+"""
+
+_TINY_FEWSHOT_USER = """Example input:
+{"service":["직원분이 친절해요"],"price":[],"food":["국물이 진해요"]}
+"""
+
+_TINY_FEWSHOT_ASSISTANT = """{"service":{"summary":"직원분이 친절해요.","bullets":["직원 응대가 친절해요."],"evidence":[0]},"food":{"summary":"국물이 진해요.","bullets":["국물이 진하고 맛있어요."],"evidence":[0]},"price":{"summary":"","bullets":[],"evidence":[]}}"""
+
+_TINY_FEWSHOT_USER_2 = """Example input:
+{"service":["직원들이 빠르게 응대해요","매장이 깔끔해요"],"price":["양이 많아요"],"food":[]}
+"""
+
+_TINY_FEWSHOT_ASSISTANT_2 = """{"service":{"summary":"직원 응대가 빠르고 매장이 깔끔해요.","bullets":["직원들이 빠르게 응대해요.","매장이 깔끔해요."],"evidence":[0,1]},"food":{"summary":"","bullets":[],"evidence":[]},"price":{"summary":"양이 많아요.","bullets":["양이 많아요."],"evidence":[0]}}"""
+
+
+def _generate_one(
+    model: Any,
+    tokenizer: Any,
+    instruction: str,
+    max_new_tokens: int = 1024,
+) -> str:
+    """이미 로드된 model/tokenizer로 instruction 한 건만 추론."""
+    # instruction은 payload JSON 문자열. system prompt + 2개 few-shot으로 스키마 계약을 강화한다.
+    messages = [
+        {"role": "system", "content": _SCHEMA_ENFORCEMENT_SYSTEM},
+        {"role": "user", "content": _TINY_FEWSHOT_USER},
+        {"role": "assistant", "content": _TINY_FEWSHOT_ASSISTANT},
+        {"role": "user", "content": _TINY_FEWSHOT_USER_2},
+        {"role": "assistant", "content": _TINY_FEWSHOT_ASSISTANT_2},
+        {"role": "user", "content": instruction},
+    ]
+    text = tokenizer.apply_chat_template(
+        messages,
+        tokenize=False,
+        add_generation_prompt=True,
+    )
+    inputs = tokenizer(text, return_tensors="pt").to(model.device)
+    out = model.generate(
+        **inputs,
+        max_new_tokens=max_new_tokens,
+        do_sample=False,
+        pad_token_id=tokenizer.eos_token_id,
+    )
+    generated = tokenizer.decode(out[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True)
+    raw = generated.strip()
+    return _extract_json_for_rouge(raw)
