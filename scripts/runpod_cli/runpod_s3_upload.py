@@ -195,6 +195,26 @@ def download_directory_from_runpod(
     return count
 
 
+def delete_prefix_from_volume(
+    volume_id: str,
+    prefix: str,
+    s3_client: Any | None = None,
+) -> int:
+    """볼륨에서 prefix 하위 객체를 모두 삭제. 반환: 삭제한 객체 수."""
+    client = s3_client or get_runpod_s3_client()
+    prefix_norm = prefix.rstrip("/") + "/" if prefix else ""
+    deleted = 0
+    paginator = client.get_paginator("list_objects_v2")
+    for page in paginator.paginate(Bucket=volume_id, Prefix=prefix_norm):
+        contents = page.get("Contents", [])
+        if not contents:
+            continue
+        keys = [{"Key": obj["Key"]} for obj in contents]
+        client.delete_objects(Bucket=volume_id, Delete={"Objects": keys})
+        deleted += len(keys)
+    return deleted
+
+
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="Upload a directory to RunPod Network Volume (S3 API).")

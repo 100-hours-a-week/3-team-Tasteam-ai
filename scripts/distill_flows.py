@@ -96,6 +96,7 @@ try:
         upload_labeled_dir_to_runpod,
         list_run_ids_with_adapter,
         download_directory_from_runpod,
+        delete_prefix_from_volume,
         upload_file_to_volume,
         upload_directory,
         get_runpod_s3_client,
@@ -105,6 +106,7 @@ except ImportError:
     upload_labeled_dir_to_runpod = None
     list_run_ids_with_adapter = None
     download_directory_from_runpod = None
+    delete_prefix_from_volume = None
     upload_file_to_volume = None
     upload_directory = None
     get_runpod_s3_client = None
@@ -1463,22 +1465,25 @@ def evaluate_on_pod_task(
     eval_poll_interval_sec: int = 60,
     eval_timeout_sec: int = 14400,
     pod_wait_timeout_sec: int = 600,
+    skip_artifact_upload: bool = True,
 ) -> dict:
     """
-    Pod에서 eval_distill 실행 → 결과를 wandb artifact로 업로드 → 로컬에서 해당 버전으로 다운로드.
-    adapter_path, val_labeled_path, test_labeled_path 필수(평가 입력). output_dir는 다운로드 받을 로컬 경로.
+    Pod에서 eval_distill 실행 → (skip_artifact_upload 시) 볼륨에서 다운로드 후 삭제, 로컬에서 LLM-as-a-Judge·kd_sft_analysis 실행.
+    skip_artifact_upload=False 시 기존처럼 wandb artifact 업로드 후 로컬에서 artifact 다운로드.
     """
     if RunPodClient is None:
         raise RuntimeError("RunPodClient not available.")
     if not upload_file_to_volume or not upload_directory or not get_runpod_s3_client or not object_exists:
         raise RuntimeError("runpod_s3_upload (upload_file_to_volume, upload_directory, object_exists) required.")
+    if skip_artifact_upload and (not download_directory_from_runpod or not delete_prefix_from_volume):
+        raise RuntimeError("runpod_s3_upload (download_directory_from_runpod, delete_prefix_from_volume) required when skip_artifact_upload=True")
     token = os.environ.get("RUNPOD_API_KEY")
     if not token:
         raise ValueError("RUNPOD_API_KEY required for evaluate_on_pod_task")
     if not os.environ.get("RUNPOD_S3_ACCESS_KEY") or not os.environ.get("RUNPOD_S3_SECRET_ACCESS_KEY"):
         raise ValueError("RUNPOD_S3_ACCESS_KEY and RUNPOD_S3_SECRET_ACCESS_KEY required.")
-    if not os.environ.get("WANDB_API_KEY"):
-        raise ValueError("WANDB_API_KEY required for Pod to upload eval result artifact")
+    if not skip_artifact_upload and not os.environ.get("WANDB_API_KEY"):
+        raise ValueError("WANDB_API_KEY required when skip_artifact_upload=False (Pod uploads to artifact)")
 
     vol_id = volume_id or (runpod_config.get_volume_id_eval() if runpod_config else None) or os.environ.get("RUNPOD_NETWORK_VOLUME_ID")
     if not vol_id:
@@ -1524,6 +1529,8 @@ def evaluate_on_pod_task(
         cmd.extend(["--test-labeled", test_on_volume])
     if entity:
         cmd.extend(["--wandb-entity", entity])
+    if skip_artifact_upload:
+        cmd.append("--skip-artifact-upload")
 
     payload = RunPodClient.get_default_pod_payload(use="eval", docker_start_cmd=cmd)
     runpod_client = RunPodClient(token=token)
@@ -1547,28 +1554,99 @@ def evaluate_on_pod_task(
         done = json.loads(resp["Body"].read().decode("utf-8"))
         qualified_name = done.get("qualified_name")
         artifact_version_str = done.get("version") or "latest"
-        if not qualified_name:
-            logger.warning("eval_done.json has no qualified_name; cannot download artifact")
-            return {"report_path": None, "artifact_version": artifact_version_str, "eval_done": done}
+        download_from_volume = done.get("download_from_volume", False)
 
         out_dir = Path(output_dir or _PROJECT_ROOT / "distill_pipeline_output" / "eval_from_pod")
         out_dir.mkdir(parents=True, exist_ok=True)
-        import wandb as _wandb
-        _api = _wandb.Api()
-        _art = _api.artifact(qualified_name)
-        _art.download(root=str(out_dir))
-        eval_subdir = out_dir / "eval"
-        report_path = eval_subdir / "report.json"
-        llm_judge_path = eval_subdir / "llm_as_a_judge_results.json"
-        kd_report_path = eval_subdir / "kd_sft_analysis_report.json"
-        return {
-            "report_path": str(report_path) if report_path.exists() else None,
-            "llm_as_a_judge_results_path": str(llm_judge_path) if llm_judge_path.exists() else None,
-            "kd_sft_analysis_report_path": str(kd_report_path) if kd_report_path.exists() else None,
-            "artifact_version": artifact_version_str,
-            "qualified_name": qualified_name,
-            "download_root": str(out_dir),
-        }
+
+        if download_from_volume or not qualified_name:
+            # 볼륨에서 다운로드 → prefix 삭제 → 로컬에서 LLM-as-a-Judge, kd_sft_analysis
+            eval_output_prefix = f"distill_pipeline_output/eval_output/{version}"
+            n_files = download_directory_from_runpod(vol_id, eval_output_prefix, out_dir)
+            logger.info("Downloaded %s files from volume (prefix=%s)", n_files, eval_output_prefix)
+            deleted = delete_prefix_from_volume(vol_id, eval_output_prefix)
+            logger.info("Deleted %s objects from volume (prefix=%s)", deleted, eval_output_prefix)
+
+            report_path = next(Path(out_dir).rglob("report.json"), None)
+            if not report_path or not report_path.is_file():
+                logger.warning("report.json not found under %s", out_dir)
+                return {"report_path": None, "artifact_version": artifact_version_str, "eval_done": done, "download_root": str(out_dir)}
+            eval_dir = report_path.parent
+            llm_judge_path = eval_dir / "llm_as_a_judge_results.json"
+            kd_report_path = eval_dir / "kd_sft_analysis_report.json"
+
+            # 로컬에서 LLM-as-a-Judge → kd_sft_analysis (evaluate_task와 동일)
+            with open(report_path, "r", encoding="utf-8") as f:
+                report_data = json.load(f)
+            sample_ids = report_data.get("meta", {}).get("llm_judge_sample_ids", [])
+            val_path = Path(val_labeled_path) if val_labeled_path else None
+            adapter_path_resolved = Path(adapter_path).resolve()
+            if sample_ids and val_path and val_path.exists() and adapter_path_resolved.is_dir():
+                cmd_judge = [
+                    sys.executable,
+                    str(_SCRIPT_DIR / "eval_llm_as_judge.py"),
+                    "--report", str(report_path),
+                    "--val-labeled", str(val_path),
+                    "--adapter-path", str(adapter_path_resolved),
+                    "--base-model", base_model,
+                    "--output", str(llm_judge_path),
+                ]
+                rj = subprocess.run(cmd_judge, cwd=str(_PROJECT_ROOT), capture_output=True, text=True)
+                if rj.returncode != 0:
+                    logger.warning("eval_llm_as_judge failed: %s", rj.stderr or rj.stdout)
+                elif llm_judge_path.exists():
+                    cmd_kd = [
+                        sys.executable,
+                        str(_SCRIPT_DIR / "kd_sft_analysis.py"),
+                        "--input", str(llm_judge_path),
+                        "--output-dir", str(eval_dir),
+                    ]
+                    rk = subprocess.run(cmd_kd, cwd=str(_PROJECT_ROOT), capture_output=True, text=True)
+                    if rk.returncode != 0:
+                        logger.warning("kd_sft_analysis failed: %s", rk.stderr or rk.stdout)
+            else:
+                if not sample_ids:
+                    logger.info("No llm_judge_sample_ids in report; skipping LLM-as-a-Judge")
+                elif not val_path or not val_path.exists():
+                    logger.warning("val_labeled_path missing or not found; skipping LLM-as-a-Judge")
+                elif not adapter_path_resolved.is_dir():
+                    logger.warning("adapter_path not a directory; skipping LLM-as-a-Judge")
+
+            # 최종 eval 디렉터리(report + llm_as_a_judge + kd_sft_analysis)를 artifact에 업로드
+            art = upload_eval_to_artifact_task(
+                eval_dir=eval_dir,
+                project=project,
+                entity=entity or os.environ.get("WANDB_ENTITY"),
+                artifact_name=artifact_name,
+            )
+
+            return {
+                "report_path": str(report_path) if report_path.exists() else None,
+                "llm_as_a_judge_results_path": str(llm_judge_path) if llm_judge_path.exists() else None,
+                "kd_sft_analysis_report_path": str(kd_report_path) if kd_report_path.exists() else None,
+                "artifact_version": artifact_version_str,
+                "qualified_name": None,
+                "download_root": str(out_dir),
+                "artifact": art,
+            }
+        else:
+            # 기존: wandb artifact 다운로드
+            import wandb as _wandb
+            _api = _wandb.Api()
+            _art = _api.artifact(qualified_name)
+            _art.download(root=str(out_dir))
+            eval_subdir = out_dir / "eval"
+            report_path = eval_subdir / "report.json"
+            llm_judge_path = eval_subdir / "llm_as_a_judge_results.json"
+            kd_report_path = eval_subdir / "kd_sft_analysis_report.json"
+            return {
+                "report_path": str(report_path) if report_path.exists() else None,
+                "llm_as_a_judge_results_path": str(llm_judge_path) if llm_judge_path.exists() else None,
+                "kd_sft_analysis_report_path": str(kd_report_path) if kd_report_path.exists() else None,
+                "artifact_version": artifact_version_str,
+                "qualified_name": qualified_name,
+                "download_root": str(out_dir),
+            }
     finally:
         logger.info("Cleaning up eval pod: %s", pod_id)
         runpod_client.delete_pod(pod_id)
@@ -1587,8 +1665,9 @@ def evaluate_on_pod_flow(
     entity: str | None = None,
     volume_id: str | None = None,
     eval_timeout_sec: int = 14400,
+    skip_artifact_upload: bool = True,
 ) -> dict:
-    """Pod에서 평가 실행 후 결과를 artifact로 올리고, 로컬에서 해당 버전으로 다운로드."""
+    """Pod에서 평가 실행. skip_artifact_upload=True(기본)면 볼륨 다운로드 후 삭제, 로컬에서 LLM-as-a-Judge·kd_sft_analysis 실행."""
     return evaluate_on_pod_task(
         adapter_path=adapter_path,
         val_labeled_path=val_labeled_path,
@@ -1600,6 +1679,7 @@ def evaluate_on_pod_flow(
         entity=entity,
         volume_id=volume_id,
         eval_timeout_sec=eval_timeout_sec,
+        skip_artifact_upload=skip_artifact_upload,
     )
 
 
@@ -1990,6 +2070,7 @@ def main() -> None:
     parser.add_argument("--val-labeled-path", type=Path, default=None, help="val_labeled.json (for evaluate, evaluate_on_pod)")
     parser.add_argument("--test-labeled-path", type=Path, default=None, help="test_labeled.json (for evaluate, evaluate_on_pod)")
     parser.add_argument("--artifact-version", type=str, default="latest", help="For download_eval_artifact: artifact version (latest, v0, v1, ...)")
+    parser.add_argument("--no-skip-artifact-upload", action="store_true", help="evaluate_on_pod: Pod에서 wandb artifact 업로드 후 로컬에서 artifact 다운로드 (기본은 볼륨 다운로드+삭제+로컬 LLM judge)")
     parser.add_argument("--eval-path", type=Path, default=None, help="report.json 또는 eval/YYYYMMDD_HHMMSS 디렉터리 (upload_eval_artifact 필수)")
     parser.add_argument("--openai-cap", type=int, default=500, help="OpenAI labeling cap (for labeling_with_pod, all)")
     parser.add_argument("--use-pod", action="store_true", help="all/all_sweep에서 labeling_with_pod 사용 (기본: labeling_openai_only)")
@@ -2184,6 +2265,7 @@ def main() -> None:
             test_labeled_path=str(args.test_labeled_path) if args.test_labeled_path else None,
             output_dir=out_dir,
             base_model=args.student_model,
+            skip_artifact_upload=not getattr(args, "no_skip_artifact_upload", False),
         )
         print("Result:", result)
     elif args.flow == "download_eval_artifact":
