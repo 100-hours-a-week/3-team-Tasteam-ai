@@ -70,15 +70,51 @@ def _extract_json_for_rouge(raw: str) -> str:
         return raw or ""
     try:
         from src.json_parse_utils import extract_json_block, parse_json_relaxed
+        from src.schema_repair import repair_summary_schema
         block = extract_json_block(raw.strip(), want_object=True)
         if not block:
             return raw.strip()
         parsed = parse_json_relaxed(block)
         if isinstance(parsed, dict) and any(k in parsed for k in ("service", "price", "food")):
+            repaired = repair_summary_schema(parsed, bullet_max=3)
+            if isinstance(repaired, dict):
+                return json.dumps(repaired, ensure_ascii=False)
             return json.dumps(parsed, ensure_ascii=False)
     except Exception:
         pass
     return raw.strip()
+
+
+_SCHEMA_ENFORCEMENT_SYSTEM = """You are a JSON generator for review summarization.
+
+Return ONLY one valid JSON object.
+Do not output any text before or after the JSON.
+Do not output markdown.
+Do not output explanations.
+
+The top-level keys must be exactly:
+service, food, price
+
+Each top-level key must contain exactly:
+summary, bullets, evidence
+
+Rules:
+- summary: exactly 1 Korean sentence
+- bullets: list of 0 to 3 short Korean strings
+- evidence: list of integer indices (0-based indices into each category list)
+- evidence length must match bullets length
+- Do not add extra keys
+- If there is no evidence, use:
+  "summary": "",
+  "bullets": [],
+  "evidence": []
+"""
+
+_TINY_FEWSHOT_USER = """Example input:
+{"service":["직원분이 친절해요"],"price":[],"food":["국물이 진해요"]}
+"""
+
+_TINY_FEWSHOT_ASSISTANT = """{"service":{"summary":"직원분이 친절해요.","bullets":["직원 응대가 친절해요"],"evidence":[0]},"price":{"summary":"","bullets":[],"evidence":[]},"food":{"summary":"국물이 진해요.","bullets":["국물이 진하고 맛있어요"],"evidence":[0]}}"""
 
 
 def _generate_one(
@@ -88,7 +124,13 @@ def _generate_one(
     max_new_tokens: int = 1024,
 ) -> str:
     """이미 로드된 model/tokenizer로 instruction 한 건만 추론."""
-    messages = [{"role": "user", "content": instruction}]
+    # instruction은 payload JSON 문자열. system prompt + tiny few-shot으로 스키마 계약을 강화한다.
+    messages = [
+        {"role": "system", "content": _SCHEMA_ENFORCEMENT_SYSTEM},
+        {"role": "user", "content": _TINY_FEWSHOT_USER},
+        {"role": "assistant", "content": _TINY_FEWSHOT_ASSISTANT},
+        {"role": "user", "content": instruction},
+    ]
     text = tokenizer.apply_chat_template(
         messages,
         tokenize=False,
