@@ -34,6 +34,7 @@ Flow (docs/easydistill/distill_by_prefect.md):
   python scripts/distill_flows.py merge_for_serving_with_pod --adapter-path .../adapter  # 수동: Pod에서 merge (볼륨 사용)
   python scripts/distill_flows.py evaluate_on_pod --adapter-path .../adapter --val-labeled-path .../val_labeled.json [--test-labeled-path ...]  # Pod에서 평가 후 artifact 업로드·로컬 다운로드
   python scripts/distill_flows.py download_eval_artifact --artifact-version v1 [--out-dir ...]  # 평가 artifact를 지정 버전으로 다운로드
+  python scripts/distill_flows.py download_eval_from_volume --eval-version 20260311_064121 --val-labeled-path .../val_labeled.json --adapter-path .../adapter  # 볼륨에 이미 있는 eval만 받아와 judge→kd_sft→artifact
 
 예시:
   python scripts/distill_flows.py build_dataset --input tasteam_app_all_review_data.json --out-dir distill_pipeline_output
@@ -1701,6 +1702,120 @@ def download_eval_artifact_flow(
     )
 
 
+@task(name="download-eval-from-volume-and-finish-task", log_prints=True)
+def download_eval_from_volume_and_finish_task(
+    version: str,
+    val_labeled_path: str,
+    adapter_path: str,
+    output_dir: str | Path | None = None,
+    volume_id: str | None = None,
+    base_model: str = "Qwen/Qwen2.5-0.5B-Instruct",
+    artifact_name: str = EVAL_ARTIFACT_NAME_DEFAULT,
+    project: str = DEFAULT_WANDB_PROJECT,
+    entity: str | None = None,
+    delete_after_download: bool = True,
+) -> dict:
+    """
+    이미 Pod가 볼륨에 올려둔 eval 결과(version)만 받아와서
+    로컬에서 LLM-as-a-Judge → kd_sft_analysis → artifact 업로드까지 수행.
+    evaluate_on_pod 중단 후 재개용.
+    """
+    if not download_directory_from_runpod or not get_runpod_s3_client:
+        raise RuntimeError("runpod_s3_upload (download_directory_from_runpod, get_runpod_s3_client) required.")
+    if delete_after_download and not delete_prefix_from_volume:
+        raise RuntimeError("delete_prefix_from_volume required when delete_after_download=True")
+    vol_id = volume_id or (runpod_config.get_volume_id_eval() if runpod_config else None) or os.environ.get("RUNPOD_NETWORK_VOLUME_ID")
+    if not vol_id:
+        raise ValueError("volume_id or RUNPOD_NETWORK_VOLUME_ID required")
+    val_path = Path(val_labeled_path)
+    if not val_path.exists():
+        raise ValueError(f"val_labeled_path not found: {val_labeled_path}")
+    adapter_path_resolved = Path(adapter_path).resolve()
+    if not adapter_path_resolved.is_dir():
+        raise ValueError(f"adapter_path is not a directory: {adapter_path}")
+
+    out_dir = Path(output_dir or _PROJECT_ROOT / "distill_pipeline_output" / "eval_from_pod")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    eval_output_prefix = f"distill_pipeline_output/eval_output/{version}"
+    n_files = download_directory_from_runpod(vol_id, eval_output_prefix, out_dir)
+    logger.info("Downloaded %s files from volume (prefix=%s)", n_files, eval_output_prefix)
+    if delete_after_download:
+        deleted = delete_prefix_from_volume(vol_id, eval_output_prefix)
+        logger.info("Deleted %s objects from volume (prefix=%s)", deleted, eval_output_prefix)
+
+    report_path = next(Path(out_dir).rglob("report.json"), None)
+    if not report_path or not report_path.is_file():
+        return {"report_path": None, "download_root": str(out_dir), "error": "report.json not found under download"}
+    eval_dir = report_path.parent
+    llm_judge_path = eval_dir / "llm_as_a_judge_results.json"
+    kd_report_path = eval_dir / "kd_sft_analysis_report.json"
+
+    with open(report_path, "r", encoding="utf-8") as f:
+        report_data = json.load(f)
+    sample_ids = report_data.get("meta", {}).get("llm_judge_sample_ids", [])
+    if sample_ids:
+        cmd_judge = [
+            sys.executable,
+            str(_SCRIPT_DIR / "eval_llm_as_judge.py"),
+            "--report", str(report_path),
+            "--val-labeled", str(val_path),
+            "--adapter-path", str(adapter_path_resolved),
+            "--base-model", base_model,
+            "--output", str(llm_judge_path),
+        ]
+        rj = subprocess.run(cmd_judge, cwd=str(_PROJECT_ROOT), capture_output=True, text=True)
+        if rj.returncode != 0:
+            logger.warning("eval_llm_as_judge failed: %s", rj.stderr or rj.stdout)
+        elif llm_judge_path.exists():
+            cmd_kd = [
+                sys.executable,
+                str(_SCRIPT_DIR / "kd_sft_analysis.py"),
+                "--input", str(llm_judge_path),
+                "--output-dir", str(eval_dir),
+            ]
+            rk = subprocess.run(cmd_kd, cwd=str(_PROJECT_ROOT), capture_output=True, text=True)
+            if rk.returncode != 0:
+                logger.warning("kd_sft_analysis failed: %s", rk.stderr or rk.stdout)
+    else:
+        logger.info("No llm_judge_sample_ids in report; skipping LLM-as-a-Judge")
+
+    art = upload_eval_to_artifact_task(
+        eval_dir=eval_dir,
+        project=project,
+        entity=entity or os.environ.get("WANDB_ENTITY"),
+        artifact_name=artifact_name,
+    )
+    return {
+        "report_path": str(report_path),
+        "llm_as_a_judge_results_path": str(llm_judge_path) if llm_judge_path.exists() else None,
+        "kd_sft_analysis_report_path": str(kd_report_path) if kd_report_path.exists() else None,
+        "download_root": str(out_dir),
+        "artifact": art,
+    }
+
+
+@flow(name="download_eval_from_volume_flow", log_prints=True)
+def download_eval_from_volume_flow(
+    version: str,
+    val_labeled_path: str,
+    adapter_path: str,
+    output_dir: str | Path | None = None,
+    volume_id: str | None = None,
+    base_model: str = "Qwen/Qwen2.5-0.5B-Instruct",
+    delete_after_download: bool = True,
+) -> dict:
+    """볼륨에 이미 있는 eval 결과(version)만 받아와 judge → kd_sft → artifact 업로드."""
+    return download_eval_from_volume_and_finish_task(
+        version=version,
+        val_labeled_path=val_labeled_path,
+        adapter_path=adapter_path,
+        output_dir=str(output_dir) if output_dir else None,
+        volume_id=volume_id,
+        base_model=base_model,
+        delete_after_download=delete_after_download,
+    )
+
+
 @task(name="merge-adapter-for-serving-task", log_prints=True)
 def merge_adapter_for_serving_task(
     adapter_path: str,
@@ -2053,8 +2168,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Prefect flows for summary KD pipeline (distill_by_prefect.md)")
     parser.add_argument(
         "flow",
-        choices=["build_dataset", "labeling_openai_only", "labeling_with_pod", "labeling_pod_only", "train_student_with_pod", "run_sweep", "train_and_evaluate", "sweep_eval_merge", "evaluate", "evaluate_on_pod", "download_eval_artifact", "merge_for_serving", "merge_for_serving_with_pod", "upload_labeled_artifact", "upload_dataset_artifact", "upload_eval_artifact", "all", "all_sweep"],
-        help="Flow to run. evaluate_on_pod: Pod에서 평가 후 결과를 wandb artifact로 올리고 로컬에 다운로드. download_eval_artifact: 평가 artifact를 지정 버전으로 다운로드.",
+        choices=["build_dataset", "labeling_openai_only", "labeling_with_pod", "labeling_pod_only", "train_student_with_pod", "run_sweep", "train_and_evaluate", "sweep_eval_merge", "evaluate", "evaluate_on_pod", "download_eval_artifact", "download_eval_from_volume", "merge_for_serving", "merge_for_serving_with_pod", "upload_labeled_artifact", "upload_dataset_artifact", "upload_eval_artifact", "all", "all_sweep"],
+        help="Flow to run. evaluate_on_pod: Pod에서 평가 후 결과를 wandb artifact로 올리고 로컬에 다운로드. download_eval_from_volume: 볼륨에 이미 있는 eval(버전)만 받아와 judge→kd_sft→artifact.",
     )
     parser.add_argument("--gold-path", type=Path, default=None, help="train_labeled_gold_only.json 경로 (labeling_pod_only 필수)")
     parser.add_argument("--sweep-id", type=str, default=None, help="wandb sweep id (optional; 없으면 --sweep-yaml으로 flow 내부에서 등록)")
@@ -2070,6 +2185,8 @@ def main() -> None:
     parser.add_argument("--val-labeled-path", type=Path, default=None, help="val_labeled.json (for evaluate, evaluate_on_pod)")
     parser.add_argument("--test-labeled-path", type=Path, default=None, help="test_labeled.json (for evaluate, evaluate_on_pod)")
     parser.add_argument("--artifact-version", type=str, default="latest", help="For download_eval_artifact: artifact version (latest, v0, v1, ...)")
+    parser.add_argument("--eval-version", type=str, default=None, help="For download_eval_from_volume: 볼륨 eval_output 버전 (예: 20260311_064121)")
+    parser.add_argument("--no-delete-after-download", action="store_true", help="download_eval_from_volume: 다운로드 후 볼륨에서 해당 prefix 삭제 안 함")
     parser.add_argument("--no-skip-artifact-upload", action="store_true", help="evaluate_on_pod: Pod에서 wandb artifact 업로드 후 로컬에서 artifact 다운로드 (기본은 볼륨 다운로드+삭제+로컬 LLM judge)")
     parser.add_argument("--eval-path", type=Path, default=None, help="report.json 또는 eval/YYYYMMDD_HHMMSS 디렉터리 (upload_eval_artifact 필수)")
     parser.add_argument("--openai-cap", type=int, default=500, help="OpenAI labeling cap (for labeling_with_pod, all)")
@@ -2274,6 +2391,22 @@ def main() -> None:
             output_dir=out_dir,
             project=os.environ.get("WANDB_PROJECT", DEFAULT_WANDB_PROJECT),
             entity=os.environ.get("WANDB_ENTITY"),
+        )
+        print("Result:", result)
+    elif args.flow == "download_eval_from_volume":
+        if not getattr(args, "eval_version", None):
+            parser.error("download_eval_from_volume requires --eval-version (e.g. 20260311_064121)")
+        if not args.val_labeled_path or not args.val_labeled_path.exists():
+            parser.error("download_eval_from_volume requires --val-labeled-path")
+        if not args.adapter_path or not args.adapter_path.exists():
+            parser.error("download_eval_from_volume requires --adapter-path")
+        result = download_eval_from_volume_flow(
+            version=args.eval_version,
+            val_labeled_path=str(args.val_labeled_path),
+            adapter_path=str(args.adapter_path),
+            output_dir=out_dir,
+            base_model=args.student_model,
+            delete_after_download=not getattr(args, "no_delete_after_download", False),
         )
         print("Result:", result)
     elif args.flow == "merge_for_serving":
