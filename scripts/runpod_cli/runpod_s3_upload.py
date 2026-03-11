@@ -172,16 +172,34 @@ def download_directory_from_runpod(
     remote_prefix: str,
     local_dir: str | Path,
 ) -> int:
-    """볼륨의 remote_prefix 하위를 로컬 local_dir로 다운로드. 반환: 파일 수."""
+    """볼륨의 remote_prefix 하위를 로컬 local_dir로 다운로드. 반환: 파일 수.
+
+    RunPod S3 API pagination 비호환(동일 ContinuationToken 반복)을 피하기 위해
+    paginator 대신 list_objects_v2를 수동 루프로 호출하며, 같은 token이 두 번 나오면
+    그 시점에서 list를 중단하고 그때까지 수집한 키만 다운로드한다.
+    """
     client = get_runpod_s3_client()
     bucket = volume_id
     local_dir = Path(local_dir)
     local_dir.mkdir(parents=True, exist_ok=True)
     prefix = remote_prefix.rstrip("/") + "/"
     count = 0
-    paginator = client.get_paginator("list_objects_v2")
-    for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
-        for obj in page.get("Contents", []):
+    seen_tokens: set[str] = set()
+    continuation_token: str | None = None
+    while True:
+        if continuation_token is not None and continuation_token in seen_tokens:
+            break
+        if continuation_token is not None:
+            seen_tokens.add(continuation_token)
+        kwargs: dict[str, Any] = {
+            "Bucket": bucket,
+            "Prefix": prefix,
+            "MaxKeys": 1000,
+        }
+        if continuation_token:
+            kwargs["ContinuationToken"] = continuation_token
+        resp = client.list_objects_v2(**kwargs)
+        for obj in resp.get("Contents", []):
             key = obj.get("Key")
             if not key or not key.startswith(prefix):
                 continue
@@ -192,6 +210,10 @@ def download_directory_from_runpod(
             local_path.parent.mkdir(parents=True, exist_ok=True)
             client.download_file(bucket, key, str(local_path))
             count += 1
+        next_token = resp.get("NextContinuationToken")
+        if not next_token:
+            break
+        continuation_token = next_token
     return count
 
 
