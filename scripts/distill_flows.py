@@ -2202,6 +2202,7 @@ def main() -> None:
     parser.add_argument("--eval-version", type=str, default=None, help="For download_eval_from_volume: 볼륨 eval_output 버전 (예: 20260311_064121)")
     parser.add_argument("--no-delete-after-download", action="store_true", help="download_eval_from_volume: 다운로드 후 볼륨에서 해당 prefix 삭제 안 함")
     parser.add_argument("--no-skip-artifact-upload", action="store_true", help="evaluate_on_pod: Pod에서 wandb artifact 업로드 후 로컬에서 artifact 다운로드 (기본은 볼륨 다운로드+삭제+로컬 LLM judge)")
+    parser.add_argument("--eval-timeout", type=int, default=14400, help="evaluate_on_pod: eval_done.json 대기 초 (기본 14400=4h)")
     parser.add_argument("--eval-path", type=Path, default=None, help="report.json 또는 eval/YYYYMMDD_HHMMSS 디렉터리 (upload_eval_artifact 필수)")
     parser.add_argument("--openai-cap", type=int, default=500, help="OpenAI labeling cap (for labeling_with_pod, all)")
     parser.add_argument("--use-pod", action="store_true", help="all/all_sweep에서 labeling_with_pod 사용 (기본: labeling_openai_only)")
@@ -2396,6 +2397,7 @@ def main() -> None:
             test_labeled_path=str(args.test_labeled_path) if args.test_labeled_path else None,
             output_dir=out_dir,
             base_model=args.student_model,
+            eval_timeout_sec=args.eval_timeout,
             skip_artifact_upload=not getattr(args, "no_skip_artifact_upload", False),
         )
         print("Result:", result)
