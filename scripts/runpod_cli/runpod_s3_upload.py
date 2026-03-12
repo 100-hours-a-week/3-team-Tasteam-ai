@@ -77,6 +77,19 @@ def object_exists(s3_client: Any, bucket: str, key: str) -> bool:
         raise
 
 
+def prefix_has_objects(
+    volume_id: str,
+    prefix: str,
+    *,
+    s3_client: Any | None = None,
+) -> bool:
+    """볼륨에서 prefix 하위에 객체가 하나라도 있는지 확인. 다운로드 전 ls 체크용."""
+    client = s3_client or get_runpod_s3_client()
+    prefix_norm = prefix.rstrip("/") + "/" if prefix else ""
+    resp = client.list_objects_v2(Bucket=volume_id, Prefix=prefix_norm, MaxKeys=1)
+    return len(resp.get("Contents", [])) > 0
+
+
 def upload_file_to_volume(
     local_path: str | Path,
     volume_id: str | None = None,
