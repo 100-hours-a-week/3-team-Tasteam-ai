@@ -1559,16 +1559,18 @@ def evaluate_on_pod_task(
         out_dir.mkdir(parents=True, exist_ok=True)
 
         if download_from_volume or not qualified_name:
-            # 볼륨에서 다운로드 → 로컬에서 LLM-as-a-Judge, kd_sft_analysis
+            # 볼륨에서 버전 서브디렉터리에 다운로드 → 해당 경로의 report만 사용
             eval_output_prefix = f"distill_pipeline_output/eval_output/{version}"
-            n_files = download_directory_from_runpod(vol_id, eval_output_prefix, out_dir)
-            logger.info("Downloaded %s files from volume (prefix=%s)", n_files, eval_output_prefix)
+            eval_out_dir = out_dir / version
+            eval_out_dir.mkdir(parents=True, exist_ok=True)
+            n_files = download_directory_from_runpod(vol_id, eval_output_prefix, eval_out_dir)
+            logger.info("Downloaded %s files from volume (prefix=%s) -> %s", n_files, eval_output_prefix, eval_out_dir)
 
-            report_path = next(Path(out_dir).rglob("report.json"), None)
-            if not report_path or not report_path.is_file():
-                logger.warning("report.json not found under %s", out_dir)
+            report_path = eval_out_dir / "report.json"
+            if not report_path.is_file():
+                logger.warning("report.json not found at %s", report_path)
                 return {"report_path": None, "artifact_version": artifact_version_str, "eval_done": done, "download_root": str(out_dir)}
-            eval_dir = report_path.parent
+            eval_dir = eval_out_dir
             llm_judge_path = eval_dir / "llm_as_a_judge_results.json"
             kd_report_path = eval_dir / "kd_sft_analysis_report.json"
 
