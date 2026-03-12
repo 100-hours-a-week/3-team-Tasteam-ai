@@ -97,7 +97,6 @@ try:
         upload_labeled_dir_to_runpod,
         list_run_ids_with_adapter,
         download_directory_from_runpod,
-        delete_prefix_from_volume,
         upload_file_to_volume,
         upload_directory,
         get_runpod_s3_client,
@@ -107,7 +106,6 @@ except ImportError:
     upload_labeled_dir_to_runpod = None
     list_run_ids_with_adapter = None
     download_directory_from_runpod = None
-    delete_prefix_from_volume = None
     upload_file_to_volume = None
     upload_directory = None
     get_runpod_s3_client = None
@@ -1476,8 +1474,8 @@ def evaluate_on_pod_task(
         raise RuntimeError("RunPodClient not available.")
     if not upload_file_to_volume or not upload_directory or not get_runpod_s3_client or not object_exists:
         raise RuntimeError("runpod_s3_upload (upload_file_to_volume, upload_directory, object_exists) required.")
-    if skip_artifact_upload and (not download_directory_from_runpod or not delete_prefix_from_volume):
-        raise RuntimeError("runpod_s3_upload (download_directory_from_runpod, delete_prefix_from_volume) required when skip_artifact_upload=True")
+    if skip_artifact_upload and not download_directory_from_runpod:
+        raise RuntimeError("runpod_s3_upload (download_directory_from_runpod) required when skip_artifact_upload=True")
     token = os.environ.get("RUNPOD_API_KEY")
     if not token:
         raise ValueError("RUNPOD_API_KEY required for evaluate_on_pod_task")
@@ -1561,19 +1559,10 @@ def evaluate_on_pod_task(
         out_dir.mkdir(parents=True, exist_ok=True)
 
         if download_from_volume or not qualified_name:
-            # 볼륨에서 다운로드 → prefix 삭제 → 로컬에서 LLM-as-a-Judge, kd_sft_analysis
+            # 볼륨에서 다운로드 → 로컬에서 LLM-as-a-Judge, kd_sft_analysis
             eval_output_prefix = f"distill_pipeline_output/eval_output/{version}"
             n_files = download_directory_from_runpod(vol_id, eval_output_prefix, out_dir)
             logger.info("Downloaded %s files from volume (prefix=%s)", n_files, eval_output_prefix)
-            try:
-                deleted = delete_prefix_from_volume(vol_id, eval_output_prefix)
-                logger.info("Deleted %s objects from volume (prefix=%s)", deleted, eval_output_prefix)
-            except Exception as e:
-                logger.warning(
-                    "Failed to delete prefix from volume (prefix=%s), continuing: %s",
-                    eval_output_prefix,
-                    e,
-                )
 
             report_path = next(Path(out_dir).rglob("report.json"), None)
             if not report_path or not report_path.is_file():
@@ -1720,7 +1709,6 @@ def download_eval_from_volume_and_finish_task(
     artifact_name: str = EVAL_ARTIFACT_NAME_DEFAULT,
     project: str = DEFAULT_WANDB_PROJECT,
     entity: str | None = None,
-    delete_after_download: bool = True,
 ) -> dict:
     """
     이미 Pod가 볼륨에 올려둔 eval 결과(version)만 받아와서
@@ -1729,8 +1717,6 @@ def download_eval_from_volume_and_finish_task(
     """
     if not download_directory_from_runpod or not get_runpod_s3_client:
         raise RuntimeError("runpod_s3_upload (download_directory_from_runpod, get_runpod_s3_client) required.")
-    if delete_after_download and not delete_prefix_from_volume:
-        raise RuntimeError("delete_prefix_from_volume required when delete_after_download=True")
     vol_id = volume_id or (runpod_config.get_volume_id_eval() if runpod_config else None) or os.environ.get("RUNPOD_NETWORK_VOLUME_ID")
     if not vol_id:
         raise ValueError("volume_id or RUNPOD_NETWORK_VOLUME_ID required")
@@ -1746,16 +1732,6 @@ def download_eval_from_volume_and_finish_task(
     eval_output_prefix = f"distill_pipeline_output/eval_output/{version}"
     n_files = download_directory_from_runpod(vol_id, eval_output_prefix, out_dir)
     logger.info("Downloaded %s files from volume (prefix=%s)", n_files, eval_output_prefix)
-    if delete_after_download:
-        try:
-            deleted = delete_prefix_from_volume(vol_id, eval_output_prefix)
-            logger.info("Deleted %s objects from volume (prefix=%s)", deleted, eval_output_prefix)
-        except Exception as e:
-            logger.warning(
-                "Failed to delete prefix from volume (prefix=%s), continuing: %s",
-                eval_output_prefix,
-                e,
-            )
 
     report_path = next(Path(out_dir).rglob("report.json"), None)
     if not report_path or not report_path.is_file():
@@ -1816,7 +1792,6 @@ def download_eval_from_volume_flow(
     output_dir: str | Path | None = None,
     volume_id: str | None = None,
     base_model: str = "Qwen/Qwen2.5-0.5B-Instruct",
-    delete_after_download: bool = True,
 ) -> dict:
     """볼륨에 이미 있는 eval 결과(version)만 받아와 judge → kd_sft → artifact 업로드."""
     return download_eval_from_volume_and_finish_task(
@@ -1826,7 +1801,6 @@ def download_eval_from_volume_flow(
         output_dir=str(output_dir) if output_dir else None,
         volume_id=volume_id,
         base_model=base_model,
-        delete_after_download=delete_after_download,
     )
 
 
@@ -2200,7 +2174,6 @@ def main() -> None:
     parser.add_argument("--test-labeled-path", type=Path, default=None, help="test_labeled.json (for evaluate, evaluate_on_pod)")
     parser.add_argument("--artifact-version", type=str, default="latest", help="For download_eval_artifact: artifact version (latest, v0, v1, ...)")
     parser.add_argument("--eval-version", type=str, default=None, help="For download_eval_from_volume: 볼륨 eval_output 버전 (예: 20260311_064121)")
-    parser.add_argument("--no-delete-after-download", action="store_true", help="download_eval_from_volume: 다운로드 후 볼륨에서 해당 prefix 삭제 안 함")
     parser.add_argument("--no-skip-artifact-upload", action="store_true", help="evaluate_on_pod: Pod에서 wandb artifact 업로드 후 로컬에서 artifact 다운로드 (기본은 볼륨 다운로드+삭제+로컬 LLM judge)")
     parser.add_argument("--eval-timeout", type=int, default=14400, help="evaluate_on_pod: eval_done.json 대기 초 (기본 14400=4h)")
     parser.add_argument("--eval-path", type=Path, default=None, help="report.json 또는 eval/YYYYMMDD_HHMMSS 디렉터리 (upload_eval_artifact 필수)")
@@ -2422,7 +2395,6 @@ def main() -> None:
             adapter_path=str(args.adapter_path),
             output_dir=out_dir,
             base_model=args.student_model,
-            delete_after_download=not getattr(args, "no_delete_after_download", False),
         )
         print("Result:", result)
     elif args.flow == "merge_for_serving":
