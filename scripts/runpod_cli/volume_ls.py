@@ -26,21 +26,63 @@ def list_volume_prefix(
 ) -> list[dict]:
     """볼륨에서 prefix 하위 객체 목록 반환. 각 항목: Key, Size, LastModified.
 
-    자동 페이지네이션(paginator) 사용.
+    RunPod S3 list pagination 비호환(동일 NextContinuationToken 반복 등) 때문에
+    paginator 대신 list_objects_v2를 수동 루프로 호출한다.
+    동일 토큰이 반복되면 잠시 대기 후 재시도하고, 계속 반복되면 중단한다.
     """
     client = s3_client or get_runpod_s3_client()
     prefix_norm = prefix.rstrip("/") + "/" if prefix else ""
     out: list[dict] = []
-    paginator = client.get_paginator("list_objects_v2")
-    for page in paginator.paginate(Bucket=volume_id, Prefix=prefix_norm):
-        for obj in page.get("Contents", []):
+    seen_keys: set[str] = set()
+
+    continuation_token: str | None = None
+    last_token: str | None = None
+    same_token_retries = 0
+    max_same_token_retries = 5
+    retry_sleep_sec = 2
+
+    while True:
+        kwargs: dict[str, Any] = {
+            "Bucket": volume_id,
+            "Prefix": prefix_norm,
+            "MaxKeys": 1000,
+        }
+        if continuation_token:
+            kwargs["ContinuationToken"] = continuation_token
+
+        resp = client.list_objects_v2(**kwargs)
+        for obj in resp.get("Contents", []):
+            key = obj.get("Key", "")
+            if not key or key in seen_keys:
+                continue
+            seen_keys.add(key)
             out.append(
                 {
-                    "Key": obj.get("Key", ""),
+                    "Key": key,
                     "Size": obj.get("Size", 0),
                     "LastModified": obj.get("LastModified"),
                 }
             )
+
+        next_token = resp.get("NextContinuationToken")
+        if not next_token:
+            break
+
+        if next_token == last_token:
+            same_token_retries += 1
+            if same_token_retries > max_same_token_retries:
+                break
+            # list 인덱스 지연/비호환 완화: 잠깐 대기 후 같은 token으로 재시도
+            import time as _time
+
+            _time.sleep(retry_sleep_sec)
+            continuation_token = next_token
+            continue
+
+        same_token_retries = 0
+        last_token = next_token
+        continuation_token = next_token
+
     return out
 
 
