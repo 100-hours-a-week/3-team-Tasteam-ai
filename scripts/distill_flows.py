@@ -1766,12 +1766,14 @@ def download_eval_from_volume_and_finish_task(
     out_dir = Path(output_dir or _PROJECT_ROOT / "distill_pipeline_output" / "eval_from_pod")
     out_dir.mkdir(parents=True, exist_ok=True)
     eval_output_prefix = f"distill_pipeline_output/eval_output/{version}"
-    n_files = download_directory_from_runpod(vol_id, eval_output_prefix, out_dir)
-    logger.info("Downloaded %s files from volume (prefix=%s)", n_files, eval_output_prefix)
+    eval_out_dir = out_dir / version
+    eval_out_dir.mkdir(parents=True, exist_ok=True)
+    n_files = download_directory_from_runpod(vol_id, eval_output_prefix, eval_out_dir)
+    logger.info("Downloaded %s files from volume (prefix=%s) -> %s", n_files, eval_output_prefix, eval_out_dir)
 
-    report_path = next(Path(out_dir).rglob("report.json"), None)
+    report_path = next(eval_out_dir.rglob("report.json"), None)
     if not report_path or not report_path.is_file():
-        return {"report_path": None, "download_root": str(out_dir), "error": "report.json not found under download"}
+        return {"report_path": None, "download_root": str(out_dir), "error": "report.json not found under " + str(eval_out_dir)}
     eval_dir = report_path.parent
     llm_judge_path = eval_dir / "llm_as_a_judge_results.json"
     kd_report_path = eval_dir / "kd_sft_analysis_report.json"
