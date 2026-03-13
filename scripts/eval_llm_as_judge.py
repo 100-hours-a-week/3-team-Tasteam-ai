@@ -149,23 +149,65 @@ def _generate_one(
     return _extract_json_for_rouge(raw)
 
 
-JUDGE_SYSTEM_PROMPT = """당신은 레스토랑 리뷰 요약 품질을 평가하는 심사위원입니다.
-입력: (1) 원문 리뷰/지시문(instruction), (2) 참조 요약(reference), (3) 평가 대상 모델의 예측 요약(prediction)
-출력: JSON 형식으로 {"score": 1~5, "reason": "한 줄 이유"}
-- score: 1(매우 나쁨) ~ 5(매우 좋음). 참조와 비교해 정확성, 요약 완전성, 자연스러움을 종합 판단.
-- reason: 한 줄로 핵심 이유를 한국어로 기술.
-반드시 유효한 JSON만 출력하세요."""
+# prompt_jv2: 구조화 요약 품질용 6축 루브릭 (faithfulness, category, schema, evidence, completeness, naturalness)
+JUDGE_SYSTEM_PROMPT = """당신은 레스토랑 리뷰의 **구조화 요약** 품질을 평가하는 심사위원입니다.
+평가 대상은 JSON 형식의 요약(service, food, price 각각 summary/bullets/evidence)입니다.
+자유 요약이 아니라, 입력(instruction)에 근거한 구조 준수·근거 정합성이 중요합니다.
 
-JUDGE_USER_TEMPLATE = """## Instruction (원문)
+## 출력 형식 (반드시 유효한 JSON만)
+{
+  "faithfulness": 1~5,
+  "category_correctness": 1~5,
+  "schema_adherence": 1~5,
+  "evidence_validity": 1~5,
+  "completeness": 1~5,
+  "naturalness": 1~5,
+  "reason": "한 줄 요약 (선택)"
+}
+모든 점수는 1(매우 나쁨) ~ 5(매우 좋음) 정수입니다.
+
+## 평가 축 정의
+1. **faithfulness**: 입력에 없는 내용이 들어갔는가. category별 내용이 실제 리뷰 근거에 기반하는가.
+2. **category_correctness**: service / price / food가 올바르게 분리되었는가. food 내용을 service에 넣거나 그 반대가 없는가.
+3. **schema_adherence**: required key 존재, 허용된 구조 유지. **price에 직접 언급이 없으면 빈 bullets 허용**이 잘 지켜졌는가.
+4. **evidence_validity**: evidence index가 실제 문장 인덱스인가. bullet과 support 관계가 맞는가.
+5. **completeness**: 입력에 존재하는 중요한 포인트를 과도하게 누락하지 않았는가.
+6. **naturalness**: 문장이 너무 깨지거나 반복되지 않는가.
+
+## 반드시 적용할 규칙
+- **입력에 없는 내용 추론 시 큰 감점** (faithfulness 낮게).
+- **evidence index 오류 시 큰 감점** (evidence_validity 낮게).
+- **price 직접 언급이 없으면 빈 bullets 허용, 감점 금지** (schema_adherence에서 유리하게).
+- **service**는 친절/응대/대기/분위기·좌석 편의 범위만. 이외 내용이 있으면 category_correctness 감점.
+- **food**는 메뉴/맛/식감 중심만. 이외 내용이 있으면 category_correctness 감점.
+- **category 간 혼입**(예: food 내용을 service에 넣음) 시 category_correctness 감점."""
+
+JUDGE_USER_TEMPLATE = """## Instruction (원문 리뷰/입력)
 {instruction}
 
-## Reference (정답 요약)
+## Reference (정답 구조화 요약)
 {reference}
 
 ## Prediction (평가 대상 모델 출력)
 {prediction}
 
-위 prediction을 reference와 비교해 1~5점으로 평가하고 이유를 JSON으로 출력하세요."""
+위 Prediction을 Reference 및 Instruction과 비교하여, 6개 축(faithfulness, category_correctness, schema_adherence, evidence_validity, completeness, naturalness) 각각 1~5점으로 평가한 JSON을 출력하세요."""
+
+
+JUDGE_AXES = (
+    "faithfulness",
+    "category_correctness",
+    "schema_adherence",
+    "evidence_validity",
+    "completeness",
+    "naturalness",
+)
+
+
+def _clamp_score(v: Any) -> int:
+    if isinstance(v, (int, float)):
+        return max(1, min(5, int(v)))
+    return 1
 
 
 def _call_judge(
@@ -176,7 +218,7 @@ def _call_judge(
     model: str = "gpt-4o",
     api_key: str | None = None,
 ) -> dict[str, Any]:
-    """OpenAI GPT-4o로 LLM-as-a-judge 평가. {"score": int, "reason": str} 반환."""
+    """OpenAI GPT-4o로 LLM-as-a-judge 평가. 6축 점수 + reason 반환. score=6축 평균(하위 호환)."""
     from openai import OpenAI
 
     client = OpenAI(api_key=api_key or os.environ.get("OPENAI_API_KEY"))
@@ -194,22 +236,36 @@ def _call_judge(
         temperature=0,
     )
     text = (resp.choices[0].message.content or "").strip()
-    # 마크다운 코드블록 제거
     if "```" in text:
         m = re.search(r"```(?:json)?\s*\n?(\{[\s\S]*?\})\s*```", text)
         if m:
             text = m.group(1)
+    out: dict[str, Any] = {}
     try:
-        out = json.loads(text)
+        parsed = json.loads(text)
+        if isinstance(parsed, dict):
+            out["reason"] = parsed.get("reason", "")
+            scores: list[int] = []
+            for ax in JUDGE_AXES:
+                val = _clamp_score(parsed.get(ax, 1))
+                out[ax] = val
+                scores.append(val)
+            out["score"] = round(sum(scores) / len(scores), 2) if scores else 1
+        else:
+            out = _fallback_parse_judge(text)
     except json.JSONDecodeError:
-        m = re.search(r'"score"\s*:\s*(\d+)', text)
-        score = int(m.group(1)) if m else 0
-        mr = re.search(r'"reason"\s*:\s*"([^"]*)"', text)
-        reason = mr.group(1) if mr else f"parse_failed: {text[:150]}"
-        out = {"score": score, "reason": reason}
-    score_val = out.get("score")
-    if isinstance(score_val, (int, float)):
-        out["score"] = max(1, min(5, int(score_val)))
+        out = _fallback_parse_judge(text)
+    return out
+
+
+def _fallback_parse_judge(text: str) -> dict[str, Any]:
+    """파싱 실패 시 축별 점수 추출 시도, 없으면 1점 + reason."""
+    out: dict[str, Any] = {"reason": f"parse_failed: {text[:200]}"}
+    for ax in JUDGE_AXES:
+        m = re.search(rf'"{re.escape(ax)}"\s*:\s*(\d+)', text)
+        out[ax] = _clamp_score(int(m.group(1))) if m else 1
+    scores = [out[ax] for ax in JUDGE_AXES]
+    out["score"] = round(sum(scores) / len(scores), 2) if scores else 1
     return out
 
 
@@ -277,28 +333,41 @@ def main() -> None:
         ref = s.get("output", "")
         pred = _generate_one(model, tokenizer, ins, max_new_tokens=1024)
         judge_out = _call_judge(ins, ref, pred, model=args.openai_model, api_key=api_key)
-        results.append({
+        row: dict[str, Any] = {
             "sample_id": s.get("sample_id"),
             "instruction": ins[:500] + "..." if len(ins) > 500 else ins,
             "ref": ref[:500] + "..." if len(ref) > 500 else ref,
             "pred": pred,
             "score": judge_out.get("score", 0),
             "reason": judge_out.get("reason", ""),
-        })
+        }
+        for ax in JUDGE_AXES:
+            row[ax] = judge_out.get(ax, 1)
+        results.append(row)
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    summary = {
-        "n_samples": len(results),
-        "avg_score": sum(r["score"] for r in results) / len(results) if results else 0,
+    n = len(results)
+    summary: dict[str, Any] = {
+        "n_samples": n,
+        "avg_score": round(sum(r["score"] for r in results) / n, 2) if n else 0,
         "judge_model": args.openai_model,
         "adapter_path": str(args.adapter_path),
+        "judge_rubric_version": "v2",
     }
+    for ax in JUDGE_AXES:
+        summary[f"avg_{ax}"] = round(sum(r[ax] for r in results) / n, 2) if n else 0
     out = {"meta": summary, "results": results}
     with open(args.output, "w", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False, indent=2)
 
-    logger.info("Wrote %s (avg_score=%.2f)", args.output, summary["avg_score"])
-    print(json.dumps({"output_path": str(args.output), "avg_score": summary["avg_score"]}, ensure_ascii=False))
+    logger.info(
+        "Wrote %s (avg_score=%.2f, avg_faithfulness=%.2f, avg_evidence_validity=%.2f)",
+        args.output,
+        summary["avg_score"],
+        summary.get("avg_faithfulness", 0),
+        summary.get("avg_evidence_validity", 0),
+    )
+    print(json.dumps({"output_path": str(args.output), "avg_score": summary["avg_score"], "judge_rubric_version": "v2"}, ensure_ascii=False))
 
 
 if __name__ == "__main__":
