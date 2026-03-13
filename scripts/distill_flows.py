@@ -1467,10 +1467,12 @@ def evaluate_on_pod_task(
     eval_timeout_sec: int = 14400,
     pod_wait_timeout_sec: int = 600,
     skip_artifact_upload: bool = True,
+    download_only: bool = False,
 ) -> dict:
     """
-    Pod에서 eval_distill 실행 → (skip_artifact_upload 시) 볼륨에서 다운로드 후 삭제, 로컬에서 LLM-as-a-Judge·kd_sft_analysis 실행.
-    skip_artifact_upload=False 시 기존처럼 wandb artifact 업로드 후 로컬에서 artifact 다운로드.
+    Pod에서 eval_distill 실행 → (skip_artifact_upload 시) 볼륨에서 다운로드.
+    download_only=True면 다운로드 후 즉시 반환(judge/kd_sft/artifact 생략).
+    skip_artifact_upload=False 시 wandb artifact 업로드 후 로컬에서 artifact 다운로드.
     """
     if RunPodClient is None:
         raise RuntimeError("RunPodClient not available.")
@@ -1608,6 +1610,15 @@ def evaluate_on_pod_task(
             llm_judge_path = eval_dir / "llm_as_a_judge_results.json"
             kd_report_path = eval_dir / "kd_sft_analysis_report.json"
 
+            if download_only:
+                return {
+                    "report_path": str(report_path),
+                    "eval_dir": str(eval_dir),
+                    "download_root": str(out_dir),
+                    "artifact_version": artifact_version_str,
+                    "eval_done": done,
+                }
+
             # 로컬에서 LLM-as-a-Judge → kd_sft_analysis (evaluate_task와 동일)
             with open(report_path, "r", encoding="utf-8") as f:
                 report_data = json.load(f)
@@ -1699,8 +1710,9 @@ def evaluate_on_pod_flow(
     volume_id: str | None = None,
     eval_timeout_sec: int = 14400,
     skip_artifact_upload: bool = True,
+    download_only: bool = False,
 ) -> dict:
-    """Pod에서 평가 실행. skip_artifact_upload=True(기본)면 볼륨 다운로드 후 삭제, 로컬에서 LLM-as-a-Judge·kd_sft_analysis 실행."""
+    """Pod에서 평가 실행. download_only=True면 다운로드까지만. 아니면 볼륨 다운로드 후 로컬에서 judge·kd_sft·artifact."""
     return evaluate_on_pod_task(
         adapter_path=adapter_path,
         val_labeled_path=val_labeled_path,
@@ -1713,6 +1725,31 @@ def evaluate_on_pod_flow(
         volume_id=volume_id,
         eval_timeout_sec=eval_timeout_sec,
         skip_artifact_upload=skip_artifact_upload,
+        download_only=download_only,
+    )
+
+
+@flow(name="evaluate_on_pod_download_only_flow", log_prints=True)
+def evaluate_on_pod_download_only_flow(
+    adapter_path: str,
+    val_labeled_path: str,
+    test_labeled_path: str | None = None,
+    output_dir: str | Path | None = None,
+    base_model: str = "Qwen/Qwen2.5-0.5B-Instruct",
+    volume_id: str | None = None,
+    eval_timeout_sec: int = 14400,
+) -> dict:
+    """Pod에서 평가 실행 후 볼륨에서 다운로드까지만 수행(judge/kd_sft/artifact 없음)."""
+    return evaluate_on_pod_task(
+        adapter_path=adapter_path,
+        val_labeled_path=val_labeled_path,
+        test_labeled_path=test_labeled_path,
+        output_dir=str(output_dir) if output_dir else None,
+        base_model=base_model,
+        volume_id=volume_id,
+        eval_timeout_sec=eval_timeout_sec,
+        skip_artifact_upload=True,
+        download_only=True,
     )
 
 
@@ -2194,8 +2231,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Prefect flows for summary KD pipeline (distill_by_prefect.md)")
     parser.add_argument(
         "flow",
-        choices=["build_dataset", "labeling_openai_only", "labeling_with_pod", "labeling_pod_only", "train_student_with_pod", "run_sweep", "train_and_evaluate", "sweep_eval_merge", "evaluate", "evaluate_on_pod", "download_eval_artifact", "download_eval_from_volume", "merge_for_serving", "merge_for_serving_with_pod", "upload_labeled_artifact", "upload_dataset_artifact", "upload_eval_artifact", "all", "all_sweep"],
-        help="Flow to run. evaluate_on_pod: Pod에서 평가 후 결과를 wandb artifact로 올리고 로컬에 다운로드. download_eval_from_volume: 볼륨에 이미 있는 eval(버전)만 받아와 judge→kd_sft→artifact.",
+        choices=["build_dataset", "labeling_openai_only", "labeling_with_pod", "labeling_pod_only", "train_student_with_pod", "run_sweep", "train_and_evaluate", "sweep_eval_merge", "evaluate", "evaluate_on_pod", "evaluate_on_pod_download_only", "download_eval_artifact", "download_eval_from_volume", "merge_for_serving", "merge_for_serving_with_pod", "upload_labeled_artifact", "upload_dataset_artifact", "upload_eval_artifact", "all", "all_sweep"],
+        help="Flow to run. evaluate_on_pod: Pod 평가 후 다운로드·judge·kd_sft·artifact. evaluate_on_pod_download_only: Pod 평가 후 다운로드만.",
     )
     parser.add_argument("--gold-path", type=Path, default=None, help="train_labeled_gold_only.json 경로 (labeling_pod_only 필수)")
     parser.add_argument("--sweep-id", type=str, default=None, help="wandb sweep id (optional; 없으면 --sweep-yaml으로 flow 내부에서 등록)")
@@ -2410,6 +2447,20 @@ def main() -> None:
             base_model=args.student_model,
             eval_timeout_sec=args.eval_timeout,
             skip_artifact_upload=not getattr(args, "no_skip_artifact_upload", False),
+        )
+        print("Result:", result)
+    elif args.flow == "evaluate_on_pod_download_only":
+        if not args.adapter_path:
+            parser.error("evaluate_on_pod_download_only requires --adapter-path")
+        if not args.val_labeled_path or not args.val_labeled_path.exists():
+            parser.error("evaluate_on_pod_download_only requires --val-labeled-path (path to val_labeled.json)")
+        result = evaluate_on_pod_download_only_flow(
+            adapter_path=str(args.adapter_path),
+            val_labeled_path=str(args.val_labeled_path),
+            test_labeled_path=str(args.test_labeled_path) if args.test_labeled_path else None,
+            output_dir=out_dir,
+            base_model=args.student_model,
+            eval_timeout_sec=args.eval_timeout,
         )
         print("Result:", result)
     elif args.flow == "download_eval_artifact":
