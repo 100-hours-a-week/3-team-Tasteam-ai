@@ -1466,13 +1466,12 @@ def evaluate_on_pod_task(
     eval_poll_interval_sec: int = 60,
     eval_timeout_sec: int = 14400,
     pod_wait_timeout_sec: int = 600,
-    skip_artifact_upload: bool = True,
+    skip_artifact_upload: bool = False,
     download_only: bool = False,
 ) -> dict:
     """
-    Pod에서 eval_distill 실행 → (skip_artifact_upload 시) 볼륨에서 다운로드.
-    download_only=True면 다운로드 후 즉시 반환(judge/kd_sft/artifact 생략).
-    skip_artifact_upload=False 시 wandb artifact 업로드 후 로컬에서 artifact 다운로드.
+    Pod에서 eval_distill 실행. 기본은 wandb artifact 업로드 후 로컬에서 artifact 다운로드.
+    skip_artifact_upload=True 시 볼륨에서 다운로드. download_only=True면 다운로드 후 즉시 반환(judge/kd_sft/artifact 생략).
     """
     if RunPodClient is None:
         raise RuntimeError("RunPodClient not available.")
@@ -1709,10 +1708,10 @@ def evaluate_on_pod_flow(
     entity: str | None = None,
     volume_id: str | None = None,
     eval_timeout_sec: int = 14400,
-    skip_artifact_upload: bool = True,
+    skip_artifact_upload: bool = False,
     download_only: bool = False,
 ) -> dict:
-    """Pod에서 평가 실행. download_only=True면 다운로드까지만. 아니면 볼륨 다운로드 후 로컬에서 judge·kd_sft·artifact."""
+    """Pod에서 평가 실행. 기본은 artifact 업로드 후 로컬 다운로드. skip_artifact_upload=True면 볼륨 다운로드 후 judge·kd_sft·artifact."""
     return evaluate_on_pod_task(
         adapter_path=adapter_path,
         val_labeled_path=val_labeled_path,
@@ -2249,7 +2248,7 @@ def main() -> None:
     parser.add_argument("--test-labeled-path", type=Path, default=None, help="test_labeled.json (for evaluate, evaluate_on_pod)")
     parser.add_argument("--artifact-version", type=str, default="latest", help="For download_eval_artifact: artifact version (latest, v0, v1, ...)")
     parser.add_argument("--eval-version", type=str, default=None, help="For download_eval_from_volume: 볼륨 eval_output 버전 (예: 20260311_064121)")
-    parser.add_argument("--no-skip-artifact-upload", action="store_true", help="evaluate_on_pod: Pod에서 wandb artifact 업로드 후 로컬에서 artifact 다운로드 (기본은 볼륨 다운로드+삭제+로컬 LLM judge)")
+    parser.add_argument("--skip-artifact-upload", action="store_true", help="evaluate_on_pod: Pod에서 artifact 업로드 생략, 볼륨에서 다운로드 후 로컬에서 judge·kd_sft (기본은 artifact 업로드)")
     parser.add_argument("--eval-timeout", type=int, default=14400, help="evaluate_on_pod: eval_done.json 대기 초 (기본 14400=4h)")
     parser.add_argument("--eval-path", type=Path, default=None, help="report.json 또는 eval/YYYYMMDD_HHMMSS 디렉터리 (upload_eval_artifact 필수)")
     parser.add_argument("--openai-cap", type=int, default=500, help="OpenAI labeling cap (for labeling_with_pod, all)")
@@ -2446,7 +2445,7 @@ def main() -> None:
             output_dir=out_dir,
             base_model=args.student_model,
             eval_timeout_sec=args.eval_timeout,
-            skip_artifact_upload=not getattr(args, "no_skip_artifact_upload", False),
+            skip_artifact_upload=getattr(args, "skip_artifact_upload", False),
         )
         print("Result:", result)
     elif args.flow == "evaluate_on_pod_download_only":

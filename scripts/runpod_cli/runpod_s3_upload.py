@@ -11,6 +11,7 @@ RunPod Network Volume S3 호환 API로 로컬 파일/디렉터리 업로드.
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
 from typing import Any
 
@@ -187,20 +188,40 @@ def download_directory_from_runpod(
 ) -> int:
     """볼륨의 remote_prefix 하위를 로컬 local_dir로 다운로드. 반환: 파일 수.
 
-    list는 자동 페이지네이션(paginator) 사용. delete는 수동 페이지네이션 유지.
+    RunPod S3 list pagination 비호환(동일 NextContinuationToken 반복) 때문에
+    paginator 대신 list_objects_v2를 수동 루프로 호출한다.
+    동일 토큰이 반복되면 잠시 대기 후 재시도하고, 계속 반복되면 중단한다.
+    키 중복 제거 후 다운로드하여 PaginationError 없이 동작한다.
     """
     client = get_runpod_s3_client()
     bucket = volume_id
     local_dir = Path(local_dir)
     local_dir.mkdir(parents=True, exist_ok=True)
     prefix = remote_prefix.rstrip("/") + "/"
+    seen_keys: set[str] = set()
     count = 0
-    paginator = client.get_paginator("list_objects_v2")
-    for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
-        for obj in page.get("Contents", []):
+
+    continuation_token: str | None = None
+    last_token: str | None = None
+    same_token_retries = 0
+    max_same_token_retries = 5
+    retry_sleep_sec = 2
+
+    while True:
+        kwargs: dict[str, Any] = {
+            "Bucket": bucket,
+            "Prefix": prefix,
+            "MaxKeys": 1000,
+        }
+        if continuation_token:
+            kwargs["ContinuationToken"] = continuation_token
+
+        resp = client.list_objects_v2(**kwargs)
+        for obj in resp.get("Contents", []):
             key = obj.get("Key")
-            if not key or not key.startswith(prefix):
+            if not key or not key.startswith(prefix) or key in seen_keys:
                 continue
+            seen_keys.add(key)
             rel = key[len(prefix):].lstrip("/")
             if not rel:
                 continue
@@ -208,6 +229,23 @@ def download_directory_from_runpod(
             local_path.parent.mkdir(parents=True, exist_ok=True)
             client.download_file(bucket, key, str(local_path))
             count += 1
+
+        next_token = resp.get("NextContinuationToken")
+        if not next_token:
+            break
+
+        if next_token == last_token:
+            same_token_retries += 1
+            if same_token_retries > max_same_token_retries:
+                break
+            time.sleep(retry_sleep_sec)
+            continuation_token = next_token
+            continue
+
+        same_token_retries = 0
+        last_token = next_token
+        continuation_token = next_token
+
     return count
 
 
