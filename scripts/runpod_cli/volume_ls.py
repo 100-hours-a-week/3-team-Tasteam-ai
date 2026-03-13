@@ -26,27 +26,14 @@ def list_volume_prefix(
 ) -> list[dict]:
     """볼륨에서 prefix 하위 객체 목록 반환. 각 항목: Key, Size, LastModified.
 
-    RunPod pagination 비호환을 피해 list_objects_v2를 수동 루프로 호출한다.
+    자동 페이지네이션(paginator) 사용.
     """
     client = s3_client or get_runpod_s3_client()
     prefix_norm = prefix.rstrip("/") + "/" if prefix else ""
     out: list[dict] = []
-    seen_tokens: set[str] = set()
-    continuation_token: str | None = None
-    while True:
-        if continuation_token is not None and continuation_token in seen_tokens:
-            break
-        if continuation_token is not None:
-            seen_tokens.add(continuation_token)
-        kwargs: dict[str, Any] = {
-            "Bucket": volume_id,
-            "Prefix": prefix_norm,
-            "MaxKeys": 1000,
-        }
-        if continuation_token:
-            kwargs["ContinuationToken"] = continuation_token
-        resp = client.list_objects_v2(**kwargs)
-        for obj in resp.get("Contents", []):
+    paginator = client.get_paginator("list_objects_v2")
+    for page in paginator.paginate(Bucket=volume_id, Prefix=prefix_norm):
+        for obj in page.get("Contents", []):
             out.append(
                 {
                     "Key": obj.get("Key", ""),
@@ -54,10 +41,6 @@ def list_volume_prefix(
                     "LastModified": obj.get("LastModified"),
                 }
             )
-        next_token = resp.get("NextContinuationToken")
-        if not next_token:
-            break
-        continuation_token = next_token
     return out
 
 
