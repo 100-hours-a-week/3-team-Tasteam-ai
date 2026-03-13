@@ -1561,6 +1561,11 @@ def evaluate_on_pod_task(
         out_dir.mkdir(parents=True, exist_ok=True)
 
         if download_from_volume or not qualified_name:
+            # S3 스타일 eventual consistency: eval_done.json은 보이지만 list가 지연될 수 있음
+            _sleep_after_done_sec = 10
+            logger.info("Waiting %ss for volume list consistency before download", _sleep_after_done_sec)
+            time.sleep(_sleep_after_done_sec)
+
             # 볼륨에서 버전 서브디렉터리에 다운로드 → 해당 경로의 report만 사용
             eval_output_prefix = f"distill_pipeline_output/eval_output/{version}"
             if prefix_has_objects:
@@ -1572,8 +1577,28 @@ def evaluate_on_pod_task(
                     )
             eval_out_dir = out_dir / version
             eval_out_dir.mkdir(parents=True, exist_ok=True)
-            n_files = download_directory_from_runpod(vol_id, eval_output_prefix, eval_out_dir)
-            logger.info("Downloaded %s files from volume (prefix=%s) -> %s", n_files, eval_output_prefix, eval_out_dir)
+
+            n_files = 0
+            _max_download_attempts = 3
+            _retry_delay_sec = 10
+            for attempt in range(1, _max_download_attempts + 1):
+                n_files = download_directory_from_runpod(vol_id, eval_output_prefix, eval_out_dir)
+                logger.info(
+                    "Downloaded %s files from volume (prefix=%s) -> %s (attempt %s/%s)",
+                    n_files,
+                    eval_output_prefix,
+                    eval_out_dir,
+                    attempt,
+                    _max_download_attempts,
+                )
+                if n_files > 0:
+                    break
+                if attempt < _max_download_attempts:
+                    logger.warning(
+                        "Downloaded 0 files; waiting %ss and retrying (list may be eventually consistent)",
+                        _retry_delay_sec,
+                    )
+                    time.sleep(_retry_delay_sec)
 
             report_path = next(eval_out_dir.rglob("report.json"), None)
             if not report_path or not report_path.is_file():
