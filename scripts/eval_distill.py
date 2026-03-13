@@ -112,6 +112,11 @@ Rules:
   "summary": "",
   "bullets": [],
   "evidence": []
+- service: include only kindness, service/waiting, atmosphere/seating convenience
+- price: allow empty bullets when there is no direct mention of price
+- food: focus on menu, taste, and texture only
+- evidence: use only indices that refer to actual sentences in the input; no fabrication
+- Do not infer or add content that is not present in the input
 
 Output only JSON.
 """
