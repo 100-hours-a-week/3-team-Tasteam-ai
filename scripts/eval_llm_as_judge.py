@@ -46,14 +46,87 @@ def _load_model_and_tokenizer(adapter_path: str, base_model: str):
     return model, tokenizer
 
 
+def _extract_json_for_rouge(raw: str) -> str:
+    """eval_distill과 동일: 출력에서 JSON 블록만 추출해 반환. 실패 시 원문."""
+    if not raw or not raw.strip():
+        return raw or ""
+    try:
+        from src.json_parse_utils import extract_json_block, parse_json_relaxed
+        from src.schema_repair import repair_summary_schema
+        block = extract_json_block(raw.strip(), want_object=True)
+        if not block:
+            return raw.strip()
+        parsed = parse_json_relaxed(block)
+        if isinstance(parsed, dict) and any(k in parsed for k in ("service", "price", "food")):
+            repaired = repair_summary_schema(parsed, bullet_max=3)
+            if isinstance(repaired, dict):
+                return json.dumps(repaired, ensure_ascii=False)
+            return json.dumps(parsed, ensure_ascii=False)
+    except Exception:
+        pass
+    return raw.strip()
+
+
+# eval_distill과 동일한 프롬프트: report.json 생성 시와 같은 조건으로 추론
+_SCHEMA_ENFORCEMENT_SYSTEM = """You are a JSON generator for review summarization.
+
+Return ONLY one valid JSON object.
+Do not output any text before or after the JSON.
+Do not output markdown.
+Do not output explanations.
+
+The top-level keys must be exactly:
+service, food, price
+
+Each of service, food, and price must be a JSON object with exactly these keys:
+summary, bullets, evidence
+
+Never add any other keys.
+Never use keys such as:
+examples, impact, weight, title, body, rating, overall_summary
+
+Rules:
+- summary must be exactly 1 Korean sentence, or "" if there is not enough evidence
+- bullets must be a list of 0 to 3 short Korean strings
+- evidence must be a list of 0-based integer indices into the corresponding category list
+- evidence must have the same number of items as bullets
+- If bullets is [], evidence must be []
+- If there is not enough evidence, use:
+  "summary": "",
+  "bullets": [],
+  "evidence": []
+
+Output only JSON.
+"""
+
+_TINY_FEWSHOT_USER = """Example input:
+{"service":["직원분이 친절해요"],"price":[],"food":["국물이 진해요"]}
+"""
+
+_TINY_FEWSHOT_ASSISTANT = """{"service":{"summary":"직원분이 친절해요.","bullets":["직원 응대가 친절해요."],"evidence":[0]},"food":{"summary":"국물이 진해요.","bullets":["국물이 진하고 맛있어요."],"evidence":[0]},"price":{"summary":"","bullets":[],"evidence":[]}}"""
+
+_TINY_FEWSHOT_USER_2 = """Example input:
+{"service":["직원들이 빠르게 응대해요","매장이 깔끔해요"],"price":["양이 많아요"],"food":[]}
+"""
+
+_TINY_FEWSHOT_ASSISTANT_2 = """{"service":{"summary":"직원 응대가 빠르고 매장이 깔끔해요.","bullets":["직원들이 빠르게 응대해요.","매장이 깔끔해요."],"evidence":[0,1]},"food":{"summary":"","bullets":[],"evidence":[]},"price":{"summary":"양이 많아요.","bullets":["양이 많아요."],"evidence":[0]}}"""
+
+
 def _generate_one(
     model: Any,
     tokenizer: Any,
     instruction: str,
     max_new_tokens: int = 1024,
 ) -> str:
-    """이미 로드된 model/tokenizer로 instruction 한 건만 추론."""
-    messages = [{"role": "user", "content": instruction}]
+    """eval_distill과 동일: system + 2개 few-shot + instruction으로 추론 후 JSON 추출."""
+    messages = [
+        {"role": "system", "content": _SCHEMA_ENFORCEMENT_SYSTEM},
+        {"role": "user", "content": _TINY_FEWSHOT_USER},
+        {"role": "assistant", "content": _TINY_FEWSHOT_ASSISTANT},
+        {"role": "user", "content": _TINY_FEWSHOT_USER_2},
+        {"role": "assistant", "content": _TINY_FEWSHOT_ASSISTANT_2},
+        {"role": "user", "content": instruction},
+    ]
     text = tokenizer.apply_chat_template(
         messages,
         tokenize=False,
@@ -67,7 +140,8 @@ def _generate_one(
         pad_token_id=tokenizer.eos_token_id,
     )
     generated = tokenizer.decode(out[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True)
-    return generated.strip()
+    raw = generated.strip()
+    return _extract_json_for_rouge(raw)
 
 
 JUDGE_SYSTEM_PROMPT = """당신은 레스토랑 리뷰 요약 품질을 평가하는 심사위원입니다.
