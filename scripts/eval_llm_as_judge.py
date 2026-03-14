@@ -67,6 +67,93 @@ def _extract_json_for_rouge(raw: str) -> str:
     return raw.strip()
 
 
+def _get_category_lengths(instruction: str) -> dict[str, int]:
+    """instruction(JSON)에서 카테고리별 리뷰 개수 반환. 파싱 실패 시 0."""
+    out: dict[str, int] = {"service": 0, "price": 0, "food": 0}
+    if not instruction or not instruction.strip():
+        return out
+    try:
+        payload = json.loads(instruction)
+        if isinstance(payload, dict):
+            for k in out:
+                arr = payload.get(k)
+                if isinstance(arr, list):
+                    out[k] = len(arr)
+    except json.JSONDecodeError:
+        pass
+    return out
+
+
+def _postprocess_prediction(pred_json_str: str, instruction: str) -> str:
+    """
+    추론 결과 후처리: evidence 인덱스 검증·보정, 빈 카테고리 폴백 치환.
+    - evidence를 해당 카테고리 리뷰 개수 범위로 클램핑하고 bullets 길이에 맞춤.
+    - summary/bullets/evidence가 모두 비어 있으면 teacher 폴백 문구로 채움.
+    - overall_summary에 evidence 키가 있으면 제거.
+    """
+    if not pred_json_str or not pred_json_str.strip():
+        return pred_json_str
+    try:
+        pred = json.loads(pred_json_str)
+    except json.JSONDecodeError:
+        return pred_json_str
+    if not isinstance(pred, dict) or not any(k in pred for k in ("service", "price", "food")):
+        return pred_json_str
+
+    lengths = _get_category_lengths(instruction)
+    fallback_price = "가격 관련 언급이 적어요."
+    fallback_other = "언급이 적어요."
+
+    for cat in ("service", "price", "food"):
+        n = lengths.get(cat, 0)
+        cell = pred.get(cat)
+        if not isinstance(cell, dict):
+            pred[cat] = {"summary": "", "bullets": [], "evidence": []}
+            cell = pred[cat]
+
+        summary = cell.get("summary")
+        if not isinstance(summary, str):
+            summary = ""
+        bullets = cell.get("bullets")
+        if not isinstance(bullets, list):
+            bullets = []
+        bullets = [b for b in bullets if isinstance(b, str) and b.strip()][:5]
+
+        ev_raw = cell.get("evidence", [])
+        evidence: list[int] = []
+        if isinstance(ev_raw, list):
+            for x in ev_raw:
+                try:
+                    i = int(x)
+                    if 0 <= i < n:
+                        evidence.append(i)
+                except (TypeError, ValueError):
+                    continue
+        # bullets 개수에 맞춤: 부족하면 0 패딩, 초과하면 자름
+        if len(evidence) > len(bullets):
+            evidence = evidence[: len(bullets)]
+        elif len(evidence) < len(bullets):
+            evidence = evidence + [0] * (len(bullets) - len(evidence))
+        if evidence and n == 0:
+            evidence = []
+
+        # 빈 카테고리 폴백
+        if not summary.strip() and not bullets:
+            summary = fallback_price if cat == "price" else fallback_other
+            bullets = []
+            evidence = []
+
+        pred[cat] = {"summary": summary.strip(), "bullets": bullets, "evidence": evidence}
+
+    # overall_summary: evidence 키 제거(스키마에 없음)
+    ov = pred.get("overall_summary")
+    if isinstance(ov, dict) and "evidence" in ov:
+        ov = {k: v for k, v in ov.items() if k == "summary"}
+        pred["overall_summary"] = ov
+
+    return json.dumps(pred, ensure_ascii=False)
+
+
 # eval_distill·teacher와 동일한 프롬프트
 _SCHEMA_ENFORCEMENT_SYSTEM = """You are a JSON generator for review summarization.
 입력은 카테고리별 근거 리뷰 목록(JSON)이다. teacher와 동일한 스키마로만 출력하라.
@@ -372,6 +459,7 @@ def main() -> None:
         ins = s.get("instruction", "")
         ref = s.get("output", "")
         pred = _generate_one(model, tokenizer, ins, max_new_tokens=1024)
+        pred = _postprocess_prediction(pred, ins)
         judge_out = _call_judge(
             ins, ref, pred,
             rubric_version=args.rubric_version,
