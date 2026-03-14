@@ -112,18 +112,9 @@ Return ONLY one valid JSON object. No text before or after JSON.
 Output only JSON.
 """
 
-_TINY_FEWSHOT_USER = """Example input:
-{"service":["직원분이 친절해요"],"price":[],"food":["국물이 진해요"]}
-"""
+_TINY_FEWSHOT_USER = """Example instruction: "{\"service\": [\"소고기쌀국수는 물론 매운쌀국수, 나시고렝 다 맛있습니다. 사장님도 친절하시고 매장이 꼭 현지에 온 느낌입니다👍\", \"자주 방문하는 가게입니다 판교 점심에 베트남 느낌에 가까운 맛이 나는 음식점이라 자주 애용합니다 ㅎㅎ\\n오늘도 잘 먹었습니다 !!\", \"직원이 친절하고 음식이 맛있어요^^\"], \"price\": [\"양이 많고 맛있어서 자주 오는 곳이에요!\"], \"food\": [\"맛있어요! 매운 쌀국수랑 팟타이를 제일 자주 먹어요\", \"르메콩 쌀국수랑 음식 전부 너무 맛있어요!! 쌀국수 생각나면 꼭 오는 곳입니다🥹🥹❤️\", \"너무 맛있어요! 특히 매운 쌀국수는 진짜 매콤해요 덜 맵게도 가능하니까 꼭 드셔보세요 짜조도 진짜 맛있고 나시고랭은 말해뭐해~~~\", \"맛있어요. 잘 먹고 있습니다.\", \"동료들이 넘넘 맛있다고해서 기대하며 왔습니다🌱☘️🫡🙂🍑\", \"회사 점심시간에 자주 오는 르메콩💖\\n나시고랭 존맛탱이에요!!!\\n\\n점심메뉴로 강추!!!!\", \"처음와봤는게 ..."""
 
-_TINY_FEWSHOT_ASSISTANT = """{"service":{"summary":"직원분이 친절해요.","bullets":["직원 응대가 친절해요."],"evidence":[0]},"food":{"summary":"국물이 진해요.","bullets":["국물이 진하고 맛있어요."],"evidence":[0]},"price":{"summary":"가격 관련 언급이 적어요.","bullets":[],"evidence":[]},"overall_summary":{"summary":"서비스와 음식에 대한 긍정적 리뷰가 많아요. 직원 친절과 국물 맛이 좋았어요."}}"""
-
-_TINY_FEWSHOT_USER_2 = """Example input:
-{"service":["직원들이 빠르게 응대해요","매장이 깔끔해요"],"price":["양이 많아요"],"food":[]}
-"""
-
-_TINY_FEWSHOT_ASSISTANT_2 = """{"service":{"summary":"직원 응대가 빠르고 매장이 깔끔해요.","bullets":["직원들이 빠르게 응대해요.","매장이 깔끔해요."],"evidence":[0,1]},"food":{"summary":"음식 관련 언급이 적어요.","bullets":[],"evidence":[]},"price":{"summary":"양이 많아요.","bullets":["양이 많아요."],"evidence":[0]},"overall_summary":{"summary":"서비스가 빠르고 매장이 깔끔하며, 양이 푸짐해요."}}"""
-
+_TINY_FEWSHOT_ASSISTANT = """{\"service\": {\"summary\": \"서비스가 친절하고 분위기가 좋아요.\", \"bullets\": [\"사장님이 친절하다고 느껴요.\", \"매장이 현지 느낌이 나서 좋았어요.\", \"직원이 친절하다고 언급해요.\"], \"evidence\": [0, 1, 2]}, \"price\": {\"summary\": \"가격 대비 양이 많고 만족스러워요.\", \"bullets\": [\"양이 많아서 가성비가 좋다고 해요.\", \"맛있어서 자주 오는 곳이라고 해요.\"], \"evidence\": [0]}, \"food\": {\"summary\": \"음식이 전반적으로 맛있어요.\", \"bullets\": [\"매운 쌀국수와 팟타이가 인기 있어요.\", \"르메콩 쌀국수와 나시고랭이 특히 맛있다고 해요.\", \"짜조도 맛있다고 언급해요.\"], \"evidence\": [0, 1, 2, 5]}, \"overall_summary\": {\"summary\": \"전반적으로 서비스와 음식이 만족스러워요. 가격도 합리적이라 자주 방문하고 싶어져요.\"}}"""
 
 def _generate_one(
     model: Any,
@@ -137,8 +128,6 @@ def _generate_one(
         {"role": "system", "content": _SCHEMA_ENFORCEMENT_SYSTEM},
         {"role": "user", "content": _TINY_FEWSHOT_USER},
         {"role": "assistant", "content": _TINY_FEWSHOT_ASSISTANT},
-        {"role": "user", "content": _TINY_FEWSHOT_USER_2},
-        {"role": "assistant", "content": _TINY_FEWSHOT_ASSISTANT_2},
         {"role": "user", "content": instruction},
     ]
     text = tokenizer.apply_chat_template(
