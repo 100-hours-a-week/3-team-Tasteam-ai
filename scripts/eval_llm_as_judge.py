@@ -158,58 +158,59 @@ JUDGE_USER_TEMPLATE_V1 = """## Instruction (원문)
 
 위 prediction을 reference와 비교해 1~5점으로 평가하고 이유를 JSON으로 출력하세요."""
 
-# v2: 6축 루브릭 (구조화 요약 품질용, prompt_jv2)
-JUDGE_SYSTEM_PROMPT_V2 = """당신은 레스토랑 리뷰의 **구조화 요약** 품질을 평가하는 심사위원입니다.
-평가 대상은 JSON 형식의 요약(service, food, price 각각 summary/bullets/evidence)입니다.
-자유 요약이 아니라, 입력(instruction)에 근거한 구조 준수·근거 정합성이 중요합니다.
+# v2: teacher 기준 4요소 → 6축 매핑 (schema, fallback, style, evidence)
+JUDGE_SYSTEM_PROMPT_V2 = """당신은 teacher(label_for_distill) 기준에 맞는 구조화 요약 품질을 평가하는 심사위원입니다.
+평가 기준은 다음 4가지를 teacher와 동일하게 적용합니다.
+
+## Teacher 기준 (4요소)
+1. **teacher 스키마 준수**: service, price, food, overall_summary 필수. 각 카테고리는 summary, bullets, evidence. bullets 3~5개(근거 있을 때).
+2. **teacher 폴백 정책**: 근거(입력 리뷰)가 없을 때 "언급이 적어요" 같은 해요체 폴백 사용. price 가격 숫자 없으면 가성비/양/구성/만족감 우회표현 허용. 빈 summary("") 대신 폴백 문구 사용이 정상.
+3. **teacher 스타일**: "~해요" 체, summary 1문장, overall_summary 2~3문장, bullets 구체적·중복 제거.
+4. **evidence input 기반**: evidence는 입력 리뷰의 0-based 인덱스만. bullet과 support 일치. 추측·허구 금지.
 
 ## 출력 형식 (반드시 유효한 JSON만)
 {
+  "schema_adherence": 1~5,
+  "fallback_adherence": 1~5,
+  "style_adherence": 1~5,
+  "evidence_validity": 1~5,
   "faithfulness": 1~5,
   "category_correctness": 1~5,
-  "schema_adherence": 1~5,
-  "evidence_validity": 1~5,
-  "completeness": 1~5,
-  "naturalness": 1~5,
   "reason": "한 줄 요약 (선택)"
 }
 모든 점수는 1(매우 나쁨) ~ 5(매우 좋음) 정수입니다.
 
-## 평가 축 정의
-1. **faithfulness**: 입력에 없는 내용이 들어갔는가. category별 내용이 실제 리뷰 근거에 기반하는가.
-2. **category_correctness**: service / price / food가 올바르게 분리되었는가. food 내용을 service에 넣거나 그 반대가 없는가.
-3. **schema_adherence**: required key 존재, 허용된 구조 유지. **price에 직접 언급이 없으면 빈 bullets 허용**이 잘 지켜졌는가.
-4. **evidence_validity**: evidence index가 실제 문장 인덱스인가. bullet과 support 관계가 맞는가.
-5. **completeness**: 입력에 존재하는 중요한 포인트를 과도하게 누락하지 않았는가.
-6. **naturalness**: 문장이 너무 깨지거나 반복되지 않는가.
+## 6축 정의 (teacher 4요소에 매핑)
+1. **schema_adherence**: teacher 스키마 준수(service, price, food, overall_summary, bullets 3~5 when evidence exists).
+2. **fallback_adherence**: teacher 폴백 정책. 근거 없을 때 "언급이 적어요" 스타일 사용, price 우회표현 허용. 빈 문자열만 쓰면 감점.
+3. **style_adherence**: teacher 스타일. "~해요" 체, 1문장 summary, overall 2~3문장, bullets 구체적.
+4. **evidence_validity**: evidence가 입력 리뷰 인덱스 기반인가. bullet-support 관계 맞는가. 인덱스 오류 시 큰 감점.
+5. **faithfulness**: 입력에 없는 내용 추론 금지. category별 실제 리뷰 근거 기반인가.
+6. **category_correctness**: service/price/food 올바르게 분리. category 간 혼입(예: food→service) 감점.
 
 ## 반드시 적용할 규칙
-- **입력에 없는 내용 추론 시 큰 감점** (faithfulness 낮게).
-- **evidence index 오류 시 큰 감점** (evidence_validity 낮게).
-- **price 직접 언급이 없으면 빈 bullets 허용, 감점 금지** (schema_adherence에서 유리하게).
-- **service**는 친절/응대/대기/분위기·좌석 편의 범위만. 이외 내용이 있으면 category_correctness 감점.
-- **food**는 메뉴/맛/식감 중심만. 이외 내용이 있으면 category_correctness 감점.
-- **category 간 혼입**(예: food 내용을 service에 넣음) 시 category_correctness 감점."""
+- teacher 폴백: 근거 없으면 "언급이 적어요" 등 폴백 문구 사용이 정상. 빈 문자열만 있으면 fallback_adherence 감점.
+- price: 가격 직접 언급 없으면 가성비/양/구성 우회표현 허용. 전혀 없으면 "가격 관련 언급이 적어요" 등 폴백 허용.
+- evidence index 오류 시 evidence_validity·faithfulness 큰 감점."""
 
 JUDGE_USER_TEMPLATE_V2 = """## Instruction (원문 리뷰/입력)
 {instruction}
 
-## Reference (정답 구조화 요약)
+## Reference (teacher 정답 요약)
 {reference}
 
-## Prediction (평가 대상 모델 출력)
+## Prediction (평가 대상)
 {prediction}
 
-위 Prediction을 Reference 및 Instruction과 비교하여, 6개 축(faithfulness, category_correctness, schema_adherence, evidence_validity, completeness, naturalness) 각각 1~5점으로 평가한 JSON을 출력하세요."""
-
+위 Prediction이 teacher 기준(스키마, 폴백 정책, 스타일, evidence 기반)을 따르는지 6축으로 1~5점 평가한 JSON을 출력하세요."""
 
 JUDGE_AXES = (
+    "schema_adherence",
+    "fallback_adherence",
+    "style_adherence",
+    "evidence_validity",
     "faithfulness",
     "category_correctness",
-    "schema_adherence",
-    "evidence_validity",
-    "completeness",
-    "naturalness",
 )
 
 
@@ -411,8 +412,8 @@ def main() -> None:
 
     if rubric == "v2":
         logger.info(
-            "Wrote %s (avg_score=%.2f, avg_faithfulness=%.2f, avg_evidence_validity=%.2f)",
-            args.output, summary["avg_score"], summary.get("avg_faithfulness", 0), summary.get("avg_evidence_validity", 0),
+            "Wrote %s (avg_score=%.2f, schema=%.2f, fallback=%.2f, evidence=%.2f)",
+            args.output, summary["avg_score"], summary.get("avg_schema_adherence", 0), summary.get("avg_fallback_adherence", 0), summary.get("avg_evidence_validity", 0),
         )
     else:
         logger.info("Wrote %s (avg_score=%.2f)", args.output, summary["avg_score"])
