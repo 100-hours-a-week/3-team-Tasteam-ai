@@ -105,6 +105,9 @@ def _postprocess_prediction(pred_json_str: str, instruction: str) -> str:
     fallback_price = "가격 관련 언급이 적어요."
     fallback_other = "언급이 적어요."
 
+    def _as_str(x: Any) -> str:
+        return (x if isinstance(x, str) else str(x) if x is not None else "") or ""
+
     for cat in ("service", "price", "food"):
         n = lengths.get(cat, 0)
         cell = pred.get(cat)
@@ -146,10 +149,10 @@ def _postprocess_prediction(pred_json_str: str, instruction: str) -> str:
 
         pred[cat] = {"summary": summary.strip(), "bullets": bullets, "evidence": evidence}
 
-    # overall_summary: evidence 키 제거(스키마에 없음)
+    # overall_summary: summary만 유지. bullets, evidence 제거(스키마에 없음)
     ov = pred.get("overall_summary")
-    if isinstance(ov, dict) and "evidence" in ov:
-        ov = {k: v for k, v in ov.items() if k == "summary"}
+    if isinstance(ov, dict):
+        ov = {"summary": _as_str(ov.get("summary", "")).strip()[:200]}
         pred["overall_summary"] = ov
 
     return json.dumps(pred, ensure_ascii=False)
@@ -168,16 +171,20 @@ Return ONLY one valid JSON object. No text before or after JSON.
   "food":    {"summary": string, "bullets": [string, ...], "evidence": [int, ...]},
   "overall_summary": {"summary": string}
 }
+overall_summary에는 summary만 넣을 것. bullets, evidence는 금지.
+
+카테고리 정의: service=직원·서비스·대기·분위기·매장, price=가격·가성비·양·비싸다/저렴하다, food=음식·메뉴·맛·요리. 한 카테고리 내용을 다른 카테고리 필드에 넣지 말 것.
 
 규칙 (teacher와 동일):
-- 해당 카테고리에 리뷰가 1개 이상 있으면 반드시 summary, bullets, evidence를 채울 것. 빈 문자열·빈 배열만 내지 말 것.
+- 해당 카테고리에 리뷰가 1개 이상 있으면 반드시 summary, bullets, evidence를 채울 것. 빈 문자열·빈 배열만 내지 말 것. price도 리뷰가 있으면 bullets와 evidence를 채울 것.
+- 리뷰에 나온 내용만 요약할 것. 입력 리뷰에 없는 메뉴·가게·직원 설명을 넣지 말 것.
 - 말투: 모든 summary, bullets, overall_summary는 "~해요" 체
 - 각 카테고리 summary: 1문장, 과장 금지
 - bullets: 3~5개(근거 있을 때), 중복 제거, 구체적으로. 근거 없으면 []
-- evidence: 근거 리뷰의 0-based 인덱스, bullets 개수와 동일
+- evidence: 해당 카테고리 리뷰 배열 길이 미만의 0-based 인덱스만 사용. 각 bullet당 정확히 하나의 인덱스. bullets 개수와 동일.
 - price: 가격 숫자 없으면 가성비/양/구성/만족감 같은 우회표현으로 요약 가능. 전혀 없으면 "가격 관련 언급이 적어요." 등
-- 근거 없을 때: summary에 "언급이 적어요"처럼 해요체로 표현 (빈 문자열 대신)
-- overall_summary: 2~3문장으로 종합 요약
+- 근거 없을 때만: summary에 "언급이 적어요"처럼 해요체로 표현 (빈 문자열 대신)
+- overall_summary: 2~3문장으로 종합 요약 (summary 키만 사용)
 - evidence는 입력 인덱스만 사용, 추측 금지
 - Evidence must reference only review indices that explicitly support each bullet.
 - Do not guess evidence indices.
