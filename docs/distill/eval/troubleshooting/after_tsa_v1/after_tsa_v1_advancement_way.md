@@ -117,9 +117,19 @@ evidence 규칙을 더 강하게 만든다.
 예:
 
 ```
-evidence must reference the exact review sentence that supports the bullet.
+Evidence rules:
+
+Each bullet must be supported by a real review sentence.
+
+Evidence must be the index of the sentence that supports the bullet.
+
 Do not invent evidence.
-Each evidence index must correspond to a real sentence in the input list.
+
+Do not reference sentences that do not support the bullet.
+
+If no supporting sentence exists, use:
+"bullets": []
+"evidence": []
 ```
 
 그리고 **few-shot을 evidence 중심으로 만든다.**
@@ -219,8 +229,19 @@ category boundary 추가
 ### 2️⃣ evidence 규칙 강화
 
 ```
-Each bullet must reference a real review sentence.
-Evidence must be an index of that sentence.
+Evidence rules:
+
+Each bullet must be supported by a real review sentence.
+
+Evidence must be the index of the sentence that supports the bullet.
+
+Do not invent evidence.
+
+Do not reference sentences that do not support the bullet.
+
+If no supporting sentence exists, use:
+"bullets": []
+"evidence": []
 ```
 
 ---
