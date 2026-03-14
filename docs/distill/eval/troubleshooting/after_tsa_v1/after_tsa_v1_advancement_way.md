@@ -169,6 +169,11 @@ LLM이 evidence 생성
 
 * validator
 
+ 1️⃣ JSON parsing repair 
+ 2️⃣ top key enforce 
+ 3️⃣ bullets/evidence 길이 맞추기 
+ 4️⃣ evidence index range check 
+
 지금 구조 유지.
 
 ---
@@ -225,6 +230,10 @@ Evidence must be an index of that sentence.
 지금 few-shot은 너무 **schema 중심**이야.
 
 **grounding example**을 넣어야 한다.
+
+---
+
+* validator
 
 ---
 
