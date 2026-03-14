@@ -140,6 +140,53 @@ _TINY_FEWSHOT_ASSISTANT_2 = """{"service":{"summary":"직원 응대가 빠르고
 
 v4
 
+---
+
+# teacher(label_for_distill)와 동일한 스키마·규칙
+_SCHEMA_ENFORCEMENT_SYSTEM = """You are a JSON generator for review summarization.
+입력은 카테고리별 근거 리뷰 목록(JSON)이다. teacher와 동일한 스키마로만 출력하라.
+
+Return ONLY one valid JSON object. No text before or after JSON.
+
+스키마 (teacher와 동일):
+{
+  "service": {"summary": string, "bullets": [string, ...], "evidence": [int, ...]},
+  "price":   {"summary": string, "bullets": [string, ...], "evidence": [int, ...]},
+  "food":    {"summary": string, "bullets": [string, ...], "evidence": [int, ...]},
+  "overall_summary": {"summary": string}
+}
+
+규칙 (teacher와 동일):
+- 말투: 모든 summary, bullets, overall_summary는 "~해요" 체
+- 각 카테고리 summary: 1문장, 과장 금지
+- bullets: 3~5개(근거 있을 때), 중복 제거, 구체적으로. 근거 없으면 []
+- evidence: 근거 리뷰의 0-based 인덱스, bullets 개수와 동일
+- price: 가격 숫자 없으면 가성비/양/구성/만족감 같은 우회표현으로 요약 가능. 전혀 없으면 "가격 관련 언급이 적어요." 등
+- 근거 없을 때: summary에 "언급이 적어요"처럼 해요체로 표현 (빈 문자열 대신)
+- overall_summary: 2~3문장으로 종합 요약
+- evidence는 입력 인덱스만 사용, 추측 금지
+
+Output only JSON.
+"""
+
+_TINY_FEWSHOT_USER = """Example input:
+{"service":["직원분이 친절해요"],"price":[],"food":["국물이 진해요"]}
+"""
+
+_TINY_FEWSHOT_ASSISTANT = """{"service":{"summary":"직원분이 친절해요.","bullets":["직원 응대가 친절해요."],"evidence":[0]},"food":{"summary":"국물이 진해요.","bullets":["국물이 진하고 맛있어요."],"evidence":[0]},"price":{"summary":"가격 관련 언급이 적어요.","bullets":[],"evidence":[]},"overall_summary":{"summary":"서비스와 음식에 대한 긍정적 리뷰가 많아요. 직원 친절과 국물 맛이 좋았어요."}}"""
+
+_TINY_FEWSHOT_USER_2 = """Example input:
+{"service":["직원들이 빠르게 응대해요","매장이 깔끔해요"],"price":["양이 많아요"],"food":[]}
+"""
+
+_TINY_FEWSHOT_ASSISTANT_2 = """{"service":{"summary":"직원 응대가 빠르고 매장이 깔끔해요.","bullets":["직원들이 빠르게 응대해요.","매장이 깔끔해요."],"evidence":[0,1]},"food":{"summary":"음식 관련 언급이 적어요.","bullets":[],"evidence":[]},"price":{"summary":"양이 많아요.","bullets":["양이 많아요."],"evidence":[0]},"overall_summary":{"summary":"서비스가 빠르고 매장이 깔끔하며, 양이 푸짐해요."}}"""
+
+---
+
+v5
+
+---
+
 _SCHEMA_ENFORCEMENT_SYSTEM = """You are a JSON generator for review summarization.
 입력은 카테고리별 근거 리뷰 목록(JSON)이다.
 
@@ -187,36 +234,3 @@ _TINY_FEWSHOT_USER_2 = """Example input:
 """
 
 _TINY_FEWSHOT_ASSISTANT_2 = """{"service":{"summary":"직원 응대가 빠르고 매장이 깔끔해요.","bullets":["직원들이 빠르게 응대해요.","매장이 깔끔해요."],"evidence":[0,1]},"food":{"summary":"음식 관련 언급이 적어요.","bullets":[],"evidence":[]},"price":{"summary":"양이 많아요.","bullets":["양이 많아요"],"evidence":[0]},"overall_summary":{"summary":"서비스가 빠르고 매장이 깔끔하며, 양이 푸짐해요."}}"""
-
-
-def _generate_one(
-    model: Any,
-    tokenizer: Any,
-    instruction: str,
-    max_new_tokens: int = 1024,
-) -> str:
-    """이미 로드된 model/tokenizer로 instruction 한 건만 추론."""
-    # instruction은 payload JSON 문자열. system prompt + 2개 few-shot으로 스키마 계약을 강화한다.
-    messages = [
-        {"role": "system", "content": _SCHEMA_ENFORCEMENT_SYSTEM},
-        {"role": "user", "content": _TINY_FEWSHOT_USER},
-        {"role": "assistant", "content": _TINY_FEWSHOT_ASSISTANT},
-        {"role": "user", "content": _TINY_FEWSHOT_USER_2},
-        {"role": "assistant", "content": _TINY_FEWSHOT_ASSISTANT_2},
-        {"role": "user", "content": instruction},
-    ]
-    text = tokenizer.apply_chat_template(
-        messages,
-        tokenize=False,
-        add_generation_prompt=True,
-    )
-    inputs = tokenizer(text, return_tensors="pt").to(model.device)
-    out = model.generate(
-        **inputs,
-        max_new_tokens=max_new_tokens,
-        do_sample=False,
-        pad_token_id=tokenizer.eos_token_id,
-    )
-    generated = tokenizer.decode(out[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True)
-    raw = generated.strip()
-    return _extract_json_for_rouge(raw)
