@@ -87,7 +87,8 @@ def _get_category_lengths(instruction: str) -> dict[str, int]:
 def _postprocess_prediction(pred_json_str: str, instruction: str) -> str:
     """
     추론 결과 후처리: evidence 인덱스 검증·보정, 빈 카테고리 폴백 치환.
-    - evidence를 해당 카테고리 리뷰 개수 범위로 클램핑하고 bullets 길이에 맞춤.
+    - evidence를 해당 카테고리 리뷰 개수 범위로만 유지(범위 밖 제거).
+    - evidence와 bullets 1:1 맞춤: evidence 부족 시 bullets를 자름(0 패딩 없음).
     - summary/bullets/evidence가 모두 비어 있으면 teacher 폴백 문구로 채움.
     - overall_summary에 evidence 키가 있으면 제거.
     """
@@ -129,13 +130,13 @@ def _postprocess_prediction(pred_json_str: str, instruction: str) -> str:
                         evidence.append(i)
                 except (TypeError, ValueError):
                     continue
-        # bullets 개수에 맞춤: 부족하면 0 패딩, 초과하면 자름
+        if evidence and n == 0:
+            evidence = []
+        # evidence와 bullets 1:1 맞춤: evidence 초과분은 자르고, evidence 부족 시 bullets를 자름(0 패딩 없음)
         if len(evidence) > len(bullets):
             evidence = evidence[: len(bullets)]
         elif len(evidence) < len(bullets):
-            evidence = evidence + [0] * (len(bullets) - len(evidence))
-        if evidence and n == 0:
-            evidence = []
+            bullets = bullets[: len(evidence)]
 
         # 빈 카테고리 폴백
         if not summary.strip() and not bullets:
@@ -169,6 +170,7 @@ Return ONLY one valid JSON object. No text before or after JSON.
 }
 
 규칙 (teacher와 동일):
+- 해당 카테고리에 리뷰가 1개 이상 있으면 반드시 summary, bullets, evidence를 채울 것. 빈 문자열·빈 배열만 내지 말 것.
 - 말투: 모든 summary, bullets, overall_summary는 "~해요" 체
 - 각 카테고리 summary: 1문장, 과장 금지
 - bullets: 3~5개(근거 있을 때), 중복 제거, 구체적으로. 근거 없으면 []
