@@ -375,8 +375,8 @@ def main() -> None:
         )
         row: dict[str, Any] = {
             "sample_id": s.get("sample_id"),
-            "instruction": ins[:500] + "..." if len(ins) > 500 else ins,
-            "ref": ref[:500] + "..." if len(ref) > 500 else ref,
+            "instruction": ins,
+            "ref": ref,
             "pred": pred,
             "score": judge_out.get("score", 0),
             "reason": judge_out.get("reason", ""),
