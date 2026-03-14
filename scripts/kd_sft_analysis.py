@@ -10,8 +10,9 @@ KD SFT 분석: docs/distill/troubleshooting/kd_sft_analysis.md 에서 제안한 
 출력: report JSON + 요약 stdout.
 
 사용:
-  python scripts/kd_sft_analysis.py --input distill_pipeline_output/eval/20260303_053420/llm_as_a_judge_results.json
-  python scripts/kd_sft_analysis.py --input eval_results.json --output-dir distill_pipeline_output/eval/20260303_053420
+  python scripts/kd_sft_analysis.py --input .../llm_as_a_judge_results.json
+  python scripts/kd_sft_analysis.py --input ... --output-dir .../eval/20260303_053420
+  python scripts/kd_sft_analysis.py --input ... --output .../eval/kd_sft_analysis_report_v3_jv2.json
 """
 
 from __future__ import annotations
@@ -215,6 +216,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="KD SFT 분석: JSON 파싱률, 스키마 정확도, 길이 drift")
     parser.add_argument("--input", "-i", type=Path, required=True, help="llm_as_a_judge_results.json 또는 pred/ref 포함 JSON")
     parser.add_argument("--output-dir", "-o", type=Path, default=None, help="보고서 저장 디렉터리 (기본: 입력 파일과 동일)")
+    parser.add_argument("--output", type=Path, default=None, help="보고서 저장 경로 (파일 경로 지정 시 output-dir 무시, 파일명 자유 지정)")
     parser.add_argument("--ref-key", type=str, default="ref", help="참조 필드 이름 (ref 또는 output)")
     parser.add_argument("--pred-key", type=str, default="pred", help="예측 필드 이름")
     args = parser.parse_args()
@@ -231,10 +233,14 @@ def main() -> None:
 
     result = run_analysis(samples, ref_key=args.ref_key, pred_key=args.pred_key)
 
-    out_dir = args.output_dir or path.parent
-    out_dir = Path(out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    report_path = out_dir / "kd_sft_analysis_report.json"
+    if args.output is not None:
+        report_path = Path(args.output)
+    else:
+        out_dir = args.output_dir or path.parent
+        out_dir = Path(out_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        report_path = out_dir / "kd_sft_analysis_report.json"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
     with open(report_path, "w", encoding="utf-8") as f:
         json.dump(result, f, ensure_ascii=False, indent=2)
 
