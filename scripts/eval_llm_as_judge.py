@@ -430,6 +430,7 @@ def main() -> None:
     parser.add_argument("--openai-api-key", type=str, default=None, help="또는 OPENAI_API_KEY 환경변수")
     parser.add_argument("--max-samples", type=int, default=0, help="평가할 최대 샘플 수 (0=전부)")
     parser.add_argument("--rubric-version", choices=["v1", "v2"], default="v2", help="v1: 단일 총점, v2: 6축 루브릭 (기본 v2)")
+    parser.add_argument("--no-postprocess", action="store_true", help="evidence 범위 보정 등 후처리 비적용 (비교 실험용)")
     args = parser.parse_args()
 
     if not args.report and not args.llm_judge_samples:
@@ -482,7 +483,8 @@ def main() -> None:
         ins = s.get("instruction", "")
         ref = s.get("output", "")
         pred = _generate_one(model, tokenizer, ins, max_new_tokens=1024)
-        pred = _postprocess_prediction(pred, ins)
+        if not args.no_postprocess:
+            pred = _postprocess_prediction(pred, ins)
         judge_out = _call_judge(
             ins, ref, pred,
             rubric_version=args.rubric_version,
