@@ -224,8 +224,8 @@ def _generate_one(
         {"role": "system", "content": _SCHEMA_ENFORCEMENT_SYSTEM},
         {"role": "user", "content": _TINY_FEWSHOT_USER},
         {"role": "assistant", "content": _TINY_FEWSHOT_ASSISTANT},
-        {"role": "user", "content": _TINY_FEWSHOT_USER_2},
-        {"role": "assistant", "content": _TINY_FEWSHOT_ASSISTANT_2},
+        #{"role": "user", "content": _TINY_FEWSHOT_USER_2},
+        #{"role": "assistant", "content": _TINY_FEWSHOT_ASSISTANT_2},
         {"role": "user", "content": instruction},
     ]
     text = tokenizer.apply_chat_template(
