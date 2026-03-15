@@ -179,18 +179,17 @@ _SCHEMA_ENFORCEMENT_SYSTEM = """당신은 리뷰 요약 어시스턴트입니다
 }
 
 입력 JSON 스키마 설명
-- 입력: service/price/food 각각 근거 리뷰 문자열 배열. 배열 인덱스는 0부터.
+- service/price/food 각각 근거 리뷰 문자열 배열. 입력 리뷰 배열의 첫번째 인덱스는 0.
 
 출력 JSON 스키마 설명
 - summary: 해당 카테고리 입력 리뷰들의 총 요약문. bullets: 해당 카테고리 입력 리뷰들의 요소별 요약문.
-- evidence: bullets를 지지하는 입력 리뷰의 0-based 인덱스 목록. 입력에 있는 인덱스만 사용.
+- evidence: bullets를 지지하는 입력 리뷰의 인덱스 배열. 입력 리뷰의 첫번째 인덱스는 0.
 - overall_summary에는 summary만 있고 bullets/evidence 없음.
 
 출력 시 따라야 하는 규칙
 - 가격 직접 언급이 없으면 "가격 언급이 적어요" 등 우회 표현. 말투는 "~해요" 체.
 - 반드시 출력 JSON 스키마 형태의 JSON을 출력하세요. 출력 JSON 앞뒤에 다른 글자나 설명 넣지 말 것.
-
-아래 예시들은 위 스키마 설명을 따른 입력→출력의 예시들이다. 다음 예시들을 참고하여 출력하세요.
+- evidence는 bullets를 지지하는 입력 리뷰 인덱스 배열이어야 한다.
 """
 
 _TINY_FEWSHOT_USER = """

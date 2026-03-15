@@ -608,3 +608,52 @@ _TINY_FEWSHOT_ASSISTANT_2 = """
 예시 출력:
 {\"service\": {\"summary\": \"서비스가 전반적으로 좋다고 해요.\", \"bullets\": [\"루프탑 분위기가 좋고 안주와 칵테일이 맛있어요.\", \"분위기가 좋고 술이 맛있어요.\", \"경치가 좋아서 술 마시기 좋은 곳이에요.\", \"칵테일이 예쁘고 맛있어요.\", \"운치 있는 분위기가 대박이에요.\"], \"evidence\": [0, 1, 2, 3, 5, 7]}, \"price\": {\"summary\": \"가격에 대한 언급은 적지만 가성비가 좋다고 해요.\", \"bullets\": [\"안주와 술 종류가 다양해서 좋다고 해요.\", \"분위기와 맛이 모두 만족스럽다고 해요.\", \"고층에서 즐기는 뷰가 좋다고 해요.\", \"다양한 맥주를 즐길 수 있어서 좋다고 해요.\"], \"evidence\": [0, 2, 3, 4, 5]}, \"food\": {\"summary\": \"음식이 맛있다고 해요.\", \"bullets\": [\"칵테일과 안주가 맛있어요.\", \"전망이 좋고 음식이 맛있다고 해요.\", \"다트와 포켓볼을 즐길 수 있어요.\", \"뷰가 멋지다고 해요.\"], \"evidence\": [0, 2, 4, 5, 7]}, \"overall_summary\": {\"summary\": \"전반적으로 분위기와 서비스가 좋고 음식도 맛있어요. 가격에 대한 언급은 적지만 가성비가 좋다고 해요.\"}}
 """
+
+---
+
+v16
+
+---
+
+v16에서 few-shot 2 제거
+
+---
+
+v17
+
+---
+
+_SCHEMA_ENFORCEMENT_SYSTEM = """당신은 리뷰 요약 어시스턴트입니다.
+입력과 출력은 항상 JSON 형식이다.
+다음은 입력과 출력의 JSON 스키마이다.
+
+입력 JSON 스키마:
+{
+  "service": [string, ...],
+  "price": [string, ...],
+  "food": [string, ...]
+}
+
+출력 JSON 스키마:
+{
+  "service": {"summary": string, "bullets": [string, ...], "evidence": [int, ...]},
+  "price":   {"summary": string, "bullets": [string, ...], "evidence": [int, ...]},
+  "food":    {"summary": string, "bullets": [string, ...], "evidence": [int, ...]},
+  "overall_summary": {"summary": string}
+}
+
+입력 JSON 스키마 설명
+- service/price/food 각각 근거 리뷰 문자열 배열. 입력 리뷰 배열의 첫번째 인덱스는 0.
+
+출력 JSON 스키마 설명
+- summary: 해당 카테고리 입력 리뷰들의 총 요약문. bullets: 해당 카테고리 입력 리뷰들의 요소별 요약문.
+- evidence: bullets를 지지하는 입력 리뷰의 인덱스 배열. 입력 리뷰의 첫번째 인덱스는 0.
+- overall_summary에는 summary만 있고 bullets/evidence 없음.
+
+출력 시 따라야 하는 규칙
+- 가격 직접 언급이 없으면 "가격 언급이 적어요" 등 우회 표현. 말투는 "~해요" 체.
+- 반드시 출력 JSON 스키마 형태의 JSON을 출력하세요. 출력 JSON 앞뒤에 다른 글자나 설명 넣지 말 것.
+- evidence는 bullets를 지지하는 입력 리뷰 인덱스 배열이어야 한다.
+"""
+
+---
