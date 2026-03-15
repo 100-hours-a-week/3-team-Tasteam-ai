@@ -53,21 +53,14 @@ SUMMARY_INSTRUCTIONS = """너는 음식점 리뷰 분석가다.
   "food":    {"summary": string, "bullets": [string, ...], "evidence": [int, ...]},
   "overall_summary": {"summary": string}
 }
-overall_summary에는 summary만 넣을 것. bullets, evidence는 금지.
-
-카테고리 정의: service=직원·서비스·대기·분위기·매장, price=가격·가성비·양·비싸다/저렴하다, food=음식·메뉴·맛·요리. 한 카테고리 내용을 다른 카테고리 필드에 넣지 말 것.
 
 규칙:
-- 해당 카테고리에 리뷰가 1개 이상 있으면 반드시 summary, bullets, evidence를 채울 것. 빈 문자열·빈 배열만 내지 말 것. price도 리뷰가 있으면 bullets와 evidence를 채울 것.
-- 리뷰에 나온 내용만 요약할 것. 입력 리뷰에 없는 메뉴·가게·직원 설명을 넣지 말 것.
 - 말투: 모든 summary, bullets, overall_summary는 반드시 "~해요" 체로 쓴다(예: 좋아요, 있어요, 없어요).
-- 각 카테고리 summary: 1문장, 과장 금지
-- bullets: 3~5개(근거 있을 때), 중복 제거, 구체적으로. 근거 없으면 []
-- evidence: 해당 카테고리 리뷰 배열 길이 미만의 0-based 인덱스만 사용. 각 bullet당 정확히 하나의 인덱스. 각 bullet을 실제로 지원하는 리뷰 인덱스만 사용할 것. 인덱스 추측 금지. 근거가 불명확하면 해당 bullet은 생략할 것.
+- bullets: 3~5개, 중복 제거, 구체적으로
+- evidence: 근거로 쓴 리뷰의 인덱스(각 카테고리 리스트에서 0-based)
 - price는 '가격 숫자'가 없으면 '가성비/양/구성/만족감' 같은 우회표현을 근거로 요약하라.
-- overall_summary는 2~3문장으로 종합 요약하라(summary 키만 사용).
-- 근거 없을 때만: summary에 "언급이 적어요"처럼 해요체로 표현하라(빈 문자열 대신). 입력 리뷰에 없는 내용은 추측하지 말 것.
-- 반드시 유효한 JSON만 출력하라. JSON 밖의 설명·접두어·접미어는 금지(You must output ONLY valid JSON. Do not include any text outside JSON).
+- overall_summary는 2~3문장으로 종합 요약하라.
+- 근거(입력 리뷰)에 없는 내용은 추측하지 말고 "언급이 적어요"처럼 해요체로 표현하라.
 """
 
 # 품질 필터: 금지 표현 (hallucination 의심)

@@ -159,47 +159,59 @@ def _postprocess_prediction(pred_json_str: str, instruction: str) -> str:
 
 
 # eval_distill·teacher와 동일한 프롬프트
-_SCHEMA_ENFORCEMENT_SYSTEM = """You are a JSON generator for review summarization.
-입력은 카테고리별 근거 리뷰 목록(JSON)이다. teacher와 동일한 스키마로만 출력하라.
+_SCHEMA_ENFORCEMENT_SYSTEM = """당신은 리뷰 요약 어시스턴트입니다.
+입력과 출력은 항상 JSON 형식이다.
+다음은 입력과 출력의 JSON 스키마이다.
 
-Return ONLY one valid JSON object. No text before or after JSON.
+입력 JSON 스키마:
+{
+  "service": [string, ...],
+  "price": [string, ...],
+  "food": [string, ...]
+}
 
-스키마 (teacher와 동일):
+출력 JSON 스키마:
 {
   "service": {"summary": string, "bullets": [string, ...], "evidence": [int, ...]},
   "price":   {"summary": string, "bullets": [string, ...], "evidence": [int, ...]},
   "food":    {"summary": string, "bullets": [string, ...], "evidence": [int, ...]},
   "overall_summary": {"summary": string}
 }
-overall_summary에는 summary만 넣을 것. bullets, evidence는 금지.
 
-카테고리 정의: service=직원·서비스·대기·분위기·매장, price=가격·가성비·양·비싸다/저렴하다, food=음식·메뉴·맛·요리. 한 카테고리 내용을 다른 카테고리 필드에 넣지 말 것.
+입력 JSON 스키마 설명
+- 입력: service/price/food 각각 근거 리뷰 문자열 배열. 배열 인덱스는 0부터.
 
-규칙 (teacher와 동일):
-- 해당 카테고리에 리뷰가 1개 이상 있으면 반드시 summary, bullets, evidence를 채울 것. 빈 문자열·빈 배열만 내지 말 것. price도 리뷰가 있으면 bullets와 evidence를 채울 것.
-- 리뷰에 나온 내용만 요약할 것. 입력 리뷰에 없는 메뉴·가게·직원 설명을 넣지 말 것.
-- 말투: 모든 summary, bullets, overall_summary는 "~해요" 체
-- 각 카테고리 summary: 1문장, 과장 금지
-- bullets: 3~5개(근거 있을 때), 중복 제거, 구체적으로. 근거 없으면 []
-- evidence: 해당 카테고리 리뷰 배열 길이 미만의 0-based 인덱스만 사용. 각 bullet당 정확히 하나의 인덱스. bullets 개수와 동일.
-- price: 가격 숫자 없으면 가성비/양/구성/만족감 같은 우회표현으로 요약 가능. 전혀 없으면 "가격 관련 언급이 적어요." 등
-- 근거 없을 때만: summary에 "언급이 적어요"처럼 해요체로 표현 (빈 문자열 대신)
-- overall_summary: 2~3문장으로 종합 요약 (summary 키만 사용)
-- evidence는 입력 인덱스만 사용, 추측 금지
-- Evidence must reference only review indices that explicitly support each bullet.
-- Do not guess evidence indices.
-- If evidence is weak or ambiguous, omit the bullet instead of guessing.
+출력 JSON 스키마 설명
+- summary: 해당 카테고리 입력 리뷰들의 총 요약문. bullets: 해당 카테고리 입력 리뷰들의 요소별 요약문.
+- evidence: bullets를 지지하는 입력 리뷰의 0-based 인덱스 목록. 입력에 있는 인덱스만 사용.
+- overall_summary에는 summary만 있고 bullets/evidence 없음.
 
-Output only JSON.
+출력 시 따라야 하는 규칙
+- 가격 직접 언급이 없으면 "가격 언급이 적어요" 등 우회 표현. 말투는 "~해요" 체.
+- 반드시 출력 JSON 스키마 형태의 JSON을 출력하세요. 출력 JSON 앞뒤에 다른 글자나 설명 넣지 말 것.
+
+아래 예시들은 위 스키마 설명을 따른 입력→출력의 예시들이다. 다음 예시들을 참고하여 출력하세요.
 """
 
-_TINY_FEWSHOT_USER = """Example input:
+_TINY_FEWSHOT_USER = """
+예시 입력:
 {"service":["맨날 점심시간만되면 엄청 웨이팅 장난아니라서 점심시간 아닐 때 방문해봤어요! 직원분들도 너무 친절하고 좋습니다!","판교 베트남 음식 르 메콩\n\n수요일 평일 11시 50분 방문\n대기팀 5팀\n25분 기다림 후 입장\n\n음식 주문 후 빠르게 나옴\n음식이 따뜻하고 튀김은 뜨거워서 좋음\n에어컨 온도 아쉬움\n맛은 한국식으로 맛있게 나옴\n\n근처 쌀국수집 중에서는 개인적으로 제일 맛있엇으나 기다림과 안에 에어컨은 재방문 의사를 고민하게 됩니다.","분위기도 좋고 맛도 너무 좋네요!","매장이 쾌적하고 맛있게 잘 먹었어요. 직원분들도 친절하세요!","팀점심으로 왔어요~ 음식이 깔끔하고 맛있어요!\n그리고 직원분들도 진짜 친절하십니다\n자주올게요~!"],"price":["판교에서 베트남 쌀국수 원티어입니다!! 양도 많고 분위기도 좋고 짱이에요!!!"],"food":["회사 근처여서 매번 와보고 싶었는데,\n오늘 와보네요.\n음식도 맛있고, 노란색 인테리어가 인상적이예요^^","너무 맛있어요 2번째 방문임댜","쌀국수 먹으러 항상 오는 곳이에요.\n직장 근처이기도 하고 무엇보다 너무 맛있어서 항상 입이 즐겁습니다 :) 계속 오픈 해주세요!!! 🥰","맛있게 잘 먹었습니다!!","맛있어요!","쌀국수 맛집 인정!!! 너무 맛있어서 팀원분들이랑 자주오게 되네요!! 번창하세요","쌀국수는 판교에서 이집이 최고입니다 ~~~!\n넘맛나요 ><","점심으로 먹기 정말 좋아요~ 자주오고싶은 쌀국수집~"]}
 """
 
-_TINY_FEWSHOT_ASSISTANT = """Example output:
+_TINY_FEWSHOT_ASSISTANT = """
+예시 출력:
 {"service":{"summary":"직원들이 친절하고 응대가 만족스러워요.","bullets":["점심시간에 대기가 있지만 직원들이 친절해요.","음식이 비교적 빨리 나와서 만족스러워요.","매장이 쾌적하다고 해요.","직원분들이 친절하다고 언급해요."],"evidence":[0,1,3,4]},"price":{"summary":"양이 많아서 만족스럽다는 의견이 있어요.","bullets":["양이 많다고 해요."],"evidence":[0]},"food":{"summary":"음식이 맛있고 자주 방문하고 싶어요.","bullets":["쌀국수가 특히 맛있다고 해요.","음식이 전반적으로 맛있다고 해요.","팀원들과 자주 방문하게 된다고 해요.","점심으로 먹기 좋다고 해요."],"evidence":[2,0,5,7]},"overall_summary":{"summary":"전반적으로 서비스가 친절하고 음식 만족도가 높아요."}}
 """
+
+_TINY_FEWSHOT_USER_2 = """
+예시 입력:
+{\"service\": [\"루프탑 분위기도 너무 좋구 안주, 칵테일 다 너무 맛있어요!!\", \"굳귿귿굳 분위기 좋아요~~~~\", \"분위기 좋고 술 맛있습니다. 판교 살면 꼭 와보세요.\", \"경치가 너무 좋아서 분위기 좋게 술 마시기 좋아요!\", \"하이볼도 맛있고 분위기 너무 좋아요♡♡\", \"분위기가 너무 좋고 칵테일도 예쁘고 맛있어요\", \"경차좋고 다트좋고 분위기좋아요 ㅎㅍ\", \"짱이에요! 분위기 운치 대박 ㅎㅎㅎㅎ\"], \"price\": [\"칵테일 맛이 정말 좋아요. 특히 위스키랑 하이볼도 다양하게 준비되어 있어서 취향에 맞게 골라 마실 수 있어 좋네요.\", \"페퍼로니 피자가 정말 만족스러웠어요. 치즈가 듬뿍 들어가서 쫄깃하고 고소한 맛이 좋았네요.\", \"판교 밤하늘을 즐길 수있는 최고의 루프탑 바입니다!\\n안주도 맛있고 술 종류도 다양해요\\n감성터지는 테라스와 포켓볼 다트도 즐길 수있는 판교 유일 루프탑 바 루프11추천이요!\", \"분위기 좋고 맛있고 다양하고  테라스좋고 야경좋고 아무튼 다 좋아요 최고\", \"고층에 위치해있어서 뷰가 좋아요. 탁트인 석양과 함께 즐기기 좋네요.\", \"처음 방문했는데 분위기도 좋고 경치가 너무 좋아요 다양한 맥주 먹을수있어서 더 좋네요! 또 방문할께요!!\"], \"food\": [\"Good place nice food and drink! 😁\", \"굿굿! 추천드려요\", \"전망도 좋고 칵테일도  맛있습니다!\", \"맛있었습니다!\", \"이벤트도많고 다트, 포켓볼 즐길수있고 노래도좋고 너무좋아요~~0~~~\", \"맛있는 캌테일 멋진 뷰\", \"나초로 이행시 하겠습니다\\n나 이런 곳 처음 와봐 자기야\\n초음 맞아 진짜야\", \"킵해놓은 술을 마시러 왔습니다 :) 뷰가 미쳤습니다\"]}
+"""
+
+_TINY_FEWSHOT_ASSISTANT_2 = """
+예시 출력:
+{\"service\": {\"summary\": \"서비스가 전반적으로 좋다고 해요.\", \"bullets\": [\"루프탑 분위기가 좋고 안주와 칵테일이 맛있어요.\", \"분위기가 좋고 술이 맛있어요.\", \"경치가 좋아서 술 마시기 좋은 곳이에요.\", \"칵테일이 예쁘고 맛있어요.\", \"운치 있는 분위기가 대박이에요.\"], \"evidence\": [0, 1, 2, 3, 5, 7]}, \"price\": {\"summary\": \"가격에 대한 언급은 적지만 가성비가 좋다고 해요.\", \"bullets\": [\"안주와 술 종류가 다양해서 좋다고 해요.\", \"분위기와 맛이 모두 만족스럽다고 해요.\", \"고층에서 즐기는 뷰가 좋다고 해요.\", \"다양한 맥주를 즐길 수 있어서 좋다고 해요.\"], \"evidence\": [0, 2, 3, 4, 5]}, \"food\": {\"summary\": \"음식이 맛있다고 해요.\", \"bullets\": [\"칵테일과 안주가 맛있어요.\", \"전망이 좋고 음식이 맛있다고 해요.\", \"다트와 포켓볼을 즐길 수 있어요.\", \"뷰가 멋지다고 해요.\"], \"evidence\": [0, 2, 4, 5, 7]}, \"overall_summary\": {\"summary\": \"전반적으로 분위기와 서비스가 좋고 음식도 맛있어요. 가격에 대한 언급은 적지만 가성비가 좋다고 해요.\"}}
+"""   
 
 def _generate_one(
     model: Any,
@@ -212,8 +224,8 @@ def _generate_one(
         {"role": "system", "content": _SCHEMA_ENFORCEMENT_SYSTEM},
         {"role": "user", "content": _TINY_FEWSHOT_USER},
         {"role": "assistant", "content": _TINY_FEWSHOT_ASSISTANT},
-        #{"role": "user", "content": _TINY_FEWSHOT_USER_2},
-        #{"role": "assistant", "content": _TINY_FEWSHOT_ASSISTANT_2},
+        {"role": "user", "content": _TINY_FEWSHOT_USER_2},
+        {"role": "assistant", "content": _TINY_FEWSHOT_ASSISTANT_2},
         {"role": "user", "content": instruction},
     ]
     text = tokenizer.apply_chat_template(
