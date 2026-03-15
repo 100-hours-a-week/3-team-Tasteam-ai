@@ -11,6 +11,7 @@ RunPod Network Volume S3 호환 API로 로컬 파일/디렉터리 업로드.
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
 from typing import Any
 
@@ -75,6 +76,19 @@ def object_exists(s3_client: Any, bucket: str, key: str) -> bool:
         if e.response.get("Error", {}).get("Code") == "404":
             return False
         raise
+
+
+def prefix_has_objects(
+    volume_id: str,
+    prefix: str,
+    *,
+    s3_client: Any | None = None,
+) -> bool:
+    """볼륨에서 prefix 하위에 객체가 하나라도 있는지 확인. 다운로드 전 ls 체크용."""
+    client = s3_client or get_runpod_s3_client()
+    prefix_norm = prefix.rstrip("/") + "/" if prefix else ""
+    resp = client.list_objects_v2(Bucket=volume_id, Prefix=prefix_norm, MaxKeys=1)
+    return len(resp.get("Contents", [])) > 0
 
 
 def upload_file_to_volume(
@@ -172,19 +186,42 @@ def download_directory_from_runpod(
     remote_prefix: str,
     local_dir: str | Path,
 ) -> int:
-    """볼륨의 remote_prefix 하위를 로컬 local_dir로 다운로드. 반환: 파일 수."""
+    """볼륨의 remote_prefix 하위를 로컬 local_dir로 다운로드. 반환: 파일 수.
+
+    RunPod S3 list pagination 비호환(동일 NextContinuationToken 반복) 때문에
+    paginator 대신 list_objects_v2를 수동 루프로 호출한다.
+    동일 토큰이 반복되면 잠시 대기 후 재시도하고, 계속 반복되면 중단한다.
+    키 중복 제거 후 다운로드하여 PaginationError 없이 동작한다.
+    """
     client = get_runpod_s3_client()
     bucket = volume_id
     local_dir = Path(local_dir)
     local_dir.mkdir(parents=True, exist_ok=True)
     prefix = remote_prefix.rstrip("/") + "/"
+    seen_keys: set[str] = set()
     count = 0
-    paginator = client.get_paginator("list_objects_v2")
-    for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
-        for obj in page.get("Contents", []):
+
+    continuation_token: str | None = None
+    last_token: str | None = None
+    same_token_retries = 0
+    max_same_token_retries = 5
+    retry_sleep_sec = 2
+
+    while True:
+        kwargs: dict[str, Any] = {
+            "Bucket": bucket,
+            "Prefix": prefix,
+            "MaxKeys": 1000,
+        }
+        if continuation_token:
+            kwargs["ContinuationToken"] = continuation_token
+
+        resp = client.list_objects_v2(**kwargs)
+        for obj in resp.get("Contents", []):
             key = obj.get("Key")
-            if not key or not key.startswith(prefix):
+            if not key or not key.startswith(prefix) or key in seen_keys:
                 continue
+            seen_keys.add(key)
             rel = key[len(prefix):].lstrip("/")
             if not rel:
                 continue
@@ -192,7 +229,66 @@ def download_directory_from_runpod(
             local_path.parent.mkdir(parents=True, exist_ok=True)
             client.download_file(bucket, key, str(local_path))
             count += 1
+
+        next_token = resp.get("NextContinuationToken")
+        if not next_token:
+            break
+
+        if next_token == last_token:
+            same_token_retries += 1
+            if same_token_retries > max_same_token_retries:
+                break
+            time.sleep(retry_sleep_sec)
+            continuation_token = next_token
+            continue
+
+        same_token_retries = 0
+        last_token = next_token
+        continuation_token = next_token
+
     return count
+
+
+def delete_prefix_from_volume(
+    volume_id: str,
+    prefix: str,
+    s3_client: Any | None = None,
+) -> int:
+    """볼륨에서 prefix 하위 객체를 모두 삭제. 반환: 삭제한 객체 수.
+
+    RunPod S3 API pagination 비호환(동일 ContinuationToken 반복)을 피하기 위해
+    paginator 대신 list_objects_v2를 수동 루프로 호출하며, 같은 token이 두 번 나오면
+    그 시점에서 list를 중단하고 그때까지 수집한 키만 삭제한다.
+    """
+    client = s3_client or get_runpod_s3_client()
+    prefix_norm = prefix.rstrip("/") + "/" if prefix else ""
+    deleted = 0
+    seen_tokens: set[str] = set()
+    continuation_token: str | None = None
+    while True:
+        if continuation_token is not None and continuation_token in seen_tokens:
+            # 동일 token이 두 번 나온 경우(API 비호환) 루프 종료
+            break
+        if continuation_token is not None:
+            seen_tokens.add(continuation_token)
+        kwargs: dict[str, Any] = {
+            "Bucket": volume_id,
+            "Prefix": prefix_norm,
+            "MaxKeys": 1000,
+        }
+        if continuation_token:
+            kwargs["ContinuationToken"] = continuation_token
+        resp = client.list_objects_v2(**kwargs)
+        contents = resp.get("Contents", [])
+        if contents:
+            keys = [{"Key": obj["Key"]} for obj in contents]
+            client.delete_objects(Bucket=volume_id, Delete={"Objects": keys})
+            deleted += len(keys)
+        next_token = resp.get("NextContinuationToken")
+        if not next_token:
+            break
+        continuation_token = next_token
+    return deleted
 
 
 if __name__ == "__main__":

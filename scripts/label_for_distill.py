@@ -56,13 +56,11 @@ SUMMARY_INSTRUCTIONS = """너는 음식점 리뷰 분석가다.
 
 규칙:
 - 말투: 모든 summary, bullets, overall_summary는 반드시 "~해요" 체로 쓴다(예: 좋아요, 있어요, 없어요).
-- 각 카테고리 summary: 1문장, 과장 금지
 - bullets: 3~5개, 중복 제거, 구체적으로
 - evidence: 근거로 쓴 리뷰의 인덱스(각 카테고리 리스트에서 0-based)
 - price는 '가격 숫자'가 없으면 '가성비/양/구성/만족감' 같은 우회표현을 근거로 요약하라.
 - overall_summary는 2~3문장으로 종합 요약하라.
 - 근거(입력 리뷰)에 없는 내용은 추측하지 말고 "언급이 적어요"처럼 해요체로 표현하라.
-- 반드시 유효한 JSON만 출력하라. JSON 밖의 설명·접두어·접미어는 금지(You must output ONLY valid JSON. Do not include any text outside JSON).
 """
 
 # 품질 필터: 금지 표현 (hallucination 의심)

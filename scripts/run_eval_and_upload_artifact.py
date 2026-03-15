@@ -31,6 +31,11 @@ def main() -> None:
     parser.add_argument("--wandb-project", type=str, default=None)
     parser.add_argument("--wandb-entity", type=str, default=None)
     parser.add_argument("--max-eval", type=int, default=0)
+    parser.add_argument(
+        "--skip-artifact-upload",
+        action="store_true",
+        help="wandb artifact 업로드 생략; 로컬에서 볼륨에서 다운로드하도록 eval_done.json에 download_from_volume 기록",
+    )
     args = parser.parse_args()
 
     cmd = [
@@ -71,10 +76,11 @@ def main() -> None:
     if not eval_dir.is_dir():
         raise FileNotFoundError(f"Eval dir not found: {eval_dir}")
 
-    # wandb artifact 업로드
+    # wandb artifact 업로드 (--skip-artifact-upload 시 생략)
     qualified_name = None
     version = None
-    if os.environ.get("WANDB_API_KEY"):
+    download_from_volume = args.skip_artifact_upload
+    if not args.skip_artifact_upload and os.environ.get("WANDB_API_KEY"):
         try:
             import wandb
             project = args.wandb_project or os.environ.get("WANDB_PROJECT", "tasteam-distill")
@@ -100,10 +106,12 @@ def main() -> None:
             logger.warning("wandb artifact upload failed: %s", e)
             qualified_name = None
             version = None
+    elif args.skip_artifact_upload:
+        logger.info("Skipping artifact upload (--skip-artifact-upload); download_from_volume=true")
     else:
         logger.warning("WANDB_API_KEY not set; skipping artifact upload")
 
-    # 완료 마커 기록 (로컬에서 폴링 후 artifact 다운로드용)
+    # 완료 마커 기록 (로컬에서 폴링 후 볼륨 다운로드 또는 artifact 다운로드용)
     done_path = args.output_dir / "eval_done.json"
     args.output_dir.mkdir(parents=True, exist_ok=True)
     done = {
@@ -112,6 +120,7 @@ def main() -> None:
         "artifact_name": args.artifact_name,
         "version": version,
         "qualified_name": qualified_name,
+        "download_from_volume": download_from_volume,
     }
     with open(done_path, "w", encoding="utf-8") as f:
         json.dump(done, f, ensure_ascii=False, indent=2)
