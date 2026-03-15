@@ -9,6 +9,7 @@
 #   SKIP_S3_POLL=1         - 다운로드/변환 생략
 #   UPLOAD_TO_S3=1         - 추론 후 결과를 S3에 업로드 (recommendations/... + _SUCCESS). S3_ENV 필요.
 #   RECOMMENDATION_DT      - 선택. YYYY-MM-DD (기본: UTC 오늘)
+#   RECOMMENDATION_OUTPUT_FORMAT - csv | json.gz (기본: csv). S3 업로드 파일 형식.
 
 set -e
 cd /app
@@ -38,6 +39,7 @@ if [ -n "${UPLOAD_TO_S3}" ] && [ "${UPLOAD_TO_S3}" = "1" ]; then
   fi
   S3_ARGS=(--run-dir "$RUN_DIR" --raw-candidates "$CANDIDATES_CSV" --env "$S3_ENV")
   [ -n "${RECOMMENDATION_DT}" ] && S3_ARGS+=(--dt "$RECOMMENDATION_DT")
+  [ -n "${RECOMMENDATION_OUTPUT_FORMAT}" ] && S3_ARGS+=(--output-format "$RECOMMENDATION_OUTPUT_FORMAT")
   exec python scripts/score_batch_to_s3.py "${S3_ARGS[@]}"
 fi
 

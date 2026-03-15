@@ -85,6 +85,8 @@ API 서버는 다음 데이터를 **S3 Data Lake**에 저장한다.
 
 **폴링·다운로드 기준**: AI 서버(또는 배치)가 raw를 다운로드할 때는, 각 파티션(`dt=YYYY-MM-DD`)에 **`_SUCCESS` 마커가 있을 때만** 해당 파티션을 유효로 보고 데이터 파일을 내려받는다. 구현: `ml/deepfm_pipeline/scripts/s3_raw_poll_download.py`.
 
+**Raw 파일 형식**: 파티션 내 데이터 파일은 **`part-*.csv`** 또는 **`part-*.json.gz`**를 사용할 수 있다. JSON GZIP인 경우 동일 스키마를 JSON 배열 또는 JSON Lines(한 줄에 한 객체)로 저장한다.
+
 환경별 bucket
 
 ```
@@ -102,7 +104,7 @@ s3://tasteam-{env}-analytics/
 	raw/
 		events/
 			dt=YYYY-MM-DD/
-				part-00001.csv
+				part-00001.csv   또는  part-00001.json.gz
 				_SUCCESS
 ```
 
@@ -133,7 +135,7 @@ s3://tasteam-{env}-analytics/
 	raw/
 		restaurants/
 			dt=YYYY-MM-DD/
-				part-00001.csv
+				part-00001.csv   또는  part-00001.json.gz
 				_SUCCESS
 ```
 
@@ -159,7 +161,7 @@ s3://tasteam-{env}-analytics/
 	raw/
 		menus/
 			dt=YYYY-MM-DD/
-				part-00001.csv
+				part-00001.csv   또는  part-00001.json.gz
 				_SUCCESS
 ```
 
@@ -185,12 +187,14 @@ AI 서버는 추천 결과를 **S3에 파일 형태로 저장한다.**
 
 ### S3 경로
 
+데이터 파일은 **`part-00001.csv`** 또는 **`part-00001.json.gz`**(JSON Lines 압축) 중 하나를 사용한다.
+
 ```
 s3://tasteam-{env}-analytics/
 	recommendations/
 		pipeline_version=VERSION/
 			dt=YYYY-MM-DD/
-				part-00001.csv
+				part-00001.csv   또는  part-00001.json.gz
 				_SUCCESS
 ```
 
@@ -230,7 +234,7 @@ AI 서버는 추천 생성 완료 후 `_SUCCESS` 파일을 생성한다.
 recommendation_result/
 	pipeline_version=deepfm-1.0.20260227/
 		dt=2026-03-07/
-			part-00001.csv
+			part-00001.csv   또는  part-00001.json.gz
 			_SUCCESS
 ```
 

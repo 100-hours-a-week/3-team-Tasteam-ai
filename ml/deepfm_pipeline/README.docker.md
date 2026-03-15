@@ -79,6 +79,7 @@ docker run --rm \
 | `SKIP_S3_POLL` | (비설정) | 1 이면 다운로드/변환 생략, `CANDIDATES_CSV` 또는 인자로 후보 전달 |
 | `UPLOAD_TO_S3` | (비설정) | 1 이면 추론 후 S3 업로드. `S3_ENV` 필요. |
 | `RECOMMENDATION_DT` | (UTC 오늘) | 업로드 파티션 dt (YYYY-MM-DD) |
+| `RECOMMENDATION_OUTPUT_FORMAT` | `csv` | 업로드 파일 형식: `csv` 또는 `json.gz` |
 
 ### 실행 예 (S3 폴링 → 추론 → S3 업로드, 한 번에)
 
