@@ -80,6 +80,7 @@ docker run --rm \
 | `UPLOAD_TO_S3` | (비설정) | 1 이면 추론 후 S3 업로드. `S3_ENV` 필요. |
 | `RECOMMENDATION_DT` | (UTC 오늘) | 업로드 파티션 dt (YYYY-MM-DD) |
 | `RECOMMENDATION_OUTPUT_FORMAT` | `csv` | 업로드 파일 형식: `csv` 또는 `json.gz` |
+| `AWS_PROFILE` | (비설정) | AWS CLI 프로필 이름 (예: jayvi). 설정 시 S3 폴링/업로드에 사용. `~/.aws` 마운트 필요 시 있음. |
 
 ### 실행 예 (S3 폴링 → 추론 → S3 업로드, 한 번에)
 
@@ -90,6 +91,16 @@ docker run --rm \
   -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION \
   -v /path/to/run_dir:/model \
   -v /path/to/data:/data \
+  deepfm-inference
+```
+
+**AWS CLI 프로필 사용 시** (예: `~/.aws`에 프로필 `jayvi`):
+
+```bash
+docker run --rm \
+  -e S3_ENV=dev -e UPLOAD_TO_S3=1 -e AWS_PROFILE=jayvi \
+  -v /path/to/run_dir:/model -v /path/to/data:/data \
+  -v ~/.aws:/root/.aws \
   deepfm-inference
 ```
 
@@ -135,6 +146,17 @@ Raw 후보 CSV 사용 시 (raw_to_pipeline 출력 등):
 --entrypoint python deepfm-inference scripts/score_batch_to_s3.py \
   --run-dir /model --raw-candidates /data/raw_candidates.csv --env dev
 ```
+
+프로필 사용: `--profile jayvi` 또는 환경변수 `AWS_PROFILE=jayvi`.
+
+---
+
+## Prefect로 배치 오케스트레이션
+
+S3 폴링 → 추론 → S3 업로드를 **하나의 Prefect flow**로 묶어 서버/UI에서 주기 실행·모니터링하려면 `inference_flow.py`를 사용한다.
+
+- **Flow**: 워크플로우 한 종류 (다운로드 → 변환 → 추론 → 업로드). 목록만/다운로드만은 `scripts/s3_raw_poll_download.py` (--list-only 등)로 실행.
+- **문서**: [docs/prefect_inference_flow.md](docs/prefect_inference_flow.md) — Prefect 서버 기동, deployment, cron 스케줄 예시.
 
 ---
 

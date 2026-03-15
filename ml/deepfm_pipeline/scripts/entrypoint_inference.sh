@@ -21,10 +21,11 @@ CANDIDATES_CSV="${CANDIDATES_CSV:-/data/raw_candidates.csv}"
 mkdir -p "$(dirname "$OUT_PATH")" "$(dirname "$CANDIDATES_CSV")"
 
 if [ -z "${SKIP_S3_POLL}" ]; then
+  POLL_ARGS=(--profile "${AWS_PROFILE:-jayvi}")
   if [ -n "${S3_BUCKET}" ]; then
-    python scripts/s3_raw_poll_download.py --bucket "$S3_BUCKET" --out-dir "$RAW_DOWNLOAD_DIR"
+    python scripts/s3_raw_poll_download.py --bucket "$S3_BUCKET" --out-dir "$RAW_DOWNLOAD_DIR" "${POLL_ARGS[@]}"
   elif [ -n "${S3_ENV}" ]; then
-    python scripts/s3_raw_poll_download.py --env "$S3_ENV" --out-dir "$RAW_DOWNLOAD_DIR"
+    python scripts/s3_raw_poll_download.py --env "$S3_ENV" --out-dir "$RAW_DOWNLOAD_DIR" "${POLL_ARGS[@]}"
   else
     echo "S3_BUCKET or S3_ENV not set. Set SKIP_S3_POLL=1 and pass --raw-candidates /path/to/candidates.csv"
     exit 1
@@ -37,7 +38,7 @@ if [ -n "${UPLOAD_TO_S3}" ] && [ "${UPLOAD_TO_S3}" = "1" ]; then
     echo "UPLOAD_TO_S3=1 requires S3_ENV (dev|stg|prod)"
     exit 1
   fi
-  S3_ARGS=(--run-dir "$RUN_DIR" --raw-candidates "$CANDIDATES_CSV" --env "$S3_ENV")
+  S3_ARGS=(--run-dir "$RUN_DIR" --raw-candidates "$CANDIDATES_CSV" --env "$S3_ENV" --profile "${AWS_PROFILE:-jayvi}")
   [ -n "${RECOMMENDATION_DT}" ] && S3_ARGS+=(--dt "$RECOMMENDATION_DT")
   [ -n "${RECOMMENDATION_OUTPUT_FORMAT}" ] && S3_ARGS+=(--output-format "$RECOMMENDATION_OUTPUT_FORMAT")
   exec python scripts/score_batch_to_s3.py "${S3_ARGS[@]}"

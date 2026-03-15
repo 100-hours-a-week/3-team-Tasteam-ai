@@ -13,10 +13,11 @@ mkdir -p "$RAW_DOWNLOAD_DIR" "$DATA_DIR" "$OUTPUT_DIR"
 mkdir -p "$DATA_DIR/raw"
 
 if [ -z "${SKIP_S3_POLL}" ]; then
+  POLL_ARGS=(--profile "${AWS_PROFILE:-jayvi}")
   if [ -n "${S3_BUCKET}" ]; then
-    python scripts/s3_raw_poll_download.py --bucket "$S3_BUCKET" --out-dir "$RAW_DOWNLOAD_DIR"
+    python scripts/s3_raw_poll_download.py --bucket "$S3_BUCKET" --out-dir "$RAW_DOWNLOAD_DIR" "${POLL_ARGS[@]}"
   elif [ -n "${S3_ENV}" ]; then
-    python scripts/s3_raw_poll_download.py --env "$S3_ENV" --out-dir "$RAW_DOWNLOAD_DIR"
+    python scripts/s3_raw_poll_download.py --env "$S3_ENV" --out-dir "$RAW_DOWNLOAD_DIR" "${POLL_ARGS[@]}"
   else
     echo "S3_BUCKET or S3_ENV not set, skipping S3 download. Set SKIP_S3_POLL=1 to use existing data."
     exit 1
