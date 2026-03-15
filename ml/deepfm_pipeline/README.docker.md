@@ -62,7 +62,10 @@ docker run --rm \
 
 ## 추론용 이미지 (deepfm-inference)
 
-**기본 흐름**: S3 폴링 → Raw 다운로드 → 파이프라인 CSV 변환 → `score_batch --raw-candidates` → 추천 결과 CSV.
+**기본 흐름**: S3 폴링 → Raw 다운로드 → 파이프라인 CSV 변환 → 추론 → (선택) S3 업로드.
+
+- `UPLOAD_TO_S3` 미설정: 추론 결과를 로컬 `OUT_PATH`에만 저장.
+- `UPLOAD_TO_S3=1`: 추론 후 계약 경로로 S3 업로드 (`recommendations/...` + `_SUCCESS`).
 
 ### 환경 변수
 
@@ -71,11 +74,25 @@ docker run --rm \
 | `S3_ENV` / `S3_BUCKET` | - | S3 버킷 (S3 폴링 시) |
 | `RAW_DOWNLOAD_DIR` | `/data/raw_download` | Raw 다운로드 위치 |
 | `RUN_DIR` | `/model` | 모델 run 디렉터리 (model.pt, categorical_dicts.json 등) |
-| `OUT_PATH` | `/data/recommendations.csv` | 추천 결과 CSV 출력 경로 |
+| `OUT_PATH` | `/data/recommendations.csv` | 추론 결과 로컬 경로 (UPLOAD_TO_S3 미설정 시) |
 | `CANDIDATES_CSV` | `/data/raw_candidates.csv` | 변환된 후보 CSV (S3 폴링 시 생성, SKIP_S3_POLL 시 직접 마운트) |
 | `SKIP_S3_POLL` | (비설정) | 1 이면 다운로드/변환 생략, `CANDIDATES_CSV` 또는 인자로 후보 전달 |
+| `UPLOAD_TO_S3` | (비설정) | 1 이면 추론 후 S3 업로드. `S3_ENV` 필요. |
+| `RECOMMENDATION_DT` | (UTC 오늘) | 업로드 파티션 dt (YYYY-MM-DD) |
 
-### 실행 예 (S3 → 추론)
+### 실행 예 (S3 폴링 → 추론 → S3 업로드, 한 번에)
+
+```bash
+docker run --rm \
+  -e S3_ENV=dev \
+  -e UPLOAD_TO_S3=1 \
+  -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION \
+  -v /path/to/run_dir:/model \
+  -v /path/to/data:/data \
+  deepfm-inference
+```
+
+### 실행 예 (S3 → 추론만, 로컬에 CSV 저장)
 
 ```bash
 docker run --rm \
@@ -98,7 +115,9 @@ docker run --rm \
 # RUN_DIR, OUT_PATH 등은 기본값 또는 인자로 덮어쓰기
 ```
 
-### S3 업로드 (score_batch_to_s3)
+### S3 업로드 (score_batch_to_s3, 수동 실행)
+
+후보 CSV가 이미 있을 때 추론 + S3 업로드만 실행:
 
 ```bash
 docker run --rm \
@@ -106,8 +125,14 @@ docker run --rm \
   -v /path/to/candidates.csv:/data/candidates.csv \
   -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION \
   --entrypoint python deepfm-inference scripts/score_batch_to_s3.py \
-  --pipeline-version deepfm-1.0.xxxx --run-dir /model \
-  --candidates-path /data/candidates.csv --env dev
+  --run-dir /model --candidates-path /data/candidates.csv --env dev
+```
+
+Raw 후보 CSV 사용 시 (raw_to_pipeline 출력 등):
+
+```bash
+--entrypoint python deepfm-inference scripts/score_batch_to_s3.py \
+  --run-dir /model --raw-candidates /data/raw_candidates.csv --env dev
 ```
 
 ---

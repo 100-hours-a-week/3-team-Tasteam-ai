@@ -55,9 +55,10 @@ def _upload_to_s3(local_path: Path, s3_url: str) -> None:
 
 def main() -> None:
     p = argparse.ArgumentParser(description="DeepFM score_batch → 계약된 S3 경로 업로드 + _SUCCESS")
-    p.add_argument("--pipeline-version", required=True, help="pipeline_version (output/ 하위에서 run_dir 자동 탐색)")
-    p.add_argument("--run-dir", default=None, help="선택. run 디렉터리 경로. 없으면 pipeline_version으로 탐색")
-    p.add_argument("--candidates-path", required=True, help="후보 feature CSV 경로")
+    p.add_argument("--pipeline-version", default=None, help="pipeline_version. --run-dir 지정 시 run_dir 내 pipeline_version.txt에서 읽음.")
+    p.add_argument("--run-dir", default=None, help="run 디렉터리 경로 (model.pt, feature_sizes.txt 등). 지정 시 pipeline_version 생략 가능.")
+    p.add_argument("--candidates-path", default=None, help="후보 feature CSV 경로 (--raw-candidates 사용 시 생략)")
+    p.add_argument("--raw-candidates", default=None, help="Raw 후보 CSV (raw_to_pipeline 등). run_dir vocab으로 인코딩 후 추론.")
     p.add_argument("--meta-path", default=None, help="선택. user_id/anonymous_id/restaurant_id/context_snapshot 메타 CSV 경로")
     p.add_argument("--env", required=True, choices=["dev", "stg", "prod"], help="tasteam-{env}-analytics 버킷 선택")
     p.add_argument("--dt", default=None, help="선택. YYYY-MM-DD (기본: UTC 오늘)")
@@ -65,11 +66,20 @@ def main() -> None:
     p.add_argument("--batch-size", type=int, default=256, help="추론 배치 크기")
     args = p.parse_args()
 
-    run_dir = Path(args.run_dir) if args.run_dir else _find_run_dir_by_version(args.pipeline_version)
-    if not run_dir or not run_dir.exists():
-        raise SystemExit(f"Run not found for pipeline_version={args.pipeline_version}. Use --run-dir or ensure output/ contains the run.")
-
-    pv = (run_dir / "pipeline_version.txt").read_text(encoding="utf-8").strip() if (run_dir / "pipeline_version.txt").exists() else args.pipeline_version
+    if not args.candidates_path and not args.raw_candidates:
+        p.error("One of --candidates-path or --raw-candidates is required")
+    if args.run_dir:
+        run_dir = Path(args.run_dir)
+        if not run_dir.exists():
+            raise SystemExit(f"Run dir not found: {run_dir}")
+        pv = (run_dir / "pipeline_version.txt").read_text(encoding="utf-8").strip() if (run_dir / "pipeline_version.txt").exists() else (args.pipeline_version or "deepfm-1.0.unknown")
+    else:
+        if not args.pipeline_version:
+            p.error("--pipeline-version required when --run-dir is not set")
+        run_dir = _find_run_dir_by_version(args.pipeline_version)
+        if not run_dir or not run_dir.exists():
+            raise SystemExit(f"Run not found for pipeline_version={args.pipeline_version}. Use --run-dir or ensure output/ contains the run.")
+        pv = (run_dir / "pipeline_version.txt").read_text(encoding="utf-8").strip() if (run_dir / "pipeline_version.txt").exists() else args.pipeline_version
     dt = args.dt or datetime.now(timezone.utc).date().isoformat()
     bucket = f"tasteam-{args.env}-analytics"
     key_prefix = f"recommendations/pipeline_version={pv}/dt={dt}"
@@ -89,9 +99,10 @@ def main() -> None:
 
     score_batch_run(
         run_dir=run_dir,
-        candidates_path=Path(args.candidates_path),
+        candidates_path=Path(args.candidates_path) if args.candidates_path else Path(args.raw_candidates),
         output_path=out_path,
         meta_path=Path(args.meta_path) if args.meta_path else None,
+        raw_candidates_path=Path(args.raw_candidates) if args.raw_candidates else None,
         ttl_hours=args.ttl_hours,
         batch_size=args.batch_size,
     )
