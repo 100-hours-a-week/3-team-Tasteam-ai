@@ -122,12 +122,17 @@ def task_inference_and_upload(
 # -----------------------------------------------------------------------------
 
 
+def _default_output_dir() -> Path:
+    return _deepfm_root / "output"
+
+
 @flow(name="DeepFM Batch Inference Pipeline", log_prints=True)
 def deepfm_inference_flow(
     env: str | None = None,
     bucket: str | None = None,
     out_dir: str = "",
     run_dir: str = "",
+    pipeline_version: str | None = None,
     data_types: list[str] | None = None,
     dt_filter: str | None = None,
     dt_upload: str | None = None,
@@ -135,6 +140,9 @@ def deepfm_inference_flow(
     output_format: str = "csv",
     ttl_hours: float = 24.0,
     batch_size: int = 256,
+    artifact_cache_dir: str | None = None,
+    wandb_project: str | None = None,
+    wandb_entity: str | None = None,
 ) -> dict:
     """
     DeepFM 배치 추론 워크플로우: S3 Raw 다운로드 → 후보 CSV 변환 → 추론 → S3 업로드.
@@ -142,7 +150,8 @@ def deepfm_inference_flow(
     - env: dev | stg | prod → tasteam-{env}-analytics (bucket 미지정 시)
     - bucket: 버킷 직접 지정 (env 대신)
     - out_dir: Raw 다운로드/후보 CSV 경로 (필수)
-    - run_dir: 모델 run 디렉터리 (필수)
+    - run_dir: 모델 run 디렉터리 (run_dir 또는 pipeline_version 중 하나 필수)
+    - pipeline_version: run_dir 없을 때 로컬 output/ 또는 wandb artifact에서 해당 버전 조회
     - dt_filter: Raw 파티션 필터 (YYYY-MM-DD). None이면 _SUCCESS 있는 전부
     - dt_upload: 업로드 파티션 dt. None이면 UTC 오늘
     - profile_name: AWS CLI 프로필 (미지정 시 AWS_PROFILE)
@@ -153,9 +162,28 @@ def deepfm_inference_flow(
         raise ValueError("env or bucket required")
     if not out_dir:
         raise ValueError("out_dir required")
-    if not run_dir:
-        raise ValueError("run_dir required")
+    if not run_dir and not pipeline_version:
+        raise ValueError("run_dir or pipeline_version required")
 
+    from utils.run_dir_resolver import resolve_run_dir
+
+    out_dir_path = Path(out_dir)
+    run_dir_arg = Path(run_dir) if run_dir else None
+    search_dir = _default_output_dir()
+    cache_dir = Path(artifact_cache_dir) if artifact_cache_dir else (search_dir / "artifact_cache")
+    try:
+        resolved_run_dir = resolve_run_dir(
+            run_dir=run_dir_arg,
+            pipeline_version=pipeline_version,
+            search_output_dir=search_dir,
+            cache_dir=cache_dir,
+            wandb_project=wandb_project or "deepfm-pipeline",
+            wandb_entity=wandb_entity,
+        )
+    except (FileNotFoundError, ValueError) as e:
+        raise ValueError(f"Could not resolve run_dir: {e}") from e
+
+    run_dir = str(resolved_run_dir)
     profile = profile_name or os.environ.get("AWS_PROFILE") or "jayvi"
 
     task_s3_download_raw(
@@ -205,7 +233,11 @@ if __name__ == "__main__":
     p.add_argument("--env", choices=["dev", "stg", "prod"], default=None, help="환경 → tasteam-{env}-analytics")
     p.add_argument("--bucket", type=str, default=None, help="버킷 직접 지정 (--env 대신)")
     p.add_argument("--out-dir", type=str, required=True, help="Raw 다운로드/후보 CSV 경로")
-    p.add_argument("--run-dir", type=str, required=True, help="모델 run 디렉터리")
+    p.add_argument("--run-dir", type=str, default=None, help="모델 run 디렉터리 (--pipeline-version과 둘 중 하나 필수)")
+    p.add_argument("--pipeline-version", type=str, default=None, help="run_dir 없을 때 로컬/아티팩트에서 해당 버전 사용")
+    p.add_argument("--artifact-cache-dir", type=str, default=None, help="아티팩트 다운로드 캐시 디렉터리")
+    p.add_argument("--wandb-project", type=str, default=None, help="W&B 프로젝트 (아티팩트 조회 시)")
+    p.add_argument("--wandb-entity", type=str, default=None, help="W&B 엔티티 (아티팩트 조회 시)")
     p.add_argument(
         "--data-types",
         type=str,
@@ -219,6 +251,8 @@ if __name__ == "__main__":
     p.add_argument("--batch-size", type=int, default=256, help="추론 배치 크기")
     args = p.parse_args()
 
+    if not args.run_dir and not args.pipeline_version:
+        p.error("One of --run-dir or --pipeline-version is required")
     data_types = [s.strip() for s in args.data_types.split(",") if s.strip()]
     if not data_types:
         data_types = ["events", "restaurants", "menus"]
@@ -227,7 +261,8 @@ if __name__ == "__main__":
         env=args.env,
         bucket=args.bucket,
         out_dir=args.out_dir,
-        run_dir=args.run_dir,
+        run_dir=args.run_dir or "",
+        pipeline_version=args.pipeline_version,
         data_types=data_types,
         dt_filter=args.dt,
         dt_upload=args.dt,
@@ -235,5 +270,8 @@ if __name__ == "__main__":
         output_format=args.output_format,
         ttl_hours=args.ttl_hours,
         batch_size=args.batch_size,
+        artifact_cache_dir=args.artifact_cache_dir,
+        wandb_project=args.wandb_project,
+        wandb_entity=args.wandb_entity,
     )
     print("Result:", result)

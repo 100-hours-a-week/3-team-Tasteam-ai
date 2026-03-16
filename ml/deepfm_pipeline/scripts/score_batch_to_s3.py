@@ -23,17 +23,8 @@ def _default_output_dir() -> Path:
     return Path(__file__).resolve().parents[1] / "output"
 
 
-def _find_run_dir_by_version(pipeline_version: str) -> Path | None:
-    out = _default_output_dir()
-    if not out.exists():
-        return None
-    for d in out.iterdir():
-        if not d.is_dir():
-            continue
-        pv_file = d / "pipeline_version.txt"
-        if pv_file.exists() and pv_file.read_text(encoding="utf-8").strip() == pipeline_version:
-            return d
-    return None
+def _default_artifact_cache_dir() -> Path:
+    return _default_output_dir() / "artifact_cache"
 
 
 def _parse_s3_url(url: str) -> tuple[str, str]:
@@ -75,24 +66,42 @@ def main() -> None:
     p.add_argument("--profile", type=str, default=None, help="AWS CLI 프로필 이름 (미지정 시 AWS_PROFILE 사용)")
     p.add_argument("--ttl-hours", type=float, default=24.0, help="expires_at TTL(시간)")
     p.add_argument("--batch-size", type=int, default=256, help="추론 배치 크기")
+    p.add_argument("--artifact-cache-dir", type=str, default=None, help="아티팩트 다운로드 캐시 (미지정 시 output/artifact_cache). run_dir 없을 때만 사용.")
+    p.add_argument("--wandb-project", type=str, default=None, help="W&B 프로젝트 (아티팩트 조회 시, 기본 deepfm-pipeline)")
+    p.add_argument("--wandb-entity", type=str, default=None, help="W&B 엔티티 (아티팩트 조회 시)")
     args = p.parse_args()
 
     profile = args.profile or os.environ.get("AWS_PROFILE") or "jayvi"
 
     if not args.candidates_path and not args.raw_candidates:
         p.error("One of --candidates-path or --raw-candidates is required")
-    if args.run_dir:
-        run_dir = Path(args.run_dir)
-        if not run_dir.exists():
-            raise SystemExit(f"Run dir not found: {run_dir}")
-        pv = (run_dir / "pipeline_version.txt").read_text(encoding="utf-8").strip() if (run_dir / "pipeline_version.txt").exists() else (args.pipeline_version or "deepfm-1.0.unknown")
-    else:
-        if not args.pipeline_version:
-            p.error("--pipeline-version required when --run-dir is not set")
-        run_dir = _find_run_dir_by_version(args.pipeline_version)
-        if not run_dir or not run_dir.exists():
-            raise SystemExit(f"Run not found for pipeline_version={args.pipeline_version}. Use --run-dir or ensure output/ contains the run.")
-        pv = (run_dir / "pipeline_version.txt").read_text(encoding="utf-8").strip() if (run_dir / "pipeline_version.txt").exists() else args.pipeline_version
+    if not args.run_dir and not args.pipeline_version:
+        p.error("One of --run-dir or --pipeline-version is required")
+
+    out_dir = _default_output_dir()
+    cache_dir = Path(args.artifact_cache_dir) if args.artifact_cache_dir else _default_artifact_cache_dir()
+    run_dir_arg = Path(args.run_dir) if args.run_dir else None
+    pv_arg = args.pipeline_version
+
+    import sys
+    root = Path(__file__).resolve().parents[1]
+    if str(root) not in sys.path:
+        sys.path.insert(0, str(root))
+    from utils.run_dir_resolver import resolve_run_dir
+
+    try:
+        run_dir = resolve_run_dir(
+            run_dir=run_dir_arg,
+            pipeline_version=pv_arg,
+            search_output_dir=out_dir,
+            cache_dir=cache_dir,
+            wandb_project=args.wandb_project or "deepfm-pipeline",
+            wandb_entity=args.wandb_entity,
+        )
+    except (FileNotFoundError, ValueError) as e:
+        raise SystemExit(str(e)) from e
+
+    pv = (run_dir / "pipeline_version.txt").read_text(encoding="utf-8").strip() if (run_dir / "pipeline_version.txt").exists() else (pv_arg or "deepfm-1.0.unknown")
     dt = args.dt or datetime.now(timezone.utc).date().isoformat()
     bucket = f"tasteam-{args.env}-analytics"
     key_prefix = f"recommendations/pipeline_version={pv}/dt={dt}"
@@ -105,11 +114,6 @@ def main() -> None:
     out_path = tmp_dir / out_filename
 
     # 로컬 추천 결과 생성 (CSV 또는 JSON GZIP)
-    import sys
-
-    root = Path(__file__).resolve().parents[1]
-    if str(root) not in sys.path:
-        sys.path.insert(0, str(root))
     from utils.score_batch import run as score_batch_run
 
     score_batch_run(

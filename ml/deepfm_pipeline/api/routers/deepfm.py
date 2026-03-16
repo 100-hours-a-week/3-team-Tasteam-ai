@@ -39,7 +39,11 @@ def _find_run_dir_by_version(pipeline_version: str) -> Path | None:
     out = _default_output_dir()
     if not out.exists():
         return None
-    for d in out.iterdir():
+    dirs: list[Path] = list(out.iterdir())
+    cache_dir = out / "artifact_cache"
+    if cache_dir.exists():
+        dirs.extend(cache_dir.iterdir())
+    for d in dirs:
         if not d.is_dir():
             continue
         pv_file = d / "pipeline_version.txt"
@@ -110,13 +114,17 @@ def trigger_train(body: TrainRequestDto | None = None) -> TrainResponseDto:
 
 @router.get("/models", response_model=ModelsResponseDto)
 def list_models() -> ModelsResponseDto:
-    """모델/버전 목록 조회. 현재 활성(서빙) pipeline_version 포함."""
+    """모델/버전 목록 조회. output/ 및 output/artifact_cache/ 하위 run 포함."""
     out = _default_output_dir()
     models: list[ModelInfoDto] = []
     if not out.exists():
         return ModelsResponseDto(models=[], active_version=_get_active_version())
 
-    for d in sorted(out.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
+    dirs: list[Path] = list(out.iterdir())
+    cache_dir = out / "artifact_cache"
+    if cache_dir.exists():
+        dirs.extend(cache_dir.iterdir())
+    for d in sorted((d for d in dirs if d.is_dir()), key=lambda p: p.stat().st_mtime, reverse=True):
         if not d.is_dir():
             continue
         pv_file = d / "pipeline_version.txt"
@@ -154,13 +162,26 @@ def _get_active_version() -> str | None:
 
 @router.post("/activate", response_model=ActivateResponseDto)
 def activate_model(body: ActivateRequestDto) -> ActivateResponseDto:
-    """서빙용 pipeline_version 활성화. 어떤 모델이 현재 서빙인지 관리."""
+    """서빙용 pipeline_version 활성화. 로컬에 없으면 wandb artifact에서 다운로드 후 활성화."""
     run_dir = _find_run_dir_by_version(body.pipeline_version)
     if not run_dir or not run_dir.exists():
-        raise HTTPException(
-            status_code=404,
-            detail=f"Model not found: pipeline_version={body.pipeline_version}",
-        )
+        try:
+            import sys
+            if str(_ROOT) not in sys.path:
+                sys.path.insert(0, str(_ROOT))
+            from utils.run_dir_resolver import resolve_run_dir
+            cache_dir = _default_output_dir() / "artifact_cache"
+            run_dir = resolve_run_dir(
+                run_dir=None,
+                pipeline_version=body.pipeline_version,
+                search_output_dir=_default_output_dir(),
+                cache_dir=cache_dir,
+            )
+        except (FileNotFoundError, ValueError) as e:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Model not found: {e}",
+            ) from e
     out = _default_output_dir()
     out.mkdir(parents=True, exist_ok=True)
     _active_version_file().write_text(body.pipeline_version, encoding="utf-8")

@@ -184,7 +184,8 @@ def run(
 
 def main() -> None:
     p = argparse.ArgumentParser(description="DeepFM batch scoring → recommendation CSV (§6-3)")
-    p.add_argument("--run-dir", type=str, required=True, help="Run directory (model.pt, feature_sizes.txt, categorical_dicts.json, pipeline_version.txt)")
+    p.add_argument("--run-dir", type=str, default=None, help="Run directory (model.pt, feature_sizes.txt 등). --pipeline-version과 둘 중 하나 필수.")
+    p.add_argument("--pipeline-version", type=str, default=None, help="run_dir 없을 때 로컬 output/ 또는 wandb artifact에서 해당 버전 사용")
     p.add_argument("--candidates", type=str, default=None, help="Candidates CSV (preprocessed feature columns). --raw-candidates 사용 시 생략 가능.")
     p.add_argument("--raw-candidates", type=str, default=None, help="Raw CSV 경로. run_dir의 vocab으로 인코딩 후 추론. meta는 raw CSV 컬럼에서 추출.")
     p.add_argument("--meta", type=str, default=None, help="Optional meta CSV: user_id, anonymous_id, restaurant_id (--raw-candidates 미사용 시)")
@@ -192,11 +193,33 @@ def main() -> None:
     p.add_argument("--output-format", choices=["csv", "json.gz"], default="csv", help="Output file format")
     p.add_argument("--ttl-hours", type=float, default=24.0, help="TTL hours for expires_at")
     p.add_argument("--batch-size", type=int, default=256)
+    p.add_argument("--artifact-cache-dir", type=str, default=None, help="아티팩트 다운로드 캐시 (pipeline_version 사용 시)")
+    p.add_argument("--wandb-project", type=str, default=None, help="W&B 프로젝트 (아티팩트 조회 시)")
+    p.add_argument("--wandb-entity", type=str, default=None, help="W&B 엔티티 (아티팩트 조회 시)")
     args = p.parse_args()
     if not args.candidates and not args.raw_candidates:
         p.error("One of --candidates or --raw-candidates is required")
+    if not args.run_dir and not args.pipeline_version:
+        p.error("One of --run-dir or --pipeline-version is required")
+
+    run_dir_arg = Path(args.run_dir) if args.run_dir else None
+    search_dir = _ROOT / "output"
+    cache_dir = Path(args.artifact_cache_dir) if args.artifact_cache_dir else (search_dir / "artifact_cache")
+    from utils.run_dir_resolver import resolve_run_dir
+    try:
+        resolved_run_dir = resolve_run_dir(
+            run_dir=run_dir_arg,
+            pipeline_version=args.pipeline_version,
+            search_output_dir=search_dir,
+            cache_dir=cache_dir,
+            wandb_project=args.wandb_project or "deepfm-pipeline",
+            wandb_entity=args.wandb_entity,
+        )
+    except (FileNotFoundError, ValueError) as e:
+        raise SystemExit(str(e)) from e
+
     run(
-        run_dir=args.run_dir,
+        run_dir=resolved_run_dir,
         candidates_path=args.candidates or "",
         output_path=args.out,
         meta_path=args.meta,
