@@ -1,4 +1,5 @@
 # DeepFM 추론용 이미지 (score_batch / score_batch_to_s3)
+# Multi-stage: builder에서 의존성 설치 후 최종 이미지는 런타임만 포함해 용량 축소.
 # 빌드: docker build -f Dockerfile.inference -t deepfm-inference .
 #
 # 기본 흐름: S3 폴링(_SUCCESS 기준) → Raw 다운로드 → 파이프라인 CSV 변환 → score_batch --raw-candidates
@@ -10,9 +11,12 @@
 # 사용 예 (로컬만): docker run --rm -e SKIP_S3_POLL=1 -e CANDIDATES_CSV=/data/cand.csv -v ... -e PIPELINE_VERSION=deepfm-1.0.xxx -e WANDB_API_KEY=...
 # S3 업로드: --entrypoint python deepfm-inference scripts/score_batch_to_s3.py ...
 
-FROM python:3.11-slim
+# -----------------------------------------------------------------------------
+# Stage 1: 의존성 설치 (gcc 등 빌드 도구는 최종 이미지에 포함되지 않음)
+# -----------------------------------------------------------------------------
+FROM python:3.11-slim AS builder
 
-WORKDIR /app
+WORKDIR /build
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
@@ -20,6 +24,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY requirements-inference.txt .
 RUN pip install --no-cache-dir -r requirements-inference.txt
+
+# -----------------------------------------------------------------------------
+# Stage 2: 런타임 전용 (slim만 사용, gcc 미포함)
+# -----------------------------------------------------------------------------
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# builder에서 설치된 패키지만 복사 (gcc·apt 캐시 등 제외)
+COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
+COPY --from=builder /usr/local/bin /usr/local/bin
 
 COPY . .
 RUN chmod +x scripts/entrypoint_inference.sh
