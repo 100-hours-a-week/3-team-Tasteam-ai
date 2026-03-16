@@ -13,6 +13,7 @@ S3 Raw 데이터 폴링·다운로드. service_constract.md §4 준수.
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 
 
@@ -78,11 +79,47 @@ def _download_partition(
     return downloaded
 
 
+def _s3_client(profile_name: str | None = None):
+    """AWS_PROFILE 또는 profile_name이 있으면 해당 프로필로 S3 클라이언트 생성."""
+    import boto3
+
+    if profile_name:
+        return boto3.Session(profile_name=profile_name).client("s3")
+    return boto3.client("s3")
+
+
+def list_partitions_only(
+    bucket: str,
+    data_types: list[str] | None = None,
+    dt_filter: str | None = None,
+    profile_name: str | None = None,
+) -> dict[str, list[str]]:
+    """
+    _SUCCESS가 있는 파티션만 조회 (다운로드 없음).
+    반환: { "events": ["dt=2025-03-01", ...], "restaurants": [...], "menus": [...] }
+    """
+    types = data_types or list(RAW_DATA_TYPES)
+    for t in types:
+        if t not in RAW_DATA_TYPES:
+            raise ValueError(f"data_type must be one of {RAW_DATA_TYPES}, got {t}")
+    client = _s3_client(profile_name)
+    result: dict[str, list[str]] = {}
+    for data_type in types:
+        all_ready = _partitions_with_success(client, bucket, data_type)
+        if dt_filter:
+            want = f"dt={dt_filter}"
+            result[data_type] = [want] if want in all_ready else []
+        else:
+            result[data_type] = all_ready
+    return result
+
+
 def poll_and_download(
     bucket: str,
     out_dir: str | Path,
     data_types: list[str] | None = None,
     dt_filter: str | None = None,
+    profile_name: str | None = None,
 ) -> dict[str, list[Path]]:
     """
     _SUCCESS가 있는 파티션만 찾아서 해당 파티션의 데이터 파일을 out_dir에 다운로드.
@@ -91,18 +128,17 @@ def poll_and_download(
     - out_dir: 로컬 기준 디렉터리. 하위에 raw/events/dt=.../ 등으로 저장됨
     - data_types: ['events', 'restaurants', 'menus'] 중 다운로드할 타입. None이면 전부
     - dt_filter: 지정 시 해당 dt= 하나만 (예: 2025-03-01). None이면 _SUCCESS 있는 모든 dt
+    - profile_name: AWS CLI 프로필 이름 (미지정 시 AWS_PROFILE 환경변수 또는 기본 자격증명)
 
     반환: { "events": [Path, ...], "restaurants": [...], "menus": [...] } (다운로드된 파일 목록)
     """
-    import boto3
-
     out_dir = Path(out_dir)
     types = data_types or list(RAW_DATA_TYPES)
     for t in types:
         if t not in RAW_DATA_TYPES:
             raise ValueError(f"data_type must be one of {RAW_DATA_TYPES}, got {t}")
 
-    client = boto3.client("s3")
+    client = _s3_client(profile_name)
     result: dict[str, list[Path]] = {t: [] for t in types}
 
     for data_type in types:
@@ -129,7 +165,7 @@ def main() -> None:
     )
     p.add_argument("--env", choices=["dev", "stg", "prod"], help="환경 → tasteam-{env}-analytics 버킷")
     p.add_argument("--bucket", type=str, default=None, help="버킷 직접 지정 (--env 대신)")
-    p.add_argument("--out-dir", type=str, required=True, help="다운로드 기준 디렉터리 (하위에 raw/events/... 생성)")
+    p.add_argument("--out-dir", type=str, default=None, help="다운로드 기준 디렉터리 (--list-only 시 불필요)")
     p.add_argument(
         "--data-types",
         type=str,
@@ -137,8 +173,12 @@ def main() -> None:
         help=f"쉼표 구분. 기본: {','.join(RAW_DATA_TYPES)}",
     )
     p.add_argument("--dt", type=str, default=None, help="특정 dt만 (YYYY-MM-DD). 없으면 _SUCCESS 있는 전부")
+    p.add_argument("--profile", type=str, default=None, help="AWS CLI 프로필 이름 (미지정 시 환경설정/인스턴스 프로파일 사용)")
+    p.add_argument("--list-only", action="store_true", help="다운로드 없이 _SUCCESS 있는 파티션만 목록 출력")
     args = p.parse_args()
 
+    # 프로필을 명시하지 않으면 boto3 기본 자격증명 체인(EC2 인스턴스 프로파일 등)을 사용
+    profile = args.profile or os.environ.get("AWS_PROFILE") or None
     bucket = args.bucket
     if not bucket and args.env:
         bucket = f"tasteam-{args.env}-analytics"
@@ -149,11 +189,27 @@ def main() -> None:
     if not data_types:
         data_types = list(RAW_DATA_TYPES)
 
+    if args.list_only:
+        result = list_partitions_only(
+            bucket=bucket,
+            data_types=data_types,
+            dt_filter=args.dt,
+            profile_name=profile,
+        )
+        for t, partitions in result.items():
+            print(f"{t}: {partitions}")
+        print(f"Total partitions: {sum(len(v) for v in result.values())}")
+        return
+
+    if not args.out_dir:
+        p.error("--out-dir required unless --list-only")
+
     result = poll_and_download(
         bucket=bucket,
         out_dir=args.out_dir,
         data_types=data_types,
         dt_filter=args.dt,
+        profile_name=profile,
     )
     total = 0
     for t, paths in result.items():

@@ -11,11 +11,38 @@ service_constract.md §4 스키마를 dataPreprocess가 기대하는 행 스키�
 
 from __future__ import annotations
 
+import gzip
 import json
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
+
+
+def read_table(path: Path) -> pd.DataFrame:
+    """
+    CSV 또는 .json.gz 파일을 DataFrame으로 로드.
+    - .csv: pd.read_csv
+    - .json.gz: JSON 배열 또는 JSON Lines(NDJSON). gzip 해제 후 파싱.
+    """
+    path = Path(path)
+    if not path.exists():
+        raise FileNotFoundError(path)
+    suf = path.suffix.lower()
+    if suf == ".csv":
+        return pd.read_csv(path)
+    if suf == ".gz" and path.name.endswith(".json.gz"):
+        with gzip.open(path, "rt", encoding="utf-8") as f:
+            content = f.read()
+        if not content.strip():
+            return pd.DataFrame()
+        stripped = content.strip()
+        if stripped.startswith("["):
+            data = json.loads(content)
+            return pd.DataFrame(data) if data else pd.DataFrame()
+        rows = [json.loads(line) for line in content.splitlines() if line.strip()]
+        return pd.DataFrame(rows) if rows else pd.DataFrame()
+    raise ValueError(f"Unsupported format: {path}. Use .csv or .json.gz")
 
 # event_name → signal_type (대문자). 라벨 1: REVIEW, CALL, ROUTE, SAVE, SHARE, CLICK / 0: view, impression 등
 EVENT_NAME_TO_SIGNAL = {
@@ -38,7 +65,7 @@ def _safe_str(v: Any) -> str:
 
 
 def _load_partition_csvs(base_dir: Path, data_type: str) -> pd.DataFrame:
-    """raw/{data_type}/dt=*/part-*.csv 를 모두 읽어 하나의 DataFrame으로."""
+    """raw/{data_type}/dt=*/part-*.csv 및 part-*.json.gz 를 모두 읽어 하나의 DataFrame으로."""
     prefix = base_dir / "raw" / data_type
     if not prefix.exists():
         return pd.DataFrame()
@@ -46,13 +73,14 @@ def _load_partition_csvs(base_dir: Path, data_type: str) -> pd.DataFrame:
     for part_dir in sorted(prefix.iterdir()):
         if not part_dir.is_dir() or not part_dir.name.startswith("dt="):
             continue
-        for f in part_dir.glob("part-*.csv"):
-            try:
-                df = pd.read_csv(f)
-                if not df.empty:
-                    frames.append(df)
-            except Exception:
-                continue
+        for pattern in ("part-*.csv", "part-*.json.gz"):
+            for f in part_dir.glob(pattern):
+                try:
+                    df = read_table(f)
+                    if not df.empty:
+                        frames.append(df)
+                except Exception:
+                    continue
     if not frames:
         return pd.DataFrame()
     return pd.concat(frames, ignore_index=True)

@@ -576,8 +576,10 @@ def _n_continuous_from_run_dir(run_dir: str | Path) -> int:
     path = Path(run_dir) / "feature_sizes.txt"
     if not path.exists():
         return len(CONTINUOUS_FEATURES) + NUM_SCORING_FEATURES + NUM_EXP_FEATURES
-    line = path.read_text(encoding="utf-8").strip()
-    sizes = [int(x.strip()) for x in line.split(",") if x.strip()]
+    text = path.read_text(encoding="utf-8").strip()
+    # 한 줄에 쉼표로 구분(1,2,3) 또는 한 줄에 하나씩(1\n2\n3) 형식 모두 허용
+    parts = text.replace("\n", ",").split(",")
+    sizes = [int(x.strip()) for x in parts if x.strip()]
     n = 0
     for s in sizes:
         if s == 1:

@@ -3,14 +3,16 @@ DeepFM 추천 결과를 서비스 계약(S3 파티션 + _SUCCESS)에 맞게 생�
 
 계약: docs/service_extraction/service_constract.md
 
-저장 경로:
+저장 경로 (CSV 또는 JSON GZIP):
   s3://tasteam-{env}-analytics/recommendations/pipeline_version=VERSION/dt=YYYY-MM-DD/part-00001.csv
-  s3://tasteam-{env}-analytics/recommendations/pipeline_version=VERSION/dt=YYYY-MM-DD/_SUCCESS
+  s3://tasteam-{env}-analytics/recommendations/pipeline_version=VERSION/dt=YYYY-MM-DD/part-00001.json.gz
+  s3://.../dt=.../_SUCCESS
 """
 
 from __future__ import annotations
 
 import argparse
+import os
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -21,17 +23,8 @@ def _default_output_dir() -> Path:
     return Path(__file__).resolve().parents[1] / "output"
 
 
-def _find_run_dir_by_version(pipeline_version: str) -> Path | None:
-    out = _default_output_dir()
-    if not out.exists():
-        return None
-    for d in out.iterdir():
-        if not d.is_dir():
-            continue
-        pv_file = d / "pipeline_version.txt"
-        if pv_file.exists() and pv_file.read_text(encoding="utf-8").strip() == pipeline_version:
-            return d
-    return None
+def _default_artifact_cache_dir() -> Path:
+    return _default_output_dir() / "artifact_cache"
 
 
 def _parse_s3_url(url: str) -> tuple[str, str]:
@@ -44,63 +37,102 @@ def _parse_s3_url(url: str) -> tuple[str, str]:
     return bucket, key
 
 
-def _upload_to_s3(local_path: Path, s3_url: str) -> None:
+def _s3_client(profile_name: str | None = None):
+    """AWS_PROFILE 또는 profile_name이 있으면 해당 프로필로 S3 클라이언트 생성."""
     import boto3
 
+    if profile_name:
+        return boto3.Session(profile_name=profile_name).client("s3")
+    return boto3.client("s3")
+
+
+def _upload_to_s3(local_path: Path, s3_url: str, profile_name: str | None = None) -> None:
     if not local_path.exists():
         raise FileNotFoundError(local_path)
     bucket, key = _parse_s3_url(s3_url)
-    boto3.client("s3").upload_file(str(local_path), bucket, key)
+    _s3_client(profile_name).upload_file(str(local_path), bucket, key)
 
 
 def main() -> None:
     p = argparse.ArgumentParser(description="DeepFM score_batch → 계약된 S3 경로 업로드 + _SUCCESS")
-    p.add_argument("--pipeline-version", required=True, help="pipeline_version (output/ 하위에서 run_dir 자동 탐색)")
-    p.add_argument("--run-dir", default=None, help="선택. run 디렉터리 경로. 없으면 pipeline_version으로 탐색")
-    p.add_argument("--candidates-path", required=True, help="후보 feature CSV 경로")
+    p.add_argument("--pipeline-version", default=None, help="pipeline_version. --run-dir 지정 시 run_dir 내 pipeline_version.txt에서 읽음.")
+    p.add_argument("--run-dir", default=None, help="run 디렉터리 경로 (model.pt, feature_sizes.txt 등). 지정 시 pipeline_version 생략 가능.")
+    p.add_argument("--candidates-path", default=None, help="후보 feature CSV 경로 (--raw-candidates 사용 시 생략)")
+    p.add_argument("--raw-candidates", default=None, help="Raw 후보 CSV (raw_to_pipeline 등). run_dir vocab으로 인코딩 후 추론.")
     p.add_argument("--meta-path", default=None, help="선택. user_id/anonymous_id/restaurant_id/context_snapshot 메타 CSV 경로")
     p.add_argument("--env", required=True, choices=["dev", "stg", "prod"], help="tasteam-{env}-analytics 버킷 선택")
     p.add_argument("--dt", default=None, help="선택. YYYY-MM-DD (기본: UTC 오늘)")
+    p.add_argument("--output-format", choices=["csv", "json.gz"], default="csv", help="추천 결과 파일 형식 (S3 업로드)")
+    p.add_argument("--profile", type=str, default=None, help="AWS CLI 프로필 이름 (미지정 시 환경설정/인스턴스 프로파일 사용)")
     p.add_argument("--ttl-hours", type=float, default=24.0, help="expires_at TTL(시간)")
     p.add_argument("--batch-size", type=int, default=256, help="추론 배치 크기")
+    p.add_argument("--artifact-cache-dir", type=str, default=None, help="아티팩트 다운로드 캐시 (미지정 시 output/artifact_cache). run_dir 없을 때만 사용.")
+    p.add_argument("--wandb-project", type=str, default=None, help="W&B 프로젝트 (아티팩트 조회 시, 기본 deepfm-pipeline)")
+    p.add_argument("--wandb-entity", type=str, default=None, help="W&B 엔티티 (아티팩트 조회 시)")
     args = p.parse_args()
 
-    run_dir = Path(args.run_dir) if args.run_dir else _find_run_dir_by_version(args.pipeline_version)
-    if not run_dir or not run_dir.exists():
-        raise SystemExit(f"Run not found for pipeline_version={args.pipeline_version}. Use --run-dir or ensure output/ contains the run.")
+    # 프로필을 명시하지 않으면 boto3 기본 자격증명 체인(EC2 인스턴스 프로파일 등)을 사용
+    profile = args.profile or os.environ.get("AWS_PROFILE") or None
 
-    pv = (run_dir / "pipeline_version.txt").read_text(encoding="utf-8").strip() if (run_dir / "pipeline_version.txt").exists() else args.pipeline_version
-    dt = args.dt or datetime.now(timezone.utc).date().isoformat()
-    bucket = f"tasteam-{args.env}-analytics"
-    key_prefix = f"recommendations/pipeline_version={pv}/dt={dt}"
-    out_url = f"s3://{bucket}/{key_prefix}/part-00001.csv"
-    success_url = f"s3://{bucket}/{key_prefix}/_SUCCESS"
+    if not args.candidates_path and not args.raw_candidates:
+        p.error("One of --candidates-path or --raw-candidates is required")
+    if not args.run_dir and not args.pipeline_version:
+        p.error("One of --run-dir or --pipeline-version is required")
 
-    tmp_dir = Path(tempfile.mkdtemp(prefix="deepfm-score-batch-"))
-    out_path = tmp_dir / "part-00001.csv"
+    out_dir = _default_output_dir()
+    cache_dir = Path(args.artifact_cache_dir) if args.artifact_cache_dir else _default_artifact_cache_dir()
+    run_dir_arg = Path(args.run_dir) if args.run_dir else None
+    pv_arg = args.pipeline_version
 
-    # 로컬 CSV 생성
     import sys
-
     root = Path(__file__).resolve().parents[1]
     if str(root) not in sys.path:
         sys.path.insert(0, str(root))
+    from utils.run_dir_resolver import resolve_run_dir
+
+    try:
+        run_dir = resolve_run_dir(
+            run_dir=run_dir_arg,
+            pipeline_version=pv_arg,
+            search_output_dir=out_dir,
+            cache_dir=cache_dir,
+            wandb_project=args.wandb_project or "deepfm-pipeline",
+            wandb_entity=args.wandb_entity,
+        )
+    except (FileNotFoundError, ValueError) as e:
+        raise SystemExit(str(e)) from e
+
+    pv = (run_dir / "pipeline_version.txt").read_text(encoding="utf-8").strip() if (run_dir / "pipeline_version.txt").exists() else (pv_arg or "deepfm-1.0.unknown")
+    dt = args.dt or datetime.now(timezone.utc).date().isoformat()
+    bucket = f"tasteam-{args.env}-analytics"
+    key_prefix = f"recommendations/pipeline_version={pv}/dt={dt}"
+    out_fmt = (args.output_format or "csv").lower()
+    out_filename = "part-00001.json.gz" if out_fmt == "json.gz" else "part-00001.csv"
+    out_url = f"s3://{bucket}/{key_prefix}/{out_filename}"
+    success_url = f"s3://{bucket}/{key_prefix}/_SUCCESS"
+
+    tmp_dir = Path(tempfile.mkdtemp(prefix="deepfm-score-batch-"))
+    out_path = tmp_dir / out_filename
+
+    # 로컬 추천 결과 생성 (CSV 또는 JSON GZIP)
     from utils.score_batch import run as score_batch_run
 
     score_batch_run(
         run_dir=run_dir,
-        candidates_path=Path(args.candidates_path),
+        candidates_path=Path(args.candidates_path) if args.candidates_path else Path(args.raw_candidates),
         output_path=out_path,
         meta_path=Path(args.meta_path) if args.meta_path else None,
+        raw_candidates_path=Path(args.raw_candidates) if args.raw_candidates else None,
         ttl_hours=args.ttl_hours,
         batch_size=args.batch_size,
+        output_format=out_fmt,
     )
 
     # S3 업로드 + 마커
-    _upload_to_s3(out_path, out_url)
+    _upload_to_s3(out_path, out_url, profile_name=profile)
     marker = tmp_dir / "_SUCCESS"
     marker.write_text("", encoding="utf-8")
-    _upload_to_s3(marker, success_url)
+    _upload_to_s3(marker, success_url, profile_name=profile)
 
     print(out_url)
 
