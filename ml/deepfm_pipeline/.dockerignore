@@ -1,12 +1,17 @@
 # 빌드 제외
-output/
-data/raw/
-*.pyc
-__pycache__/
 .git
 .gitignore
-*.md
-docs/
+__pycache__
+*.pyc
+*.pyo
+*.pyd
 .env
-.venv
-venv/
+venv
+.env
+data
+datasets
+logs
+wandb
+checkpoints
+*.csv
+*.parquet
