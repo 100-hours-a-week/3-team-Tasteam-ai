@@ -1,9 +1,12 @@
 # DeepFM 추론 전용 (score_batch, score_batch_to_s3)
 # 학습용(prefect 등) 제외로 이미지 경량화
 # wandb: run_dir 없을 때 아티팩트에서 모델 다운로드용
-
-torch>=2.0.0
+#
+# CPU 전용 PyTorch (GPU/triton 미포함, 이미지 용량 축소)
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.2.0+cpu
 numpy>=1.24.0
 pandas>=2.0.0
 boto3>=1.28.0
 wandb>=0.16.0
+
