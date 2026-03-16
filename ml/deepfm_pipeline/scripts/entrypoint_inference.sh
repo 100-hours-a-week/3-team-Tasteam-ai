@@ -41,7 +41,10 @@ else
 fi
 
 if [ -z "${SKIP_S3_POLL}" ]; then
-  POLL_ARGS=(--profile "${AWS_PROFILE:-jayvi}")
+  POLL_ARGS=()
+  if [ -n "${AWS_PROFILE}" ]; then
+    POLL_ARGS=(--profile "${AWS_PROFILE}")
+  fi
   if [ -n "${S3_BUCKET}" ]; then
     python scripts/s3_raw_poll_download.py --bucket "$S3_BUCKET" --out-dir "$RAW_DOWNLOAD_DIR" "${POLL_ARGS[@]}"
   elif [ -n "${S3_ENV}" ]; then
@@ -58,7 +61,10 @@ if [ -n "${UPLOAD_TO_S3}" ] && [ "${UPLOAD_TO_S3}" = "1" ]; then
     echo "UPLOAD_TO_S3=1 requires S3_ENV (dev|stg|prod)"
     exit 1
   fi
-  S3_ARGS=("${RUN_ARGS[@]}" --raw-candidates "$CANDIDATES_CSV" --env "$S3_ENV" --profile "${AWS_PROFILE:-jayvi}")
+  S3_ARGS=("${RUN_ARGS[@]}" --raw-candidates "$CANDIDATES_CSV" --env "$S3_ENV")
+  if [ -n "${AWS_PROFILE}" ]; then
+    S3_ARGS+=(--profile "${AWS_PROFILE}")
+  fi
   [ -n "${RECOMMENDATION_DT}" ] && S3_ARGS+=(--dt "$RECOMMENDATION_DT")
   [ -n "${RECOMMENDATION_OUTPUT_FORMAT}" ] && S3_ARGS+=(--output-format "$RECOMMENDATION_OUTPUT_FORMAT")
   exec python scripts/score_batch_to_s3.py "${S3_ARGS[@]}"

@@ -173,11 +173,12 @@ def main() -> None:
         help=f"쉼표 구분. 기본: {','.join(RAW_DATA_TYPES)}",
     )
     p.add_argument("--dt", type=str, default=None, help="특정 dt만 (YYYY-MM-DD). 없으면 _SUCCESS 있는 전부")
-    p.add_argument("--profile", type=str, default=None, help="AWS CLI 프로필 이름 (미지정 시 AWS_PROFILE 사용)")
+    p.add_argument("--profile", type=str, default=None, help="AWS CLI 프로필 이름 (미지정 시 환경설정/인스턴스 프로파일 사용)")
     p.add_argument("--list-only", action="store_true", help="다운로드 없이 _SUCCESS 있는 파티션만 목록 출력")
     args = p.parse_args()
 
-    profile = args.profile or os.environ.get("AWS_PROFILE") or "jayvi"
+    # 프로필을 명시하지 않으면 boto3 기본 자격증명 체인(EC2 인스턴스 프로파일 등)을 사용
+    profile = args.profile or os.environ.get("AWS_PROFILE") or None
     bucket = args.bucket
     if not bucket and args.env:
         bucket = f"tasteam-{args.env}-analytics"

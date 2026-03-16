@@ -63,7 +63,7 @@ def main() -> None:
     p.add_argument("--env", required=True, choices=["dev", "stg", "prod"], help="tasteam-{env}-analytics 버킷 선택")
     p.add_argument("--dt", default=None, help="선택. YYYY-MM-DD (기본: UTC 오늘)")
     p.add_argument("--output-format", choices=["csv", "json.gz"], default="csv", help="추천 결과 파일 형식 (S3 업로드)")
-    p.add_argument("--profile", type=str, default=None, help="AWS CLI 프로필 이름 (미지정 시 AWS_PROFILE 사용)")
+    p.add_argument("--profile", type=str, default=None, help="AWS CLI 프로필 이름 (미지정 시 환경설정/인스턴스 프로파일 사용)")
     p.add_argument("--ttl-hours", type=float, default=24.0, help="expires_at TTL(시간)")
     p.add_argument("--batch-size", type=int, default=256, help="추론 배치 크기")
     p.add_argument("--artifact-cache-dir", type=str, default=None, help="아티팩트 다운로드 캐시 (미지정 시 output/artifact_cache). run_dir 없을 때만 사용.")
@@ -71,7 +71,8 @@ def main() -> None:
     p.add_argument("--wandb-entity", type=str, default=None, help="W&B 엔티티 (아티팩트 조회 시)")
     args = p.parse_args()
 
-    profile = args.profile or os.environ.get("AWS_PROFILE") or "jayvi"
+    # 프로필을 명시하지 않으면 boto3 기본 자격증명 체인(EC2 인스턴스 프로파일 등)을 사용
+    profile = args.profile or os.environ.get("AWS_PROFILE") or None
 
     if not args.candidates_path and not args.raw_candidates:
         p.error("One of --candidates-path or --raw-candidates is required")
