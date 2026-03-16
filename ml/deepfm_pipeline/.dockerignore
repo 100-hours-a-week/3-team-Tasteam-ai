@@ -1,6 +1,10 @@
 # 빌드 제외
 output/
 data/raw/
+data/service_raw/
+data/*.txt
+data/*.csv
+data/*.json
 *.pyc
 __pycache__/
 .git
@@ -10,3 +14,14 @@ docs/
 .env
 .venv
 venv/
+# 추론 이미지에 불필요 (학습/API/문서)
+Dockerfile.training
+Dockerfile
+training_flow.py
+inference_flow.py
+main.py
+api/
+README.md
+README.docker.md
+ml-requirements.txt
+scripts/entrypoint_training.sh

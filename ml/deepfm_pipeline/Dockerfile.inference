@@ -36,8 +36,12 @@ WORKDIR /app
 COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
 
-COPY . .
-RUN chmod +x scripts/entrypoint_inference.sh
+# 추론에 필요한 코드만 복사 (data/는 dataset.py만)
+COPY scripts/ scripts/
+COPY utils/ utils/
+COPY model/ model/
+COPY data/dataset.py data/
+RUN touch data/__init__.py && chmod +x scripts/entrypoint_inference.sh
 
 ENV PYTHONPATH=/app
 
