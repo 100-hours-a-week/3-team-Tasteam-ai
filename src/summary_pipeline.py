@@ -1,8 +1,10 @@
 """
 새로운 Summary 파이프라인 모듈
 하이브리드 검색 (Dense + Sparse) 및 Aspect 기반 카테고리별 요약
+USE_DISTILL_SUMMARY=true면 자체 훈련 qwen2.5-0.5b (distill_summary) 사용.
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -130,6 +132,50 @@ def summarize_aspects_new(
         service_reviews, price_reviews, food_reviews,
         instructions, per_category_max, max_input_tokens,
     )
+
+    # Distill summary (자체 훈련 qwen2.5-0.5b, eval과 동일 프롬프트·후처리)
+    if getattr(Config, "USE_DISTILL_SUMMARY", False):
+        try:
+            from .distill_summary import get_distill_model, generate_summary_from_payload
+            model, tokenizer = get_distill_model()
+            out = generate_summary_from_payload(payload, model, tokenizer)
+        except Exception as e:
+            logger.error(f"Distill summary 실패: {e}")
+            return {
+                **{k: dict(v) for k, v in CATEGORY_EMPTY_DEFAULT.items()},
+                "overall_summary": {"summary": "아직 충분한 리뷰 정보가 쌓이지 않았어요."}
+            }
+        evidence_data_map = {
+            "service": (service_evidence_data or [])[: len(payload["service"])],
+            "price": (price_evidence_data or [])[: len(payload["price"])],
+            "food": (food_evidence_data or [])[: len(payload["food"])],
+        }
+        for cat in ("service", "price", "food"):
+            out.setdefault(cat, dict(CATEGORY_EMPTY_DEFAULT[cat]))
+            n = len(payload[cat])
+            ev_indices = out.get(cat, {}).get("evidence", [])
+            if isinstance(ev_indices, list):
+                valid_indices = [i for i in ev_indices if isinstance(i, int) and 0 <= i < n]
+                evidence_data = evidence_data_map[cat]
+                out[cat]["evidence"] = [
+                    {"review_id": evidence_data[i]["review_id"], "snippet": evidence_data[i]["snippet"], "rank": evidence_data[i]["rank"]}
+                    for i in valid_indices
+                    if i < len(evidence_data)
+                ]
+            else:
+                out[cat]["evidence"] = []
+        for cat in ("service", "price", "food"):
+            if len(payload[cat]) == 0:
+                out[cat] = dict(CATEGORY_EMPTY_DEFAULT[cat])
+        price_ev = out.get("price", {}).get("evidence", [])
+        ev_texts = [ev.get("snippet", "") for ev in price_ev if isinstance(ev, dict)] if price_ev else []
+        if ev_texts and not any(_has_price_signal(t) for t in ev_texts):
+            out["price"]["summary"] = "가격 관련 언급이 많지 않아요. 전반적인 만족감이나 구성(양 등) 중심으로만 해석 가능해요."
+            out["price"]["bullets"] = [
+                "가격을 직접 언급한 리뷰가 많지 않아요.",
+                "대신 만족/구성/양(푸짐함) 관련 표현이 간접적으로 나타나요."
+            ]
+        return out
 
     if not llm_utils:
         raise ValueError("llm_utils가 필요합니다.")
@@ -282,6 +328,50 @@ async def summarize_aspects_new_async(
         service_reviews, price_reviews, food_reviews,
         instructions, per_category_max, max_input_tokens,
     )
+
+    # Distill summary (LLM 큐 + 세마포 1로 직렬화)
+    if getattr(Config, "USE_DISTILL_SUMMARY", False):
+        try:
+            from .distill_summary import generate_summary_sync
+            from .async_workers import run_via_queue
+            out = await run_via_queue("llm", generate_summary_sync, payload)
+        except Exception as e:
+            logger.error(f"Distill summary 실패: {e}")
+            return {
+                **{k: dict(v) for k, v in CATEGORY_EMPTY_DEFAULT.items()},
+                "overall_summary": {"summary": "아직 충분한 리뷰 정보가 쌓이지 않았어요."}
+            }
+        evidence_data_map = {
+            "service": (service_evidence_data or [])[: len(payload["service"])],
+            "price": (price_evidence_data or [])[: len(payload["price"])],
+            "food": (food_evidence_data or [])[: len(payload["food"])],
+        }
+        for cat in ("service", "price", "food"):
+            out.setdefault(cat, dict(CATEGORY_EMPTY_DEFAULT[cat]))
+            n = len(payload[cat])
+            ev_indices = out.get(cat, {}).get("evidence", [])
+            if isinstance(ev_indices, list):
+                valid_indices = [i for i in ev_indices if isinstance(i, int) and 0 <= i < n]
+                evidence_data = evidence_data_map[cat]
+                out[cat]["evidence"] = [
+                    {"review_id": evidence_data[i]["review_id"], "snippet": evidence_data[i]["snippet"], "rank": evidence_data[i]["rank"]}
+                    for i in valid_indices
+                    if i < len(evidence_data)
+                ]
+            else:
+                out[cat]["evidence"] = []
+        for cat in ("service", "price", "food"):
+            if len(payload[cat]) == 0:
+                out[cat] = dict(CATEGORY_EMPTY_DEFAULT[cat])
+        price_ev = out.get("price", {}).get("evidence", [])
+        ev_texts = [ev.get("snippet", "") for ev in price_ev if isinstance(ev, dict)] if price_ev else []
+        if ev_texts and not any(_has_price_signal(t) for t in ev_texts):
+            out["price"]["summary"] = "가격 관련 언급이 많지 않아요. 전반적인 만족감이나 구성(양 등) 중심으로만 해석 가능해요."
+            out["price"]["bullets"] = [
+                "가격을 직접 언급한 리뷰가 많지 않아요.",
+                "대신 만족/구성/양(푸짐함) 관련 표현이 간접적으로 나타나요."
+            ]
+        return out
 
     if not llm_utils:
         raise ValueError("llm_utils가 필요합니다.")

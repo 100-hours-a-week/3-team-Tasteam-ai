@@ -204,6 +204,27 @@ class SentimentAnalyzer:
 
         return positive_count, negative_count, neutral_count, total_count, sentiment_labels, negative_reviews_for_llm
 
+    def _apply_neutral_for_ambiguous(
+        self,
+        negative_reviews_for_llm: List[Dict[str, Any]],
+        sentiment_labels: List[Optional[str]],
+        positive_count: int,
+        negative_count: int,
+        neutral_count: int,
+    ) -> Tuple[int, int, int, List[Optional[str]]]:
+        """분류기만 사용: 기존 LLM 재판정 대상(애매 구간)을 중립으로 처리."""
+        for item in negative_reviews_for_llm:
+            idx = item["index"]
+            sentiment_labels[idx] = "neutral"
+            neutral_count += 1
+            negative_count -= 1
+        if negative_reviews_for_llm:
+            logger.info(
+                "분류기만 사용: LLM 재판정 대상 %d건을 중립으로 분류했습니다.",
+                len(negative_reviews_for_llm),
+            )
+        return positive_count, negative_count, neutral_count, sentiment_labels
+
     def _apply_llm_reclassify_sync(
         self,
         negative_reviews_for_llm: List[Dict[str, Any]],
@@ -369,15 +390,12 @@ class SentimentAnalyzer:
         content_list: List[str],
         reviews: Optional[List[Union[Dict, Any]]] = None,
     ) -> Tuple[int, int, int, int, List[Optional[str]]]:
-        """HuggingFace 1차 분류 + LLM 재판정 (동기, analyze/배치용)."""
+        """HuggingFace 분류기만 사용. 기존 LLM 재판정 대상(애매 구간)은 중립으로 분류."""
         pos, neg, neu, total, labels, neg_for_llm = self._classify_with_hf_only(content_list, reviews)
         if neg_for_llm:
-            try:
-                pos, neg, neu, labels = self._apply_llm_reclassify_sync(
-                    neg_for_llm, labels, pos, neg, neu
-                )
-            except Exception as e:
-                logger.warning(f"LLM 재판정 실패: {e}. 1차 분류 결과를 사용합니다.")
+            pos, neg, neu, labels = self._apply_neutral_for_ambiguous(
+                neg_for_llm, labels, pos, neg, neu
+            )
         self._assign_labels_to_reviews(reviews, labels)
         return pos, neg, neu, total, labels
 
@@ -582,25 +600,15 @@ class SentimentAnalyzer:
                 "neutral_ratio": 0,
             }
         logger.info(f"총 {len(content_list)}개의 리뷰를 sentiment 모델로 분류합니다 (restaurant_id: {restaurant_id}).")
-        if Config.SENTIMENT_CLASSIFIER_USE_THREAD:
-            hf_result = await asyncio.to_thread(
-                self._classify_with_hf_only, content_list, reviews_dict
-            )
-        else:
-            hf_result = self._classify_with_hf_only(content_list, reviews_dict)
+        from .async_workers import run_via_queue
+        hf_result = await run_via_queue(
+            "sentiment", self._classify_with_hf_only, content_list, reviews_dict
+        )
         pos, neg, neu, total, labels, neg_for_llm = hf_result
         if neg_for_llm:
-            try:
-                if Config.SENTIMENT_LLM_ASYNC:
-                    pos, neg, neu, labels = await self._apply_llm_reclassify_async(
-                        neg_for_llm, labels, pos, neg, neu
-                    )
-                else:
-                    pos, neg, neu, labels = self._apply_llm_reclassify_sync(
-                        neg_for_llm, labels, pos, neg, neu
-                    )
-            except Exception as e:
-                logger.warning(f"LLM 재판정 실패: {e}. 1차 분류 결과를 사용합니다.")
+            pos, neg, neu, labels = self._apply_neutral_for_ambiguous(
+                neg_for_llm, labels, pos, neg, neu
+            )
         self._assign_labels_to_reviews(reviews_dict, labels)
         total_with_sentiment = pos + neg
         positive_ratio = int(round((pos / total_with_sentiment) * 100)) if total_with_sentiment > 0 else 0
