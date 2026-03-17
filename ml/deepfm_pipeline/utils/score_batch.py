@@ -170,6 +170,20 @@ def run(
             df_out.loc[i, "rank"] = r
 
     df_out = df_out.sort_values(["_user_key", "rank"]).drop(columns=["_user_key"])
+
+    # restaurant_id가 있는 행만 내보냄 (유효한 추천만)
+    def _not_empty(v) -> bool:
+        if v is None or (isinstance(v, float) and pd.isna(v)):
+            return False
+        s = str(v).strip()
+        return s != "" and s.lower() != "nan"
+    mask = df_out["restaurant_id"].apply(_not_empty)
+    df_out = df_out.loc[mask].copy()
+
+    # user_id를 정수로 캐스팅 (숫자면 int, 아니면 빈 문자열 유지)
+    u = pd.to_numeric(df_out["user_id"], errors="coerce")
+    df_out["user_id"] = u.apply(lambda x: int(x) if pd.notna(x) else "")
+
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     if output_format.lower() == "json.gz":
