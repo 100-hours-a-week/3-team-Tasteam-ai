@@ -1,7 +1,10 @@
 # Admin DeepFM API DTO 명세
 
+> **Deprecated (2026-03-17)**: 이 문서가 설명하는 `ml/deepfm_pipeline/api` 기반 **DeepFM Admin API는 레포에서 삭제됨**.  
+> 배치/워크플로(스크립트·Prefect flow)는 유지되며, 추천 결과 계약(폴링·S3 경로/스키마)은 그대로 유효하다.
+
 `api_design.md` 기준 엔드포인트별 **Request / Response DTO** 정의.  
-구현: `api/schemas.py`, `api/routers/deepfm.py`.
+구현: ~~`api/schemas.py`, `api/routers/deepfm.py`~~ (삭제됨, 2026-03-17).
 
 ---
 

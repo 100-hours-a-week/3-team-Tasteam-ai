@@ -2,6 +2,8 @@
 
 이 문서는 `ml/deepfm_pipeline/` 기준으로 **현재 구현되어 있는 AI 서버(DeepFM) 파이프라인의 실제 동작 방식**을 요약한다.
 
+> **변경(2026-03-17)**: 과거에는 `ml/deepfm_pipeline/api`에 **Admin FastAPI**(예: `/admin/deepfm/*`)가 있었으나, 현재 레포에서는 **DeepFM API는 삭제**되었고 배치/워크플로(스크립트·Prefect flow)만 유지된다.
+
 - **서비스 간 계약(Contract)**: `docs/service_extraction/service_constract.md`
 - **설계(Design)**: `docs/design/deepfm/deepfm_design.md`
 - **구현 현황(Design 대비)**: `docs/design/deepfm/implementation_status.md`
@@ -105,15 +107,12 @@ python ml/deepfm_pipeline/scripts/score_batch_to_s3.py \
 
 ## 3) Admin API로 남아있는 기능(현재)
 
-현재 `ml/deepfm_pipeline/api/`의 FastAPI 앱은 “추천 생성 트리거”가 아니라,
-주로 **학습/버전 조회/활성화** 같은 운영 기능을 제공한다.
+> **Deprecated (2026-03-17)**: 이 섹션에서 설명하던 **Admin API는 삭제됨**.
 
-- `POST /admin/deepfm/train`: 학습 트리거 (Prefect flow 실행)
-- `GET /admin/deepfm/models`: 모델(버전) 목록 + 활성 버전
-- `POST /admin/deepfm/activate`: 활성(서빙) pipeline_version 설정
+현재 레포에서 “운영 트리거”는 HTTP가 아니라 다음 방식으로 수행한다.
 
-진입점:
-- `ml/deepfm_pipeline/api/main.py`
+- **학습**: `ml/deepfm_pipeline/training_flow.py` 실행(로컬/Pefect 배포/스케줄러)
+- **배치 추론(추천 생성)**: `ml/deepfm_pipeline/scripts/score_batch_to_s3.py` 실행(크론/Prefect/워크플로 엔진)
 
 ---
 
@@ -148,5 +147,5 @@ python ml/deepfm_pipeline/scripts/score_batch_to_s3.py \
 - **학습 플로우(Prefect)**: `ml/deepfm_pipeline/training_flow.py`
 - **전처리(학습 데이터 생성)**: `ml/deepfm_pipeline/utils/dataPreprocess.py`
 - **평가(NDCG/Recall/AUC)**: `ml/deepfm_pipeline/utils/evaluate.py`
-- **Admin API**: `ml/deepfm_pipeline/api/main.py`, `ml/deepfm_pipeline/api/routers/deepfm.py`
+- ~~Admin API~~: (삭제됨, 2026-03-17)
 

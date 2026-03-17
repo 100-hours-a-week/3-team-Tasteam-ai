@@ -1,3 +1,10 @@
+## 상태
+
+> **Deprecated (2026-03-17)**: 이 문서가 설명하는 `ml/deepfm_pipeline/api` 기반 **DeepFM Admin API는 레포에서 삭제됨**.  
+> 현재는 배치/워크플로(스크립트·Prefect flow)로만 운영한다.
+
+---
+
 네 설계 기준으로 “필요한” DeepFM 관련 API 최소 셋
 1) (필수) 학습 트리거
 

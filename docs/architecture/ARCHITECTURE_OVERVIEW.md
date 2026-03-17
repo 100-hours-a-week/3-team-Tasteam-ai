@@ -170,7 +170,9 @@
 - **Summary**는 요약만, **Sentiment**는 긍정/부정/중립 비율.
 - **Comparison**은 Vector 리뷰 + Kiwi(±Spark) 비율 → 전체 평균 대비 lift → LLM 해석.
 
-**DeepFM ML 파이프라인** (별도 서비스, §16): `ml/deepfm_pipeline` — 학습 트리거·배치 스코어링·모델/버전 조회·활성화 Admin API. 포트 8000, 메인 앱(8001)과 독립 배포.
+**DeepFM ML 파이프라인** (별도 컴포넌트, §16): `ml/deepfm_pipeline` — (학습/배치 추론 중심) 추천(CTR/랭킹)용 DeepFM 파이프라인.
+
+> **변경(2026-03-17)**: 기존에 `ml/deepfm_pipeline/api`의 **Admin FastAPI(포트 8000, `/admin/deepfm/*`)** 가 있었으나, 현재 레포에서는 **API는 삭제**되었고 배치/워크플로(스크립트·Prefect flow)로만 운영합니다.
 
 ---
 
@@ -730,13 +732,12 @@ GET /api/v1/batch/status/{job_id} → 결과 조회
 
 #### DeepFM 상세 (Admin API·스코어링)
 
-DeepFM **Admin API**는 메인 앱과 별도 서비스로 제공되며, **§16**에서 상세 기술.
+> **변경(2026-03-17)**: 과거에는 DeepFM **Admin API**(별도 FastAPI 서비스)가 있었으나, 현재 레포에서는 **API는 삭제**되었고 배치/워크플로로만 운영한다(§16 참고).
 
 | 항목 | 내용 |
 |------|------|
-| **위치** | `ml/deepfm_pipeline/` (FastAPI 앱: `api/main.py`, 라우터: `api/routers/deepfm.py`) |
-| **포트** | 기본 8000 (메인 API 8001과 독립) |
-| **엔드포인트** | `POST /admin/deepfm/train`(학습 트리거), `GET /admin/deepfm/models`(모델 목록·활성 버전), `POST /admin/deepfm/activate`(서빙용 버전 활성화) |
+| **위치** | `ml/deepfm_pipeline/` |
+| **트리거** | 학습: `training_flow.py` / 배치 추론: `scripts/score_batch_to_s3.py` |
 | **학습** | `training_flow.py`의 Prefect `deepfm_training_flow`: 전처리(raw → train/val/test) → DeepFM 학습 → `output/<pipeline_version>/model.pt`, `feature_sizes.txt`, `run_manifest.json` 산출. |
 | **스코어링** | `utils/score_batch.run`: 후보 CSV(S3 등) + 메타 CSV → 모델 추론 → recommendation 형식 CSV 출력. DB INSERT는 호출 측(ETL)에서 수행. |
 | **경로·DTO** | 입출력·CSV 예시는 `ml/deepfm_pipeline/docs/design/api/ML_API_DTO.md`. 경로는 S3 URL 예시 사용(s3://bucket/...). |
@@ -799,16 +800,18 @@ DeepFM **Admin API**는 메인 앱과 별도 서비스로 제공되며, **§16**
 
 ## 16. DeepFM ML 파이프라인
 
-**위치**: `ml/deepfm_pipeline/` — 메인 FastAPI 앱(new_async)과 **별도 서비스**로, 추천(DeepFM) 학습·배치 스코어링·모델/버전 관리를 담당합니다.
+**위치**: `ml/deepfm_pipeline/` — 메인 FastAPI 앱(new_async)과 분리된 추천(DeepFM) 학습·배치 추론 파이프라인입니다.
 
 ### 16.1 역할·개요
 
 | 항목 | 내용 |
 |------|------|
-| **프레임워크** | FastAPI (Python 3.11) |
-| **역할** | Admin API: 학습 트리거, 배치 스코어링/추천 생성, 모델 목록 조회, 서빙용 pipeline_version 활성화 |
-| **진입점** | `uvicorn api.main:app --host 0.0.0.0 --port 8000` (기본 8000) |
-| **문서** | `ml/deepfm_pipeline/docs/design/api/api_design.md`, `ML_API_DTO.md` |
+| **프레임워크** | Python 3.11 (Prefect 기반 워크플로 + 배치 스크립트) |
+| **역할** | 학습(전처리→학습→artifact 생성), 배치 추론(후보 CSV→score/rank→S3 업로드) |
+| **진입점** | 학습: `ml/deepfm_pipeline/training_flow.py` / 배치 추론: `ml/deepfm_pipeline/scripts/score_batch_to_s3.py` (또는 `ml/deepfm_pipeline/inference_flow.py`) |
+| **문서** | `ml/deepfm_pipeline/docs/design/deepfm/AI_SERVER_CURRENT_FLOW.md`, `docs/service_extraction/service_constract.md` |
+
+> **변경(2026-03-17)**: `ml/deepfm_pipeline/api`의 **Admin FastAPI(포트 8000)** 및 관련 DTO 문서는 코드에서 **제거**되었습니다(배치/워크플로만 유지).
 
 **전체 흐름 (개념)**
 
@@ -816,12 +819,11 @@ DeepFM **Admin API**는 메인 앱과 별도 서비스로 제공되며, **§16**
 [Admin/ETL]
     │
     ▼
-[DeepFM API :8000]  FastAPI  ─┬─ POST /admin/deepfm/train        → Prefect 플로우(전처리→학습) → output/<run>/ model.pt, run_manifest.json, pipeline_version
-    │                          ├─ (batch job) score_batch_to_s3   → run_dir + 후보 CSV → S3 recommendation CSV + _SUCCESS (API 서버가 import)
-    │                          ├─ GET  /admin/deepfm/models      → output/ 하위 run 목록 + active_version
-    │                          └─ POST /admin/deepfm/activate     → output/active_pipeline_version.txt 갱신
-    │
-    ▼
+[DeepFM 워크플로/배치]  ─┬─ (학습) training_flow.py              → output/<run>/ model.pt, run_manifest.json, pipeline_version
+                        └─ (추론) score_batch_to_s3.py           → run_dir + 후보 CSV → S3 recommendation CSV + _SUCCESS
+
+[운영/ETL]  (선택) S3 polling → CSV import → DB 적재 (본 레포 범위 밖)
+
 [output/]  run 디렉터리별 model.pt, feature_sizes.txt, pipeline_version.txt, run_manifest.json
 ```
 
@@ -829,24 +831,14 @@ DeepFM **Admin API**는 메인 앱과 별도 서비스로 제공되며, **§16**
 
 | 경로 | 설명 |
 |------|------|
-| `api/main.py` | FastAPI 앱, CORS, 라우터 등록, `GET /health` |
-| `api/schemas.py` | TrainRequestDto, TrainResponseDto, ModelInfoDto, ModelsResponseDto, ActivateRequestDto/ResponseDto |
-| `api/routers/deepfm.py` | `/admin/deepfm` 하위 엔드포인트 구현 |
 | `training_flow.py` | Prefect flow: 전처리 → 학습 → run_manifest·pipeline_version 산출 |
 | `model/`, `data/`, `utils/` | DeepFM 모델, 데이터셋, 전처리·score_batch·wandb 등 |
 | `output/` | run별 디렉터리(`model.pt`, `feature_sizes.txt`, `pipeline_version.txt`, `run_manifest.json`), `active_pipeline_version.txt` |
 
-### 16.3 API 엔드포인트
+### 16.3 트리거/운영 방식(현재)
 
-| 메서드 | 경로 | 역할 |
-|--------|------|------|
-| POST | `/admin/deepfm/train` | 학습 트리거. Prefect `deepfm_training_flow` 동기 실행 → pipeline_version, model_path, run_manifest_path, metrics 반환 |
-| (batch) | `ml/deepfm_pipeline/scripts/score_batch_to_s3.py` | 배치 스코어링. `pipeline_version`(또는 run_dir) + candidates_path → 계약된 S3 recommendation CSV + `_SUCCESS`. DB INSERT는 API 서버 import |
-| GET | `/admin/deepfm/models` | output 하위 run 목록 + 현재 활성 `active_version` |
-| POST | `/admin/deepfm/activate` | 서빙용 pipeline_version 활성화 → `output/active_pipeline_version.txt` 기록 |
-
-- **Health**: `GET /health` → `{"status": "ok"}`  
-- DTO 상세: `ml/deepfm_pipeline/docs/design/api/ML_API_DTO.md`
+- **학습 트리거**: Prefect flow(또는 스크립트)로 실행 (`ml/deepfm_pipeline/training_flow.py`)
+- **배치 추론(추천 생성)**: 배치 스크립트 실행 → S3 업로드 + `_SUCCESS` (`ml/deepfm_pipeline/scripts/score_batch_to_s3.py`)
 
 ### 16.4 학습 플로우
 
@@ -868,15 +860,14 @@ DeepFM **Admin API**는 메인 앱과 별도 서비스로 제공되며, **§16**
 
 ### 16.7 Docker
 
-- **이미지**: `ml/deepfm_pipeline/Dockerfile` — `python:3.11-slim`, `ml-requirements.txt` 설치, `PYTHONPATH=/app`, `uvicorn api.main:app --host 0.0.0.0 --port 8000`.
-- **빌드 컨텍스트**: `ml/deepfm_pipeline/`. `.dockerignore`로 output/data 등 제외 권장.
+- **이미지**: 학습/추론용 Dockerfile은 `ml/deepfm_pipeline/README.docker.md` 참고 (`Dockerfile.training`, `Dockerfile.inference`).
+- **참고**: 기존 **Admin API용 Dockerfile/컨테이너는 제거됨**(2026-03-17).
 
 ### 16.8 참고 문서
 
 | 문서 | 설명 |
 |------|------|
-| `ml/deepfm_pipeline/docs/design/api/api_design.md` | API 설계(필수 엔드포인트) |
-| `ml/deepfm_pipeline/docs/design/api/ML_API_DTO.md` | Request/Response DTO 명세 |
+| `ml/deepfm_pipeline/docs/design/deepfm/AI_SERVER_CURRENT_FLOW.md` | 현재 구현 흐름(배치/워크플로 중심) |
 | `ml/deepfm_pipeline/docs/design/deepfm/deepfm_design.md` | DeepFM 파이프라인 설계 |
 
 ---
