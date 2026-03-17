@@ -1,19 +1,26 @@
-# docker-compose.yaml
-version: "3"
-
 services:
-  prometheus:
-    image: prom/prometheus:latest
-    extra_hosts:
-      - "host.docker.internal:host-gateway"     # allow a direct connection from container to the local machine
+  app:
+    build:
+      context: .
+      dockerfile: dockerfile
+    container_name: tasteam-app
     ports:
-      - "9090:9090"   # the default port used by Prometheus
+      - "8001:8001"
+    env_file:
+      - .env
+    environment:
+      PORT: "8001"
+      # HuggingFace/Transformers cache (persist to avoid re-download on restart)
+      HF_HOME: /app/models
+      # FastEmbed cache path (VectorSearch sets FASTEMBED_CACHE_PATH from this)
+      EMBEDDING_CACHE_DIR: /app/models
+      # Qdrant local path (default in config is "./qdrant_data")
+      QDRANT_URL: /app/qdrant_data
     volumes:
-      - ${PWD}/prometheus.yaml:/etc/prometheus/prometheus.yml # mount Prometheus config file
+      - model-cache:/app/models
+      - qdrant-data:/app/qdrant_data
+    restart: unless-stopped
 
-  grafana:
-    image: grafana/grafana:latest
-    depends_on:
-      - prometheus
-    ports:
-      - "3000:3000" # the default port used by Grafana
+volumes:
+  model-cache: {}
+  qdrant-data: {}
