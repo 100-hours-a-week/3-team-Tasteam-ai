@@ -325,7 +325,6 @@ async def summarize_reviews(
     llm_utils: LLMUtils = Depends(get_llm_utils),
     vector_search: VectorSearch = Depends(get_vector_search),
     metrics: MetricsCollector = Depends(get_metrics_collector),
-    debug: bool = Depends(get_debug_mode),
 ):
     """
     새로운 파이프라인: 하이브리드 검색 (Dense + Sparse) + 카테고리별 요약
@@ -395,12 +394,8 @@ async def summarize_reviews(
                     # SKIP 응답
                     return SummaryDisplayResponse(
                         restaurant_id=request.restaurant_id,
-                        restaurant_name=getattr(request, "restaurant_name", None),
+                        restaurant_name=None,
                         overall_summary="",
-                        debug=DebugInfo(
-                            request_id=request_id,
-                            processing_time_ms=(time.time() - start_time) * 1000,
-                        ) if debug else None,
                     )
             
             # 새로운 파이프라인: Kiwi/embedding/LLM 큐(세마포 1) 사용
@@ -414,7 +409,7 @@ async def summarize_reviews(
         # 2. 카테고리별 하이브리드 검색 (embedding 큐)
         hits_dict = {}
         hits_data_dict = {}
-        summary_restaurant_name: Optional[str] = getattr(request, "restaurant_name", None)
+        summary_restaurant_name: Optional[str] = None
         
         for seeds, name in zip(seed_list, name_list):
             query_seeds = seeds[:10] if len(seeds) > 10 else seeds
@@ -503,15 +498,9 @@ async def summarize_reviews(
         # 항상 SummaryDisplayResponse (positive_reviews 등 미사용 필드 제외)
         return SummaryDisplayResponse(
             restaurant_id=request.restaurant_id,
-            restaurant_name=request.restaurant_name or summary_restaurant_name,
+            restaurant_name=summary_restaurant_name,
             overall_summary=overall_summary,
             categories=categories_dict if categories_dict else None,
-            debug=DebugInfo(
-                request_id=request_id,
-                processing_time_ms=processing_time_ms,
-                tokens_used=None,
-                model_version=None,
-            ) if debug else None,
         )
     except RuntimeError as e:
         # 락 획득 실패 (중복 실행 방지)
@@ -542,7 +531,6 @@ async def compare(
     llm_utils: LLMUtils = Depends(get_llm_utils),
     vector_search: VectorSearch = Depends(get_vector_search),
     metrics: MetricsCollector = Depends(get_metrics_collector),
-    debug: bool = Depends(get_debug_mode),
 ):
     """
     새로운 파이프라인: 통계적 비율 기반 다른 음식점과의 비교 (Kiwi + lift + LLM 설명)
@@ -601,26 +589,13 @@ async def compare(
                     )
                     
                     # SKIP 응답
-                    if debug:
-                        return ComparisonResponse(
-                            restaurant_id=request.restaurant_id,
-                            restaurant_name=None,
-                            comparisons=[],
-                            total_candidates=0,
-                            validated_count=0,
-                            debug=DebugInfo(
-                                request_id=request_id,
-                                processing_time_ms=(time.time() - start_time) * 1000,
-                            ),
-                        )
-                    else:
-                        return ComparisonResponse(
-                            restaurant_id=request.restaurant_id,
-                            restaurant_name=None,
-                            comparisons=[],
-                            total_candidates=0,
-                            validated_count=0,
-                        )
+                    return ComparisonResponse(
+                        restaurant_id=request.restaurant_id,
+                        restaurant_name=None,
+                        comparisons=[],
+                        total_candidates=0,
+                        validated_count=0,
+                    )
             
             # 파이프라인 초기화
         pipeline = ComparisonPipeline(
@@ -644,13 +619,6 @@ async def compare(
         ttfur_ms = (time.time() - start_time) * 1000
         metrics.record_llm_ttft(analysis_type="comparison", ttft_ms=ttfur_ms)
 
-        # 디버그 정보 추가
-        if debug:
-            result["debug"] = DebugInfo(
-                request_id=request_id,
-                processing_time_ms=result.get("processing_time_ms", 0),
-            )
-        
         return ComparisonResponse(**result)
     except RuntimeError as e:
         # 락 획득 실패 (중복 실행 방지)
@@ -695,7 +663,7 @@ async def compare_batch(
         각 레스토랑별 비교 결과 리스트
     """
     start_time = time.time()
-    rid = request.restaurants[0].get("restaurant_id") if request.restaurants else None
+    rid = request.restaurants[0] if request.restaurants else None
     try:
         pipeline = ComparisonPipeline(
             llm_utils=llm_utils,
@@ -703,7 +671,6 @@ async def compare_batch(
         )
         results = await pipeline.compare_batch(
             restaurants=request.restaurants,
-            all_average_data_path=request.all_average_data_path,
         )
         # TTFUR = t1 - t0 (요청 수신 시각 t0 → 응답 반환 직전 t1)
         elapsed_ms = (time.time() - start_time) * 1000

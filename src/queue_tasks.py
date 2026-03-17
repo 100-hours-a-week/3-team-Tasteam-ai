@@ -146,6 +146,9 @@ def run_comparison_batch_job(restaurants_json: str, run_id: Optional[str] = None
     if not run_id:
         run_id = f"offline-{datetime.now().strftime('%Y%m%d-%H%M')}-{uuid.uuid4().hex[:8]}"
     restaurants_data = json.loads(restaurants_json)
+    # 입력 호환: 예전 포맷 [{"restaurant_id": 1, ...}, ...] 또는 신규 포맷 [1,2,3]
+    if restaurants_data and isinstance(restaurants_data, list) and isinstance(restaurants_data[0], dict):
+        restaurants_data = [r.get("restaurant_id") for r in restaurants_data if r.get("restaurant_id") is not None]
     client = get_qdrant_client()
     vs = get_vector_search(qdrant_client=client)
     llm = get_llm_utils()
@@ -180,7 +183,11 @@ def run_all_batch_job(restaurants_json: str, limit: int = 10, run_id: Optional[s
     if not run_id:
         run_id = f"offline-{datetime.now().strftime('%Y%m%d-%H%M')}-{uuid.uuid4().hex[:8]}"
     restaurants_data = json.loads(restaurants_json)
-    restaurant_ids = [r.get("restaurant_id") for r in restaurants_data if r.get("restaurant_id") is not None]
+    # 입력 호환: 예전 포맷 [{"restaurant_id": 1, ...}, ...] 또는 신규 포맷 [1,2,3]
+    if restaurants_data and isinstance(restaurants_data, list) and isinstance(restaurants_data[0], dict):
+        restaurant_ids = [r.get("restaurant_id") for r in restaurants_data if r.get("restaurant_id") is not None]
+    else:
+        restaurant_ids = [int(x) for x in (restaurants_data or [])]
 
     results_by_restaurant: Dict[int, Dict[str, Any]] = {}
     for rid in restaurant_ids:
@@ -194,7 +201,10 @@ def run_all_batch_job(restaurants_json: str, limit: int = 10, run_id: Optional[s
     async def _run_all():
         # 1. sentiment
         try:
-            sent_results = await analyzer.analyze_multiple_restaurants_async(restaurants_data=restaurants_data)
+            # sentiment는 analyzer가 dict 입력을 기대하므로 구 포맷 유지
+            sent_results = await analyzer.analyze_multiple_restaurants_async(
+                restaurants_data=[{"restaurant_id": rid} for rid in restaurant_ids]
+            )
             for r in sent_results:
                 rid = r.get("restaurant_id")
                 if rid is not None:
@@ -206,7 +216,7 @@ def run_all_batch_job(restaurants_json: str, limit: int = 10, run_id: Optional[s
 
         # 2. summary
         try:
-            req = SummaryBatchRequest(restaurants=restaurants_data, limit=limit)
+            req = SummaryBatchRequest(restaurants=[{"restaurant_id": rid} for rid in restaurant_ids], limit=limit)
             seed_list = [DEFAULT_SERVICE_SEEDS, DEFAULT_PRICE_SEEDS, DEFAULT_FOOD_SEEDS]
             name_list = ["service", "price", "food"]
             sum_results = await _batch_summarize_async(req, vs, llm, seed_list, name_list)
@@ -222,7 +232,7 @@ def run_all_batch_job(restaurants_json: str, limit: int = 10, run_id: Optional[s
         # 3. comparison
         try:
             pipeline = ComparisonPipeline(llm_utils=llm, vector_search=vs)
-            comp_results = await pipeline.compare_batch(restaurants=restaurants_data)
+            comp_results = await pipeline.compare_batch(restaurants=restaurant_ids)
             for r in comp_results:
                 rid = r.get("restaurant_id") if isinstance(r, dict) else None
                 if rid is not None and "error" not in r:

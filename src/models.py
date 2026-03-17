@@ -50,13 +50,12 @@ class SentimentReviewInput(BaseModel):
 class SentimentAnalysisRequest(BaseModel):
     """감성 분석 요청 모델. 리뷰는 벡터 DB에서 조회하여 사용."""
     restaurant_id: int = Field(..., description="레스토랑 ID (BIGINT FK)")
-    restaurant_name: Optional[str] = Field(None, description="레스토랑 이름 (응답에 그대로 반환)")
 
 
 class SentimentAnalysisDisplayResponse(BaseModel):
     """감성 분석 표시용 응답 모델 (최소 필드)"""
     restaurant_id: int = Field(..., description="레스토랑 ID")
-    restaurant_name: Optional[str] = Field(None, description="레스토랑 이름 (요청 시 전달 시 반환)")
+    restaurant_name: Optional[str] = Field(None, description="레스토랑 이름 (벡터 payload에서 반환)")
     positive_ratio: int = Field(..., description="긍정 비율 (%) - 정수값")
     negative_ratio: int = Field(..., description="부정 비율 (%) - 정수값")
 
@@ -64,7 +63,7 @@ class SentimentAnalysisDisplayResponse(BaseModel):
 class SentimentAnalysisResponse(BaseModel):
     """감성 분석 응답 모델"""
     restaurant_id: int = Field(..., description="레스토랑 ID")
-    restaurant_name: Optional[str] = Field(None, description="레스토랑 이름 (요청 시 전달 시 반환)")
+    restaurant_name: Optional[str] = Field(None, description="레스토랑 이름 (벡터 payload에서 반환)")
     positive_count: int = Field(..., description="긍정 리뷰 개수")
     negative_count: int = Field(..., description="부정 리뷰 개수")
     neutral_count: int = Field(0, description="중립 리뷰 개수")
@@ -77,14 +76,13 @@ class SentimentAnalysisResponse(BaseModel):
 class SentimentRestaurantBatchInput(BaseModel):
     """배치 감성 분석용 레스토랑 입력. 리뷰는 벡터 DB에서 조회하여 사용."""
     restaurant_id: int = Field(..., description="레스토랑 ID")
-    restaurant_name: Optional[str] = Field(None, description="레스토랑 이름 (응답에 그대로 반환)")
 
 
 class SentimentAnalysisBatchRequest(BaseModel):
     """배치 감성 분석 요청 모델. 각 레스토랑 리뷰는 벡터 DB에서 조회."""
     restaurants: List[SentimentRestaurantBatchInput] = Field(
         ...,
-        description="레스토랑 ID 리스트, 각 항목: restaurant_id (선택 restaurant_name)"
+        description="레스토랑 ID 리스트, 각 항목: restaurant_id"
     )
 
 
@@ -98,7 +96,6 @@ class SentimentAnalysisBatchResponse(BaseModel):
 class SummaryRequest(BaseModel):
     """리뷰 요약 요청 모델. 하이브리드 검색 쿼리는 기본 시드(service/price/food)만 사용."""
     restaurant_id: int = Field(..., description="레스토랑 ID")
-    restaurant_name: Optional[str] = Field(None, description="레스토랑 이름 (응답에 그대로 반환)")
     limit: int = Field(10, ge=1, le=100, description="각 카테고리당 검색할 최대 리뷰 수")
 
 
@@ -110,12 +107,11 @@ class CategorySummary(BaseModel):
 
 
 class SummaryDisplayResponse(BaseModel):
-    """리뷰 요약 표시용 응답 모델 (최소 필드). debug=true 시 debug 필드만 추가, positive_reviews 등 미사용."""
+    """리뷰 요약 표시용 응답 모델 (최소 필드). positive_reviews 등 미사용."""
     restaurant_id: int = Field(..., description="레스토랑 ID")
-    restaurant_name: Optional[str] = Field(None, description="레스토랑 이름 (벡터 payload 또는 요청에서 반환)")
+    restaurant_name: Optional[str] = Field(None, description="레스토랑 이름 (벡터 payload에서 반환)")
     overall_summary: str = Field(..., description="전체 요약")
     categories: Optional[Dict[str, CategorySummary]] = Field(None, description="카테고리별 요약 (새 파이프라인)")
-    debug: Optional[DebugInfo] = Field(None, description="디버그 정보 (X-Debug: true 시에만 포함)")
 
 
 class SummaryBatchRequest(BaseModel):
@@ -160,18 +156,13 @@ class ComparisonResponse(BaseModel):
         None,
         description="lift 기반 표시 문장 (서비스/가격 만족도, 최신 파이프라인).",
     )
-    debug: Optional[DebugInfo] = Field(None, description="디버그 정보")
 
 
 class ComparisonBatchRequest(BaseModel):
     """배치 비교 요청 모델"""
-    restaurants: List[Dict[str, Any]] = Field(
+    restaurants: List[int] = Field(
         ...,
-        description="레스토랑 데이터 리스트, 각 항목: restaurant_id(필수)."
-    )
-    all_average_data_path: Optional[str] = Field(
-        None,
-        description="전체 평균·표본 추출용 데이터 파일 경로 (예: tasteam_app_all_review_data.json). 미지정 시 Config.ALL_AVERAGE_ASPECT_DATA_PATH 사용."
+        description="레스토랑 ID 리스트"
     )
 
 
