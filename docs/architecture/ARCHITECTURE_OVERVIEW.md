@@ -17,27 +17,112 @@
 
 **전체 구성 (개념)**
 
+```mermaid
+flowchart TB
+  %% ===== Clients =====
+  client[클라이언트/외부 호출] --> api[new_async (FastAPI) :8001]
+
+  %% ===== Core deps =====
+  api --> qdrant[Qdrant\n벡터/리뷰 저장소]
+  api --> redis[Redis\n캐시/분산락/RQ]
+  api --> spark[spark-service :8002\nSpark MSA(전체 평균/recall seeds)]
+
+  %% ===== LLM (independent) =====
+  api --> llm_openai[OpenAI API]
+  api --> llm_pod[RunPod Pod vLLM\n(OpenAI-compatible /v1)\n서빙용 self-hosted 가능]
+
+  %% ===== Batch queue (independent) =====
+  api -->|BATCH_USE_QUEUE=true일 때 enqueue| rq[(RQ Queue)]
+  rq --> worker[batch-worker\n(RQ worker)]
+  worker --> redis
+  worker --> spark
+  worker --> qdrant
+  worker --> llm_pod
+  worker --> llm_openai
+
+  %% ===== Distill pipeline (independent, API 외부) =====
+  subgraph distill[Distill 파이프라인 (Prefect + RunPod, API 외부)]
+    distill_orch[scripts/distill_flows.py\n(Prefect flows)]
+    pod_label[RunPod Pod: Labeling(vLLM teacher)]
+    pod_train[RunPod Pod: Train(QLoRA)]
+    pod_merge[RunPod Pod: Merge(선택)]
+    distill_orch --> pod_label --> pod_train --> pod_merge
+  end
+  pod_merge --> llm_pod
+
+  %% ===== DeepFM (independent, API 외부) =====
+  subgraph deepfm[DeepFM 파이프라인 (API 외부)]
+    deepfm_train[ml/deepfm_pipeline/training_flow.py\n(Prefect Training)]
+    deepfm_score[ml/deepfm_pipeline/scripts/score_batch_to_s3.py\n(Batch scoring→S3)]
+    deepfm_train --> deepfm_score
+  end
+
+  %% ===== Observability stack =====
+  api -->|/metrics| prom[Prometheus]
+  worker -->|/metrics(선택)| prom
+  spark -->|/metrics(선택)| prom
+  node[node-exporter] --> prom
+  jobmgr[jobmgr :1041] --> prom
+  prom --> grafana[Grafana]
+  prom --> alert[Alertmanager]
+
+  %% ===== Experiment tracking / artifacts =====
+  wandb[W&B (Weights & Biases)\n실험 추적 / sweep / artifacts]
+  distill_orch --> wandb
+  pod_train --> wandb
+  deepfm_train --> wandb
 ```
-[클라이언트]
-    │
-    ▼
-[new_async:8001]  FastAPI 앱  ─┬─ [Qdrant]  벡터/리뷰 저장소
-    │                          ├─ [Redis]   캐시·분산 락·RQ 큐
-    │                          ├─ [OpenAI | RunPod Pod vLLM]  LLM (인프로세스 vLLM 제거. Serverless 미사용)
-    │                          └─ [spark-service:8002]  Spark MSA (전체 평균·recall seeds). SPARK_SERVICE_URL로 HTTP 호출
-    │
-    ├─ POST /api/v1/batch/enqueue  (BATCH_USE_QUEUE=true 시)
-    │      └─► [batch-worker]  RQ 워커가 배치 작업 소비 (재시도 → DLQ). 워커도 Spark는 spark-service 호출
-    │
-    ├─ [trigger_offline_batch]  오프라인 트리거 (cron/EventBridge에서 enqueue 호출)
-    │
-    ├─ Prometheus 스크래프 (/metrics)
-    ▼
-[Prometheus] ──► [Grafana] 대시보드
-[Alertmanager] 알림
-[node-exporter] 호스트 메트릭
-[jobmgr:1041]   커스텀 메트릭
-```
+
+- **이 다이어그램은 “프로젝트 전체 조감도”**입니다. 사용자는 `new_async`(메인 FastAPI, :8001)로 요청을 보내고, API는 내부 파이프라인을 수행하면서 **저장소(Qdrant)**, **상태/큐(Redis + RQ)**, **대규모 통계 계산(Spark 서비스)**, **LLM(OpenAI 또는 RunPod vLLM Pod)** 과 상호작용합니다.
+  - **독립 서비스/컴포넌트(별도 프로세스/컨테이너/Pod)**: `spark-service`(Spark MSA), `batch-worker`(RQ 워커), **RunPod Pod vLLM**(self-hosted LLM 서빙), Distill 파이프라인의 RunPod Pods(라벨링/학습/머지), **DeepFM 파이프라인**(`ml/deepfm_pipeline`, API 없음), **W&B(Weights & Biases: sweep/실험 추적/artifact 저장소)**, 관측 스택(Prometheus/Grafana/Alertmanager 등).
+  - 운영을 위해 위 컴포넌트들의 메트릭을 **Prometheus가 스크래핑**하고 Grafana/Alertmanager로 시각화·알림을 구성합니다.
+
+**3줄 요약**
+1) 레스토랑 리뷰를 수집/검색해 **요약·감성·비교 분석 결과를 API로 제공**하는 서비스입니다.  
+2) 검색·통계·생성은 **Qdrant/Redis/Spark/LLM(OpenAI·self-hosted vLLM)** 을 조합해 품질과 성능을 확보합니다.  
+3) 요약 품질·비용 최적화를 위해 **Distill(teacher 라벨링→student 학습→서빙)** 파이프라인을 별도로 운영하고, 추천용 **DeepFM** 파이프라인도 독립적으로 운영합니다.
+
+### 전체 구성 설명(프로젝트 한눈에 보기)
+
+- **메인 API: `new_async`**
+  - 사용자/클라이언트가 호출하는 단일 진입점입니다.
+  - 제공 기능: 벡터 업로드, 요약, 감성, 비교, (옵션) 배치 enqueue 등.
+  - 내부적으로는 블로킹 작업을 줄이기 위해 `async_workers`(큐+워커+세마포+`to_thread`)를 사용합니다.
+
+- **데이터/상태 계층**
+  - **Qdrant**: 리뷰/메타를 벡터로 저장하고, Summary/Sentiment/Comparison에서 검색·조회에 사용합니다.
+  - **Redis**: 캐시/분산락(중복 실행 방지)과 RQ 기반 배치 큐를 제공합니다.
+
+- **배치 실행(독립 워커): `batch-worker`**
+  - `BATCH_USE_QUEUE=true`일 때 API가 작업을 RQ 큐에 넣고, `batch-worker`가 이를 소비합니다.
+  - 배치 워커는 필요 시 Spark/Qdrant/LLM을 호출하며, API 프로세스의 부하를 분리합니다.
+
+- **Spark 서비스(독립 서비스): `spark-service:8002`**
+  - JVM/Spark를 메인 API 프로세스에서 분리하기 위한 마이크로서비스입니다.
+  - Summary의 recall seeds 및 Comparison의 전체 평균 등 “규모가 큰 계산”을 HTTP로 위임합니다(`SPARK_SERVICE_URL`).
+  - 리뷰 규모가 커질 때(예: `RECALL_SEEDS_SPARK_THRESHOLD`) Spark 경로가 유리하도록 설계되어 있습니다.
+
+- **LLM 계층(외부/독립)**
+  - **OpenAI API**: 외부 LLM 호출 경로입니다.
+  - **RunPod Pod vLLM**: OpenAI 호환 `/v1`로 self-hosted LLM을 서빙하는 독립 서비스입니다.
+    - distill 파이프라인의 merge 산출물(merged 모델)을 vLLM Pod에서 로드해 서빙할 수 있으며, API는 `LLM_PROVIDER=runpod` + `VLLM_POD_BASE_URL`로 호출합니다.
+
+- **Distill 파이프라인(메인 API 외부)**
+  - `scripts/distill_flows.py`의 Prefect flows가 RunPod Pod(라벨링/학습/머지)를 오케스트레이션합니다.
+  - 목적: 요약용 teacher 데이터 생성 → student 학습(QLoRA) → 평가 → 서빙용 모델 merge.
+  - 결과: self-hosted vLLM Pod에 올려 서빙하거나, 설정에 따라 API의 Summary가 distill adapter를 직접 사용할 수 있습니다.
+
+- **DeepFM 파이프라인(메인 API 외부)**
+  - `ml/deepfm_pipeline`에서 Prefect 학습 플로우 + 배치 추론 스크립트로 운영됩니다.
+  - 과거 `ml/deepfm_pipeline/api`의 Admin FastAPI는 삭제되었고(2026-03-17), 현재는 워크플로/배치 실행 중심입니다.
+
+- **관측/운영 스택**
+  - **Prometheus**: `new_async`(필수) 및 가능한 컴포넌트들의 `/metrics`를 스크래핑합니다.
+  - **Grafana**: 대시보드.
+  - **Alertmanager**: 알림 라우팅.
+  - **node-exporter / jobmgr**: 호스트/커스텀 메트릭 수집.
+
+- **독립 서비스(요약)**: `spark-service`, `batch-worker`, `RunPod Pod vLLM(서빙)`, Distill 파이프라인용 RunPod Pods(라벨링/학습/머지), DeepFM 파이프라인(`ml/deepfm_pipeline`, API 없음), 관측 스택(Prometheus/Grafana/Alertmanager).
 
 ### 2. 배포 구조 (Docker Compose)
 
@@ -78,8 +163,14 @@
 | **Qdrant** | 벡터 저장·하이브리드 검색, 리뷰 조회. 로컬 경로 또는 원격 URL. | `QDRANT_URL`, `COLLECTION_NAME`, `QDRANT_VECTORS_ON_DISK` |
 | **Redis** | 캐시(LLM·감성·임베딩 결과), 분산 락, **RQ 작업 큐**(`BATCH_USE_QUEUE=true` 시). 미연결 시 캐시·락·큐 비활성. | `REDIS_HOST`, `REDIS_PORT`, `REDIS_DB`, `REDIS_PASSWORD` |
 | **OpenAI** | 요약·감성 재판정·비교 해석용 LLM (gpt-4o-mini 등). 429/5xx 시 벤더 API 페일오버(Gemini) 가능(`GEMINI_API_KEY`). | `OPENAI_API_KEY`, `OPENAI_MODEL`, `GEMINI_API_KEY` |
+| **W&B (Weights & Biases)** | Distill/학습 파이프라인의 **실험 추적**, **sweep(하이퍼파라미터 탐색)**, **artifact 버전 관리**(dataset/labeled/adapter/eval 등). DeepFM 파이프라인도 선택적으로 artifact 로깅. | `WANDB_API_KEY`, `WANDB_PROJECT`, `WANDB_ENTITY` |
 | **LLM 제공자** | `LLM_PROVIDER`: `openai`(API 전용), `runpod`(Pod vLLM), `local`(로컬 모델). 미설정 시 기본 `openai`. RunPod 사용 시 `VLLM_POD_BASE_URL`로 직접 호출. | `LLM_PROVIDER`, `VLLM_POD_BASE_URL` |
 | **RunPod Pod vLLM** | LLM 1차 백엔드(Provider=runpod 시). `VLLM_POD_BASE_URL`로 직접 호출 (OpenAI 호환 /v1). 기본 예: `http://213.173.108.70:17517/v1`. **Pod만 사용** (Serverless 미사용). | `VLLM_POD_BASE_URL` |
+
+> **Distill 기반 self-hosting LLM(서빙)**
+> - distill 파이프라인은 `merge_for_serving` 단계에서 **서빙용 merged 모델 디렉터리**를 만들고, 이를 **RunPod Pod vLLM**이 로드하여 OpenAI 호환 `/v1`로 서빙할 수 있습니다(예: 컨테이너 경로 `/workspace/merged`).
+> - API는 `LLM_PROVIDER=runpod` + `VLLM_POD_BASE_URL=<pod-base-url>/v1` 형태로 self-hosted vLLM을 호출합니다.
+> - Summary는 설정에 따라 distill adapter를 직접 사용하도록 전환할 수 있습니다(`USE_DISTILL_SUMMARY`, `DISTILL_ADAPTER_PATH`, `DISTILL_BASE_MODEL`).
 
 **RunPod Serverless 미사용 이유** (`docs/runpod/why_dont_use_runpod_serverless.md`): Serverless는 요청 없을 때 워커가 종료되어 Ephemeral이며, Prometheus pull 기반 스크래핑 대상이 불안정함. Pod는 항상 떠 있어 고정 IP·지속적 메트릭 수집에 적합.
 
@@ -159,7 +250,7 @@
     ├─ POST /api/v1/llm/summarize           → 카테고리별 검색 + LLM 요약 (해요체)
     ├─ POST /api/v1/llm/summarize/batch
     │
-    ├─ POST /api/v1/llm/comparison          → Kiwi+Spark 비율 → lift → LLM 해석
+    ├─ POST /api/v1/llm/comparison          → Kiwi+Spark 비율 → lift → 템플릿 기반 설명(LLM 미사용)
     ├─ POST /api/v1/llm/comparison/batch
     │
     ├─ POST /api/v1/batch/enqueue           → 배치 작업 큐에 넣기 (BATCH_USE_QUEUE=true 시)
@@ -168,7 +259,7 @@
 
 - **Vector** 업로드 결과는 Summary 검색·Comparison 리뷰 조회에서 사용.
 - **Summary**는 요약만, **Sentiment**는 긍정/부정/중립 비율.
-- **Comparison**은 Vector 리뷰 + Kiwi(±Spark) 비율 → 전체 평균 대비 lift → LLM 해석.
+- **Comparison**은 Vector 리뷰 + Kiwi(±Spark) 비율 → 전체 평균 대비 lift → **템플릿 기반 설명(LLM 미사용)**.
 
 **DeepFM ML 파이프라인** (별도 컴포넌트, §16): `ml/deepfm_pipeline` — (학습/배치 추론 중심) 추천(CTR/랭킹)용 DeepFM 파이프라인.
 
@@ -222,6 +313,16 @@
   2. `get_sentiment_analyzer(vector_search)` → `_get_sentiment_pipeline()` → `pl("웜업")` (Sentiment pipeline).
 - Warm-up 실패 시 로그 경고만 하고 `/ready`는 503 유지. 정상 완료 시 "서비스 warm-up 완료, readiness=True" 로그.
 
+### 7.5 블로킹 격리: asyncio.Queue + 워커 + 리소스별 세마포(1)
+
+API 내부에는 **블로킹 작업(embedding/kiwi/sentiment/LLM 호출 등)** 으로 이벤트 루프가 멈추는 것을 줄이기 위해,
+`src/async_workers.py`의 **asyncio.Queue 기반 작업 큐**를 사용합니다.
+
+- **구조**: `asyncio.Queue` + worker N개(`ASYNC_WORKER_COUNT`, 기본 2)
+- **리소스 제한**: job_type별 `asyncio.Semaphore(1)`로 **동일 리소스 동시 실행 1개**로 제한 (`sentiment`, `llm`, `kiwi`, `embedding`)
+- **실행 방식**: 워커가 큐에서 꺼낸 작업을 `asyncio.to_thread(...)`로 실행 → 이벤트 루프 블로킹을 줄임
+- **호출 방식**: 라우터/파이프라인에서 `run_via_queue(job_type, fn, ...)`로 enqueue 후 await
+
 ---
 
 ## 8. 공통 인프라
@@ -267,7 +368,7 @@
 |------------|-------------------------|----------------------|
 | **Sentiment** | `SENTIMENT_RESTAURANT_ASYNC=true` → 레스토랑별 `analyze_async`를 `asyncio.gather`로 병렬 | `SENTIMENT_CLASSIFIER_USE_THREAD=true`(HF 분류를 `to_thread`로 격리), `SENTIMENT_LLM_ASYNC=true`(LLM 재판정 AsyncOpenAI) |
 | **Summary** | `SUMMARY_RESTAURANT_ASYNC=true` → 레스토랑별 처리를 `asyncio.gather`로 병렬 | `SUMMARY_SEARCH_ASYNC=true`(한 레스토랑 내 service/price/food 검색 병렬), `SUMMARY_LLM_ASYNC=true`(LLM 비동기 호출) |
-| **Comparison** | `COMPARISON_BATCH_ASYNC=true` → 레스토랑별 `compare`를 `asyncio.gather`로 병렬 | `COMPARISON_ASYNC=true`(서비스/가격 LLM 해석 2개를 `asyncio.gather`로 병렬) |
+| **Comparison** | `COMPARISON_BATCH_ASYNC=true` → 레스토랑별 `compare`를 `asyncio.gather`로 병렬 | (현재) LLM 해석 미사용. 수치 기반 템플릿(`format_comparison_display`)으로 설명 생성 |
 
 위 플래그를 false로 두면 해당 수준은 순차 실행됩니다. 단일 요청(레스토랑 1개) API에서는 “음식점 간”은 해당 없고, 파이프라인 내 비동기만 적용될 수 있습니다.
 
@@ -544,7 +645,7 @@ GET /api/v1/batch/status/{job_id} → 결과 조회
 
 #### 12.1.1 역할
 
-단일 레스토랑을 **전체 평균**과 비교해 **service / price** 만족도 **lift(%)**를 산출하고, LLM으로 자연어 해석 문장을 생성합니다. lift > 0인 카테고리만 comparisons에 포함됩니다.
+단일 레스토랑을 **전체 평균**과 비교해 **service / price** 만족도 **lift(%)**를 산출하고, **수치 기반 템플릿**으로 설명 문구를 생성합니다(현재 경로에서 **LLM 미사용**). lift > 0인 카테고리만 comparisons에 포함됩니다.
 
 #### 12.1.2 요청 Body (ComparisonRequest)
 
@@ -572,8 +673,7 @@ GET /api/v1/batch/status/{job_id} → 결과 조회
 5. **Lift 계산**: `calculate_comparison_lift(single_restaurant_ratios, all_average_ratios)`.
    - **식**: `lift[category] = ((single_ratio - all_ratio) / all_ratio) * 100` (all_ratio > 0일 때). 반올림 정수.
    - 반환: `{"service": 20, "price": 18}` 형태.
-6. **LLM 해석**: 서비스·가격 각각에 대해 `generate_comparison_interpretation_async(label, lift, tone, n_reviews)` 호출. lift≤0이면 "평균과 비슷합니다." 고정. `COMPARISON_ASYNC=true`면 `asyncio.gather`로 2개 병렬.
-   - LLM 실패 시 **템플릿 폴백**: lift≥30 → "약 N% 높아, 차이가 큰 편", lift<10 → "N% 높아, 차이는 크지 않은 편", 그 외 "약 N% 높아, 차이가 어느 정도 있습니다."
+6. **설명 문구 생성(LLM 미사용)**: `format_comparison_display(lift_service, lift_price, n_reviews)`로 service/price 설명 문장 리스트 생성.
 7. **comparisons 리스트**: lift_dict에서 **lift > 0**인 카테고리만 항목으로 넣음 (category, lift_percentage, comparison_display 문장 등).
 8. **응답**: `ComparisonResponse`(comparisons, category_lift, comparison_display, total_candidates, validated_count, processing_time_ms 등).
 
@@ -592,7 +692,7 @@ GET /api/v1/batch/status/{job_id} → 결과 조회
 
 | 설정 | 기본값 | 설명 |
 |------|--------|------|
-| COMPARISON_ASYNC | true | 서비스/가격 LLM 해석 병렬 |
+| COMPARISON_ASYNC | true | (호환/레거시) 비교 해석 LLM 병렬 플래그. 현재 `src/comparison.py` 경로는 **LLM 미사용(템플릿 기반)** |
 | COMPARISON_BATCH_ASYNC | true | 배치 시 레스토랑 간 병렬 |
 | SPARK_SERVICE_URL | (없음) | 설정 시 전체 평균을 Spark 마이크로서비스(MSA) HTTP 호출로 계산. 미설정 시 로컬 Spark 또는 Python 폴백. `docs/spark/SPARK_SERVICE.md` 참고. |
 | ALL_AVERAGE_ASPECT_DATA_PATH | data/test_data_sample.json | 전체 평균용 파일 경로 |
@@ -617,7 +717,7 @@ GET /api/v1/batch/status/{job_id} → 결과 조회
     ├─ POST /api/v1/llm/summarize           → 카테고리별 검색 + LLM 요약 (해요체)
     ├─ POST /api/v1/llm/summarize/batch
     │
-    ├─ POST /api/v1/llm/comparison          → Kiwi+Spark 비율 → lift → LLM 해석
+    ├─ POST /api/v1/llm/comparison          → Kiwi+Spark 비율 → lift → 템플릿 기반 설명(LLM 미사용)
     ├─ POST /api/v1/llm/comparison/batch
     │
     ├─ POST /api/v1/batch/enqueue           → 배치 작업 큐에 넣기 (BATCH_USE_QUEUE=true 시)
@@ -626,11 +726,55 @@ GET /api/v1/batch/status/{job_id} → 결과 조회
 
 - **Vector** 업로드 결과는 Summary의 카테고리별 검색·Comparison의 레스토랑 리뷰 조회에서 사용됩니다.
 - **Summary**는 긍정/부정 비율을 세지 않고 **요약만** 생성하며, **Sentiment**가 비율을 담당합니다.
-- **Comparison**은 Vector에 적재된 리뷰를 조회한 뒤 Kiwi(+Spark)로 service/price 긍정 비율을 구하고, 전체 평균과 비교해 lift와 LLM 설명을 만듭니다.
+- **Comparison**은 Vector에 적재된 리뷰를 조회한 뒤 Kiwi(+Spark)로 service/price 긍정 비율을 구하고, 전체 평균과 비교해 lift와 **템플릿 기반 설명(LLM 미사용)**을 만듭니다.
 
 ### 6.1 디스틸·학습 파이프라인 (RunPod, API 외부)
 
 요약 KD·QLoRA 학습은 **Prefect flows**와 **RunPod Pod**로 실행되며, 메인 FastAPI API와는 별도 스크립트입니다.
+
+#### distill 파이프라인 다이어그램 (개념)
+
+```mermaid
+flowchart TB
+  subgraph Local[로컬/오케스트레이터 (Prefect)]
+    cli[CLI: scripts/distill_flows.py]
+    build[build_dataset_flow\n- split/windowing\n- train/val/test 생성\n- dataset artifact 업로드]
+    eval[evaluate_flow\n- ROUGE/BERTScore/GPT-judge 등]
+    merge_local[merge_for_serving_flow(로컬)\n- adapter+base merge\n- merged_for_serving/<ver>\n- latest_merged_path.json]
+  end
+
+  subgraph PodLabel[RunPod Pod: Labeling(vLLM Teacher)]
+    teacher[vLLM(OpenAI-compatible /v1)\nself-hosted teacher]
+    labeling[labeling_with_pod_flow\n- OpenAI 골드 일부\n- 나머지 teacher로 라벨링\n- labeled artifact 업로드]
+  end
+
+  subgraph PodTrain[RunPod Pod: Train(QLoRA)]
+    train[train_student_with_pod_flow\n- train_qlora.py 실행\n- adapter 산출\n- adapter artifact 업로드]
+    sweep[run_sweep_flow\n- wandb sweep 등록\n- pod에서 agent로 여러 run\n- best adapter 선정(artifact)]
+  end
+
+  subgraph PodMerge[RunPod Pod: Merge(선택)]
+    merge_pod[merge_for_serving_with_pod_flow\n- 볼륨에서 merge\n- merged_for_serving/<ver>]
+  end
+
+  subgraph Serving[서빙(LLM)]
+    vllm_pod[RunPod Pod vLLM\n- merged 모델 로드\n- /v1 서빙]
+    api[new_async API\nLLM_PROVIDER=runpod\nVLLM_POD_BASE_URL=/v1]
+  end
+
+  cli --> build --> labeling
+  cli --> labeling
+  labeling --> train
+  labeling --> sweep
+  train --> eval
+  sweep --> eval
+  eval --> merge_local
+  eval --> merge_pod
+
+  merge_local --> vllm_pod
+  merge_pod --> vllm_pod
+  api --> vllm_pod
+```
 
 #### distill_flows.py 개요
 
@@ -768,7 +912,7 @@ GET /api/v1/batch/status/{job_id} → 결과 조회
 | | BATCH_SEARCH_CONCURRENCY | 50 | 배치 검색 동시 수 |
 | | BATCH_LLM_CONCURRENCY | 8 | 배치 LLM 동시 수 |
 | | RECALL_SEEDS_SPARK_THRESHOLD | 2000 | recall seed 계산 시 Spark 사용 리뷰 수 기준. `docs/spark/SUMMARY_RECALL_SEEDS.md` 참고. |
-| **Comparison** | COMPARISON_ASYNC | true | 서비스/가격 LLM 병렬 |
+| **Comparison** | COMPARISON_ASYNC | true | (호환/레거시) 비교 해석 LLM 병렬 플래그. 현재 경로는 템플릿 기반 설명(LLM 미사용) |
 | | COMPARISON_BATCH_ASYNC | true | 배치 레스토랑 병렬 |
 | | SPARK_SERVICE_URL | (없음) | 설정 시 Spark 서비스로 전체 평균 계산. `docs/spark/SPARK_SERVICE.md` 참고. |
 | | ALL_AVERAGE_ASPECT_DATA_PATH | data/test_data_sample.json | 전체 평균 파일 |
@@ -812,6 +956,56 @@ GET /api/v1/batch/status/{job_id} → 결과 조회
 | **문서** | `ml/deepfm_pipeline/docs/design/deepfm/AI_SERVER_CURRENT_FLOW.md`, `docs/service_extraction/service_constract.md` |
 
 > **변경(2026-03-17)**: `ml/deepfm_pipeline/api`의 **Admin FastAPI(포트 8000)** 및 관련 DTO 문서는 코드에서 **제거**되었습니다(배치/워크플로만 유지).
+
+### 16.0 DeepFM 파이프라인 다이어그램 (현재 구현)
+
+```mermaid
+flowchart TB
+  subgraph AdminETL[Admin/ETL]
+    trigger_train[학습 트리거\n(Prefect/스크립트)]
+    trigger_score[배치 추론 트리거\n(cron/워크플로 엔진)]
+  end
+
+  subgraph DeepFM[ml/deepfm_pipeline]
+    train_flow[training_flow.py\nDeepFM Training Pipeline]
+    infer_script[scripts/score_batch_to_s3.py\nBatch scoring + S3 upload]
+    infer_flow[inference_flow.py\n(선택) Prefect Batch Inference]
+    score_core[utils/score_batch.py\nload_run()+run()]
+    out_dir[output/\nrun별 model.pt/feature_sizes.txt/\npipeline_version.txt/run_manifest.json\nactive_pipeline_version.txt]
+  end
+
+  subgraph Inputs[입력]
+    raw[raw_data_dir\n(학습용 raw)]
+    candidates[candidates.csv\n(후보 feature vector)]
+    meta[meta.csv(선택)\nuser_id/anon_id/restaurant_id/context]
+  end
+
+  subgraph Storage[S3/저장]
+    s3rec[S3 recommendations/\npipeline_version=.../dt=.../\npart-00001.csv + _SUCCESS]
+    wb[W&B artifacts(선택)]
+  end
+
+  subgraph Downstream[운영/ETL(레포 외부)]
+    poll[S3 polling]
+    import_db[CSV import → DB 적재]
+  end
+
+  trigger_train --> train_flow
+  raw --> train_flow
+  train_flow --> out_dir
+  train_flow --> wb
+
+  trigger_score --> infer_script
+  candidates --> infer_script
+  meta --> infer_script
+  infer_script --> score_core
+  score_core --> out_dir
+  infer_script --> s3rec
+
+  infer_flow --> infer_script
+
+  s3rec --> poll --> import_db
+```
 
 **전체 흐름 (개념)**
 
