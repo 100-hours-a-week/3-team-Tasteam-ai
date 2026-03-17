@@ -131,6 +131,13 @@ async def lifespan(app: FastAPI):
     logger.info("FastAPI 애플리케이션 시작")
     app.state.ready = False
 
+    # asyncio.Queue + 워커 2개 (sentiment/llm/kiwi/embedding 세마포 1)
+    try:
+        from ..async_workers import start_workers, stop_workers
+        await start_workers()
+    except Exception as e:
+        logger.warning("async_workers 시작 실패: %s", e)
+
     # CPU 모니터 시작 (Config.CPU_MONITOR_ENABLE=true일 때만)
     cpu_monitor = get_cpu_monitor()
     if cpu_monitor:
@@ -154,7 +161,11 @@ async def lifespan(app: FastAPI):
             await lag_task
         except asyncio.CancelledError:
             pass
-
+        try:
+            from ..async_workers import stop_workers
+            await stop_workers()
+        except Exception as e:
+            logger.warning("async_workers 종료 실패: %s", e)
     if cpu_monitor:
         await cpu_monitor.stop()
     logger.info("FastAPI 애플리케이션 종료")

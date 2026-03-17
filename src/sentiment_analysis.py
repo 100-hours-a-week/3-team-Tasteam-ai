@@ -600,12 +600,10 @@ class SentimentAnalyzer:
                 "neutral_ratio": 0,
             }
         logger.info(f"총 {len(content_list)}개의 리뷰를 sentiment 모델로 분류합니다 (restaurant_id: {restaurant_id}).")
-        if Config.SENTIMENT_CLASSIFIER_USE_THREAD:
-            hf_result = await asyncio.to_thread(
-                self._classify_with_hf_only, content_list, reviews_dict
-            )
-        else:
-            hf_result = self._classify_with_hf_only(content_list, reviews_dict)
+        from .async_workers import run_via_queue
+        hf_result = await run_via_queue(
+            "sentiment", self._classify_with_hf_only, content_list, reviews_dict
+        )
         pos, neg, neu, total, labels, neg_for_llm = hf_result
         if neg_for_llm:
             pos, neg, neu, labels = self._apply_neutral_for_ambiguous(

@@ -123,6 +123,9 @@ class _InferenceConfig:
     # Comparison 배치: 음식점 간 병렬. true=asyncio.gather(병렬), false=순차
     COMPARISON_BATCH_ASYNC: bool = os.getenv("COMPARISON_BATCH_ASYNC", "true").lower() == "true"
 
+    # asyncio.Queue + 워커: sentiment/llm/kiwi/embedding 블로킹 작업을 큐로 직렬화, 리소스별 세마포 1
+    ASYNC_WORKER_COUNT: int = int(os.getenv("ASYNC_WORKER_COUNT", "2"))
+
     # Distill summary: 자체 훈련 qwen2.5-0.5b-instruct (eval과 동일 프롬프트·후처리). true면 summary는 외부 LLM 대신 로컬 adapter 사용
     USE_DISTILL_SUMMARY: bool = os.getenv("USE_DISTILL_SUMMARY", "true").lower() == "true"
     DISTILL_ADAPTER_PATH: Optional[str] = (os.getenv("DISTILL_ADAPTER_PATH", "distill_pipeline_output/artifacts/g4nca6b2/adapter") or "").strip() or None

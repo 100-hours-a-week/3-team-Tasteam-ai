@@ -231,27 +231,27 @@ async def _process_one_restaurant_async(
     request: SummaryBatchRequest,
     vector_search: VectorSearch,
     llm_utils: LLMUtils,
-    search_sem: asyncio.Semaphore,
-    llm_sem: asyncio.Semaphore,
 ) -> Dict[str, Any]:
-    """한 레스토랑: 해당 음식점 recall seed로 검색 후 요약."""
+    """한 레스토랑: recall seed(Kiwi 큐) → 검색(embedding 큐) → 요약(LLM 큐)."""
+    from ...async_workers import run_via_queue
+
     restaurant_id = restaurant_data.get("restaurant_id")
-    seed_list, name_list = await asyncio.to_thread(
-        _get_seed_list_for_restaurant, vector_search, restaurant_id
+    seed_list, name_list = await run_via_queue(
+        "kiwi", _get_seed_list_for_restaurant, vector_search, restaurant_id
     )
 
     async def do_one_search(seeds: List[str], name: str) -> tuple:
         query_seeds = seeds[:10] if len(seeds) > 10 else seeds
         query_text = " ".join(query_seeds)
-        async with search_sem:
-            hits = await asyncio.to_thread(
-                _retrieve_category_hits_accuracy_first,
-                vector_search=vector_search,
-                category_name=name,
-                query_text=query_text,
-                restaurant_id=restaurant_id,
-                final_limit=request.limit,
-            )
+        hits = await run_via_queue(
+            "embedding",
+            _retrieve_category_hits_accuracy_first,
+            vector_search=vector_search,
+            category_name=name,
+            query_text=query_text,
+            restaurant_id=restaurant_id,
+            final_limit=request.limit,
+        )
         contents = []
         data_list = []
         for rank, hit in enumerate(hits):
@@ -273,30 +273,18 @@ async def _process_one_restaurant_async(
     hits_dict = {name: contents for name, contents, _ in search_results}
     hits_data_dict = {name: data_list for name, _, data_list in search_results}
 
-    async with llm_sem:
-        if Config.SUMMARY_LLM_ASYNC:
-            result = await summarize_aspects_new_async(
-                service_reviews=hits_dict.get("service", []),
-                price_reviews=hits_dict.get("price", []),
-                food_reviews=hits_dict.get("food", []),
-                service_evidence_data=hits_data_dict.get("service", []),
-                price_evidence_data=hits_data_dict.get("price", []),
-                food_evidence_data=hits_data_dict.get("food", []),
-                llm_utils=llm_utils,
-                per_category_max=request.limit,
-            )
-        else:
-            result = await asyncio.to_thread(
-                summarize_aspects_new,
-                service_reviews=hits_dict.get("service", []),
-                price_reviews=hits_dict.get("price", []),
-                food_reviews=hits_dict.get("food", []),
-                service_evidence_data=hits_data_dict.get("service", []),
-                price_evidence_data=hits_data_dict.get("price", []),
-                food_evidence_data=hits_data_dict.get("food", []),
-                llm_utils=llm_utils,
-                per_category_max=request.limit,
-            )
+    result = await run_via_queue(
+        "llm",
+        summarize_aspects_new,
+        hits_dict.get("service", []),
+        hits_dict.get("price", []),
+        hits_dict.get("food", []),
+        hits_data_dict.get("service", []),
+        hits_data_dict.get("price", []),
+        hits_data_dict.get("food", []),
+        llm_utils,
+        request.limit,
+    )
     restaurant_name = restaurant_data.get("restaurant_name")
     return _build_category_result(result, restaurant_id, restaurant_name)
 
@@ -306,14 +294,9 @@ async def _batch_summarize_async(
     vector_search: VectorSearch,
     llm_utils: LLMUtils,
 ) -> List[Dict[str, Any]]:
-    """배치 요약: 음식점마다 recall seed 생성 후 검색·요약 (search_async/restaurant_async에 따라 병렬)."""
-    search_sem = asyncio.Semaphore(Config.BATCH_SEARCH_CONCURRENCY)
-    llm_sem = asyncio.Semaphore(Config.BATCH_LLM_CONCURRENCY)
-
+    """배치 요약: 음식점마다 Kiwi/embedding/LLM 큐(세마포 1)로 검색·요약."""
     async def one(rd: Dict[str, Any]) -> Dict[str, Any]:
-        return await _process_one_restaurant_async(
-            rd, request, vector_search, llm_utils, search_sem, llm_sem
-        )
+        return await _process_one_restaurant_async(rd, request, vector_search, llm_utils)
 
     if Config.SUMMARY_RESTAURANT_ASYNC:
         gathered = await asyncio.gather(
@@ -420,36 +403,33 @@ async def summarize_reviews(
                         ) if debug else None,
                     )
             
-            # 새로운 파이프라인: 하이브리드 검색 + Aspect 기반 카테고리별 요약
-        # 1. 해당 음식점 리뷰에서 recall seed 생성 (실패 시 기본 시드)
-        seed_list, name_list = await asyncio.to_thread(
-            _get_seed_list_for_restaurant, vector_search, request.restaurant_id
+            # 새로운 파이프라인: Kiwi/embedding/LLM 큐(세마포 1) 사용
+        from ...async_workers import run_via_queue
+        # 1. 해당 음식점 리뷰에서 recall seed 생성 (Kiwi 큐)
+        seed_list, name_list = await run_via_queue(
+            "kiwi", _get_seed_list_for_restaurant, vector_search, request.restaurant_id
         )
         logger.info("요약: recall seed 사용(restaurant_id=%s)", request.restaurant_id)
         
-        # 2. 카테고리별 하이브리드 검색
+        # 2. 카테고리별 하이브리드 검색 (embedding 큐)
         hits_dict = {}
         hits_data_dict = {}
         summary_restaurant_name: Optional[str] = getattr(request, "restaurant_name", None)
         
         for seeds, name in zip(seed_list, name_list):
-            # Seed를 쿼리로 사용 (최대 10개만 사용하여 토큰 절약)
             query_seeds = seeds[:10] if len(seeds) > 10 else seeds
             query_text = " ".join(query_seeds)
-            
-            # 하이브리드 검색 수행 (Config 하이브리드 인자 사용, Vector API와 동일)
-            hits = _retrieve_category_hits_accuracy_first(
+            hits = await run_via_queue(
+                "embedding",
+                _retrieve_category_hits_accuracy_first,
                 vector_search=vector_search,
                 category_name=name,
                 query_text=query_text,
                 restaurant_id=request.restaurant_id,
                 final_limit=request.limit,
             )
-            
-            # 카테고리별 리스트 초기화
             hits_dict[name] = []
             hits_data_dict[name] = []
-            
             for rank, hit in enumerate(hits):
                 payload = hit.get("payload", {})
                 content = payload.get("content", "")
@@ -463,16 +443,18 @@ async def summarize_reviews(
                     "rank": rank,
                 })
         
-        # 3. 새로운 파이프라인으로 요약 생성
-        result = summarize_aspects_new(
-            service_reviews=hits_dict.get("service", []),
-            price_reviews=hits_dict.get("price", []),
-            food_reviews=hits_dict.get("food", []),
-            service_evidence_data=hits_data_dict.get("service", []),
-            price_evidence_data=hits_data_dict.get("price", []),
-            food_evidence_data=hits_data_dict.get("food", []),
-            llm_utils=llm_utils,
-            per_category_max=request.limit,
+        # 3. 요약 생성 (LLM 큐)
+        result = await run_via_queue(
+            "llm",
+            summarize_aspects_new,
+            hits_dict.get("service", []),
+            hits_dict.get("price", []),
+            hits_dict.get("food", []),
+            hits_data_dict.get("service", []),
+            hits_data_dict.get("price", []),
+            hits_data_dict.get("food", []),
+            llm_utils,
+            request.limit,
         )
         
         # 4. 응답 형식 변환
@@ -797,56 +779,51 @@ async def summarize_reviews_batch(
             )
             return SummaryBatchResponse(results=[SummaryDisplayResponse(**r) for r in results])
 
-        # search_async=false, restaurant_async=false: 레스토랑·aspect 완전 순차
+        # search_async=false, restaurant_async=false: 레스토랑·aspect 완전 순차 (Kiwi/embedding/LLM 큐 사용)
+        from ...async_workers import run_via_queue
         results = []
         for restaurant_data in request.restaurants:
             restaurant_id = restaurant_data.get("restaurant_id")
-            seed_list, name_list = await asyncio.to_thread(
-                _get_seed_list_for_restaurant, vector_search, restaurant_id
+            seed_list, name_list = await run_via_queue(
+                "kiwi", _get_seed_list_for_restaurant, vector_search, restaurant_id
             )
-            # 카테고리별 하이브리드 검색
             hits_dict = {}
             hits_data_dict = {}
-            
             for seeds, name in zip(seed_list, name_list):
-                # Seed를 쿼리로 사용 (최대 10개만 사용하여 토큰 절약)
                 query_seeds = seeds[:10] if len(seeds) > 10 else seeds
                 query_text = " ".join(query_seeds)
-                
-                # 하이브리드 검색 수행 (Config 하이브리드 인자 사용, Vector API와 동일)
-                hits = _retrieve_category_hits_accuracy_first(
+                hits = await run_via_queue(
+                    "embedding",
+                    _retrieve_category_hits_accuracy_first,
                     vector_search=vector_search,
                     category_name=name,
                     query_text=query_text,
                     restaurant_id=restaurant_id,
                     final_limit=request.limit,
                 )
-                
-                # 카테고리별 리스트 초기화
                 hits_dict[name] = []
                 hits_data_dict[name] = []
-                
                 for rank, hit in enumerate(hits):
                     payload = hit.get("payload", {})
                     content = payload.get("content", "")
                     review_id = payload.get("review_id") or payload.get("id") or str(hit.get("id", ""))
-                    
                     hits_dict[name].append(content)
                     hits_data_dict[name].append({
                         "review_id": str(review_id),
                         "snippet": content,
                         "rank": rank,
                     })
-            
-            result = summarize_aspects_new(
-                service_reviews=hits_dict.get("service", []),
-                price_reviews=hits_dict.get("price", []),
-                food_reviews=hits_dict.get("food", []),
-                service_evidence_data=hits_data_dict.get("service", []),
-                price_evidence_data=hits_data_dict.get("price", []),
-                food_evidence_data=hits_data_dict.get("food", []),
-                llm_utils=llm_utils,
-                per_category_max=request.limit,
+            result = await run_via_queue(
+                "llm",
+                summarize_aspects_new,
+                hits_dict.get("service", []),
+                hits_dict.get("price", []),
+                hits_dict.get("food", []),
+                hits_data_dict.get("service", []),
+                hits_data_dict.get("price", []),
+                hits_data_dict.get("food", []),
+                llm_utils,
+                request.limit,
             )
             results.append(_build_category_result(result, restaurant_id, restaurant_data.get("restaurant_name")))
 

@@ -329,11 +329,12 @@ async def summarize_aspects_new_async(
         instructions, per_category_max, max_input_tokens,
     )
 
-    # Distill summary (비동기는 to_thread로 동기 추론 실행)
+    # Distill summary (LLM 큐 + 세마포 1로 직렬화)
     if getattr(Config, "USE_DISTILL_SUMMARY", False):
         try:
             from .distill_summary import generate_summary_sync
-            out = await asyncio.to_thread(generate_summary_sync, payload)
+            from .async_workers import run_via_queue
+            out = await run_via_queue("llm", generate_summary_sync, payload)
         except Exception as e:
             logger.error(f"Distill summary 실패: {e}")
             return {
