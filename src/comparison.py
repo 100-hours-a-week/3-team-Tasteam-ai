@@ -82,7 +82,6 @@ class ComparisonPipeline:
             calculate_comparison_lift,
             calculate_single_restaurant_ratios,
             format_comparison_display,
-            _tone_by_sample,
             calculate_all_average_ratios_from_reviews,
             calculate_all_average_ratios_from_file,
         )
@@ -189,42 +188,12 @@ class ComparisonPipeline:
             lift_dict.get("service", 0),
             lift_dict.get("price", 0),
         )
-        tone = _tone_by_sample(n_reviews)
-
-        async def _one_line(category: str, label: str, lift: float) -> str:
-            if lift <= 0:
-                return f"{label} 만족도는 평균과 비슷합니다."
-            pct = round(lift)
-            full_line = await self.llm_utils.generate_comparison_interpretation_async(
-                label, lift, tone, n_reviews
-            )
-            if full_line:
-                return full_line
-            # LLM 실패 시 lift 크기별 템플릿 폴백 (해석 포함)
-            if lift >= 30:
-                return f"{label} 만족도는 평균보다 약 {pct}% 높아, 차이가 큰 편입니다."
-            if lift < 10:
-                return f"{label} 만족도가 평균보다 {pct}% 높아, 차이는 크지 않은 편입니다."
-            return f"{label} 만족도는 평균보다 약 {pct}% 높아, 차이가 어느 정도 있습니다."
-
-        try:
-            if Config.COMPARISON_ASYNC:
-                comparison_display = list(await asyncio.gather(
-                    _one_line("service", "서비스", lift_dict.get("service", 0.0)),
-                    _one_line("price", "가격", lift_dict.get("price", 0.0)),
-                ))
-            else:
-                comparison_display = [
-                    await _one_line("service", "서비스", lift_dict.get("service", 0.0)),
-                    await _one_line("price", "가격", lift_dict.get("price", 0.0)),
-                ]
-        except Exception as e:
-            logger.warning("비교 해석 LLM 호출 실패, 템플릿 폴백: %s", e)
-            comparison_display = format_comparison_display(
-                lift_dict.get("service", 0.0),
-                lift_dict.get("price", 0.0),
-                n_reviews,
-            )
+        # 수치 기반 템플릿으로 비교 문구 생성 (LLM 미사용)
+        comparison_display = format_comparison_display(
+            lift_dict.get("service", 0.0),
+            lift_dict.get("price", 0.0),
+            n_reviews,
+        )
 
         comparisons = []
         for category, lift in lift_dict.items():
