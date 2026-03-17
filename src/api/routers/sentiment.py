@@ -20,6 +20,18 @@ from ...cache import acquire_lock
 
 router = APIRouter()
 
+def _get_restaurant_name_from_payload(analyzer: SentimentAnalyzer, restaurant_id: int) -> str | None:
+    try:
+        vs = getattr(analyzer, "vector_search", None)
+        if vs is None:
+            return None
+        reviews = vs.get_restaurant_reviews(str(restaurant_id))
+        if not reviews:
+            return None
+        return (reviews[0].get("restaurant_name") or None) if isinstance(reviews[0], dict) else None
+    except Exception:
+        return None
+
 
 @router.post("/analyze", response_model=SentimentAnalysisResponse)
 async def analyze_sentiment(
@@ -73,7 +85,7 @@ async def analyze_sentiment(
                     
                     return SentimentAnalysisResponse(
                         restaurant_id=request.restaurant_id,
-                        restaurant_name=getattr(request, "restaurant_name", None),
+                        restaurant_name=_get_restaurant_name_from_payload(analyzer, request.restaurant_id),
                         positive_count=0,
                         negative_count=0,
                         neutral_count=0,
@@ -101,7 +113,7 @@ async def analyze_sentiment(
             # TTFUR = t1 - t0 (요청 수신 시각 t0 → 응답 반환 직전 t1)
             metrics.record_llm_ttft(analysis_type="sentiment", ttft_ms=processing_time_ms)
 
-            result["restaurant_name"] = getattr(request, "restaurant_name", None)
+            result["restaurant_name"] = _get_restaurant_name_from_payload(analyzer, request.restaurant_id)
             return SentimentAnalysisResponse(**result)
     except RuntimeError as e:
         # 락 획득 실패 (중복 실행 방지)

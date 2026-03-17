@@ -231,35 +231,26 @@ class ComparisonPipeline:
 
     async def compare_batch(
         self,
-        restaurants: List[Dict[str, Any]],
-        all_average_data_path: Optional[str] = None,
+        restaurants: List[int],
     ) -> List[Dict[str, Any]]:
         """
         다수 음식점에 대한 비교 배치 처리.
         COMPARISON_BATCH_ASYNC=true면 asyncio.gather(병렬), false면 순차.
-        all_average_data_path: 전체 평균·표본 추출용 파일 경로 (예: tasteam_app_all_review_data.json).
         """
         if not restaurants:
             return []
 
-        def _get_restaurant_id(rd: Dict) -> int:
-            return int(rd.get("restaurant_id", 0))
-
         if Config.COMPARISON_BATCH_ASYNC:
             tasks = [
                 self.compare(
-                    restaurant_id=_get_restaurant_id(rd),
-                    restaurant_name=rd.get("restaurant_name") if isinstance(rd, dict) else None,
-                    all_average_data_path=all_average_data_path,
+                    restaurant_id=int(rid),
                 )
-                for rd in restaurants
+                for rid in restaurants
             ]
             return list(await asyncio.gather(*tasks))
 
         results: List[Dict[str, Any]] = []
-        for rd in restaurants:
-            rid = _get_restaurant_id(rd)
-            name = rd.get("restaurant_name") if isinstance(rd, dict) else None
-            result = await self.compare(restaurant_id=rid, restaurant_name=name, all_average_data_path=all_average_data_path)
+        for rid in restaurants:
+            result = await self.compare(restaurant_id=int(rid))
             results.append(result)
         return results
