@@ -49,6 +49,8 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger(__name__)
+BASE_PREFIX = "/ai"
+API_V1_PREFIX = f"{BASE_PREFIX}/api/v1"
 
 # --- 종료 시 로그 / 마지막 예외 출력 (down 원인 파악용) ---
 _last_exc_info = None
@@ -176,6 +178,9 @@ app = FastAPI(
     description="레스토랑 리뷰 감성 분석, 벡터 검색, LLM 기반 요약 API",
     version="1.0.0",
     lifespan=lifespan,
+    docs_url=f"{BASE_PREFIX}/docs",
+    redoc_url=f"{BASE_PREFIX}/redoc",
+    openapi_url=f"{BASE_PREFIX}/openapi.json",
 )
 
 # 요청 ID 미들웨어 (응답 헤더에도 포함)
@@ -258,25 +263,25 @@ app.add_middleware(
 )
 
 # 라우터 등록
-app.include_router(sentiment.router, prefix="/api/v1/sentiment", tags=["sentiment"])
-app.include_router(llm.router, prefix="/api/v1/llm", tags=["llm"])
-app.include_router(test.router, prefix="/api/v1/test", tags=["test"])
-app.include_router(batch.router, prefix="/api/v1", tags=["batch"])
-app.include_router(vector.router, prefix="/api/v1/vector", tags=["vector"])
+app.include_router(sentiment.router, prefix=f"{API_V1_PREFIX}/sentiment", tags=["sentiment"])
+app.include_router(llm.router, prefix=f"{API_V1_PREFIX}/llm", tags=["llm"])
+app.include_router(test.router, prefix=f"{API_V1_PREFIX}/test", tags=["test"])
+app.include_router(batch.router, prefix=API_V1_PREFIX, tags=["batch"])
+app.include_router(vector.router, prefix=f"{API_V1_PREFIX}/vector", tags=["vector"])
 
 
-@app.get("/", response_model=dict)
+@app.get(f"{BASE_PREFIX}/", response_model=dict)
 async def root():
     """루트 엔드포인트"""
     return {
         "message": "Review Sentiment Analysis API",
         "version": "1.0.0",
-        "docs": "/docs",
-        "health": "/health",
+        "docs": f"{BASE_PREFIX}/docs",
+        "health": f"{BASE_PREFIX}/health",
     }
 
 
-@app.get("/health", response_model=dict)
+@app.get(f"{BASE_PREFIX}/health", response_model=dict)
 async def health():
     """헬스 체크 엔드포인트"""
     return {
@@ -285,7 +290,7 @@ async def health():
     }
 
 
-@app.get("/ready")
+@app.get(f"{BASE_PREFIX}/ready")
 async def ready(request: Request):
     """Readiness: warm-up 완료 후 200, 미완료 시 503 (K8s readinessProbe 등)."""
     if getattr(request.app.state, "ready", False):
@@ -296,7 +301,7 @@ async def ready(request: Request):
 
 # Prometheus 메트릭 (요청 수, 지연 시간 등 자동 수집, 패키지 설치 시에만 노출)
 if _INSTRUMENTATOR_AVAILABLE:
-    Instrumentator().instrument(app).expose(app)
+    Instrumentator().instrument(app).expose(app, endpoint=f"{BASE_PREFIX}/metrics")
 else:
     import logging
     logging.getLogger(__name__).warning(

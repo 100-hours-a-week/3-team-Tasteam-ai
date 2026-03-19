@@ -180,6 +180,11 @@ def run(
     mask = df_out["restaurant_id"].apply(_not_empty)
     df_out = df_out.loc[mask].copy()
 
+    # restaurant_id를 정수로 캐스팅 (숫자면 int, 아니면 행 제거)
+    r = pd.to_numeric(df_out["restaurant_id"], errors="coerce")
+    df_out = df_out.loc[r.notna()].copy()
+    df_out["restaurant_id"] = r.loc[r.notna()].astype(np.int64)
+
     # user_id를 정수로 캐스팅 (숫자면 int, 아니면 빈 문자열 유지)
     u = pd.to_numeric(df_out["user_id"], errors="coerce")
     df_out["user_id"] = u.apply(lambda x: int(x) if pd.notna(x) else "")

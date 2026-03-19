@@ -227,7 +227,7 @@ def _build_category_result(result: Dict[str, Any], restaurant_id: int, restauran
 
 
 async def _process_one_restaurant_async(
-    restaurant_data: Dict[str, Any],
+    restaurant_id: int,
     request: SummaryBatchRequest,
     vector_search: VectorSearch,
     llm_utils: LLMUtils,
@@ -235,12 +235,14 @@ async def _process_one_restaurant_async(
     """한 레스토랑: recall seed(Kiwi 큐) → 검색(embedding 큐) → 요약(LLM 큐)."""
     from ...async_workers import run_via_queue
 
-    restaurant_id = restaurant_data.get("restaurant_id")
     seed_list, name_list = await run_via_queue(
         "kiwi", _get_seed_list_for_restaurant, vector_search, restaurant_id
     )
 
+    first_restaurant_name: Optional[str] = None
+
     async def do_one_search(seeds: List[str], name: str) -> tuple:
+        nonlocal first_restaurant_name
         query_seeds = seeds[:10] if len(seeds) > 10 else seeds
         query_text = " ".join(query_seeds)
         hits = await run_via_queue(
@@ -258,6 +260,8 @@ async def _process_one_restaurant_async(
             payload = hit.get("payload", {})
             content = payload.get("content", "")
             review_id = payload.get("review_id") or payload.get("id") or str(hit.get("id", ""))
+            if first_restaurant_name is None and payload.get("restaurant_name"):
+                first_restaurant_name = payload.get("restaurant_name")
             contents.append(content)
             data_list.append({"review_id": str(review_id), "snippet": content, "rank": rank})
         return name, contents, data_list
@@ -285,8 +289,7 @@ async def _process_one_restaurant_async(
         llm_utils,
         request.limit,
     )
-    restaurant_name = restaurant_data.get("restaurant_name")
-    return _build_category_result(result, restaurant_id, restaurant_name)
+    return _build_category_result(result, restaurant_id, first_restaurant_name)
 
 
 async def _batch_summarize_async(
@@ -295,18 +298,18 @@ async def _batch_summarize_async(
     llm_utils: LLMUtils,
 ) -> List[Dict[str, Any]]:
     """배치 요약: 음식점마다 Kiwi/embedding/LLM 큐(세마포 1)로 검색·요약."""
-    async def one(rd: Dict[str, Any]) -> Dict[str, Any]:
-        return await _process_one_restaurant_async(rd, request, vector_search, llm_utils)
+    async def one(rid: int) -> Dict[str, Any]:
+        return await _process_one_restaurant_async(rid, request, vector_search, llm_utils)
 
     if Config.SUMMARY_RESTAURANT_ASYNC:
         gathered = await asyncio.gather(
-            *(one(rd) for rd in request.restaurants), return_exceptions=True
+            *(one(rid) for rid in request.restaurants), return_exceptions=True
         )
         results = []
         for i, res in enumerate(gathered):
             if isinstance(res, Exception):
                 logger.error(
-                    f"배치 요약 restaurant_async: restaurant_id={request.restaurants[i].get('restaurant_id')} 실패: {res}",
+                    f"배치 요약 restaurant_async: restaurant_id={request.restaurants[i]} 실패: {res}",
                     exc_info=res,
                 )
                 raise HTTPException(status_code=500, detail=f"배치 요약 중 오류: {res!s}")
@@ -314,8 +317,8 @@ async def _batch_summarize_async(
         return results
     else:
         results = []
-        for rd in request.restaurants:
-            results.append(await one(rd))
+        for rid in request.restaurants:
+            results.append(await one(rid))
         return results
 
 
@@ -736,7 +739,7 @@ async def summarize_reviews_batch(
             # TTFUR = t1 - t0 (요청 수신 시각 t0 → 응답 반환 직전 t1)
             elapsed_ms = (time.time() - start_time) * 1000
             metrics.record_llm_ttft(analysis_type="summary", ttft_ms=elapsed_ms)
-            rid = request.restaurants[0].get("restaurant_id") if request.restaurants else None
+            rid = request.restaurants[0] if request.restaurants else None
             metrics.collect_metrics(
                 restaurant_id=rid,
                 analysis_type="summary",
@@ -749,13 +752,13 @@ async def summarize_reviews_batch(
         # search_async=false, restaurant_async=false: 레스토랑·aspect 완전 순차 (Kiwi/embedding/LLM 큐 사용)
         from ...async_workers import run_via_queue
         results = []
-        for restaurant_data in request.restaurants:
-            restaurant_id = restaurant_data.get("restaurant_id")
+        for restaurant_id in request.restaurants:
             seed_list, name_list = await run_via_queue(
                 "kiwi", _get_seed_list_for_restaurant, vector_search, restaurant_id
             )
             hits_dict = {}
             hits_data_dict = {}
+            summary_restaurant_name: Optional[str] = None
             for seeds, name in zip(seed_list, name_list):
                 query_seeds = seeds[:10] if len(seeds) > 10 else seeds
                 query_text = " ".join(query_seeds)
@@ -774,6 +777,8 @@ async def summarize_reviews_batch(
                     payload = hit.get("payload", {})
                     content = payload.get("content", "")
                     review_id = payload.get("review_id") or payload.get("id") or str(hit.get("id", ""))
+                    if summary_restaurant_name is None and payload.get("restaurant_name"):
+                        summary_restaurant_name = payload.get("restaurant_name")
                     hits_dict[name].append(content)
                     hits_data_dict[name].append({
                         "review_id": str(review_id),
@@ -792,12 +797,12 @@ async def summarize_reviews_batch(
                 llm_utils,
                 request.limit,
             )
-            results.append(_build_category_result(result, restaurant_id, restaurant_data.get("restaurant_name")))
+            results.append(_build_category_result(result, restaurant_id, summary_restaurant_name))
 
         # TTFUR = t1 - t0 (요청 수신 시각 t0 → 응답 반환 직전 t1)
         elapsed_ms = (time.time() - start_time) * 1000
         metrics.record_llm_ttft(analysis_type="summary", ttft_ms=elapsed_ms)
-        rid = request.restaurants[0].get("restaurant_id") if request.restaurants else None
+        rid = request.restaurants[0] if request.restaurants else None
         metrics.collect_metrics(
             restaurant_id=rid,
             analysis_type="summary",
@@ -809,7 +814,7 @@ async def summarize_reviews_batch(
             SummaryDisplayResponse(**r) for r in results
         ])
     except Exception as e:
-        rid = request.restaurants[0].get("restaurant_id") if request.restaurants else None
+        rid = request.restaurants[0] if request.restaurants else None
         metrics.collect_metrics(
             restaurant_id=rid,
             analysis_type="summary",
