@@ -373,7 +373,12 @@ def main() -> None:
     parser.add_argument("--val-path", type=Path, default=None, help="val.json (optional, OpenAI-only for eval)")
     parser.add_argument("--test-path", type=Path, default=None, help="test.json (optional, OpenAI-only for eval)")
     parser.add_argument("--openai-cap", type=int, default=500, help="OpenAI gold label cap for train")
-    parser.add_argument("--openai-only", action="store_true", help="Teacher를 4o mini로 단일화: 전부 OpenAI(gpt-4o-mini)로만 라벨링, Pod/teacher 미사용")
+    parser.add_argument(
+        "--openai-only",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="기본값 true. 전부 OpenAI(gpt-4o-mini)로 라벨링. --no-openai-only로 self-hosted 혼합 허용",
+    )
     parser.add_argument("--drop-evidence-output", action="store_true", help="라벨 output JSON에서 evidence 키를 제거 (0.5B no-evidence 트랙)")
     parser.add_argument("--output-dir", type=Path, required=True, help="Output directory")
     parser.add_argument(
