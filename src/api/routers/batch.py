@@ -7,8 +7,8 @@ GET /status/{job_id}: 작업 상태 조회
 
 import logging
 from fastapi import APIRouter, HTTPException, Depends
-from pydantic import BaseModel
-from typing import List, Dict, Any, Optional
+from pydantic import BaseModel, Field
+from typing import List, Optional
 
 from ...config import Config
 
@@ -17,10 +17,15 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/batch", tags=["batch"])
 
 
+class BatchRestaurantInput(BaseModel):
+    """배치 작업용 레스토랑 입력 (ID만)."""
+    restaurant_id: int = Field(..., description="레스토랑 ID")
+
+
 class BatchEnqueueRequest(BaseModel):
     """배치 enqueue 요청."""
-    job_type: str  # sentiment | summary | comparison | all
-    restaurants: List[Dict[str, Any]]
+    job_type: str = Field(..., description="sentiment | summary | comparison | all")
+    restaurants: List[BatchRestaurantInput] = Field(..., description="레스토랑 ID 리스트 (각 항목: restaurant_id)")
     limit: Optional[int] = 10  # summary용
     run_id: Optional[str] = None  # 오케스트레이터(Lambda) 추적용. 있으면 Redis run:{run_id}:total/done/fail 초기화 및 job meta에 저장
 
@@ -83,7 +88,11 @@ async def enqueue_batch(request: BatchEnqueueRequest):
             run_id_failure_callback,
         )
 
-        restaurants_json = json.dumps(request.restaurants, ensure_ascii=False)
+        # 직렬화: [{"restaurant_id": 1}, ...] (sentiment/summary 호환). comparison/all 쪽에서 id 리스트로 변환
+        restaurants_json = json.dumps(
+            [{"restaurant_id": r.restaurant_id} for r in request.restaurants],
+            ensure_ascii=False,
+        )
         queue = _get_queue()
         run_id = request.run_id
 
