@@ -18,6 +18,7 @@ import json
 import logging
 import random
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -375,10 +376,17 @@ def main() -> None:
     parser.add_argument("--openai-only", action="store_true", help="Teacher를 4o mini로 단일화: 전부 OpenAI(gpt-4o-mini)로만 라벨링, Pod/teacher 미사용")
     parser.add_argument("--drop-evidence-output", action="store_true", help="라벨 output JSON에서 evidence 키를 제거 (0.5B no-evidence 트랙)")
     parser.add_argument("--output-dir", type=Path, required=True, help="Output directory")
+    parser.add_argument(
+        "--no-run-timestamp",
+        action="store_true",
+        help="output-dir 아래 run timestamp(YYYYMMDD_HHMMSS) 하위 디렉토리를 만들지 않음",
+    )
     parser.add_argument("--seed", type=int, default=42, help="Random seed for sampling")
     args = parser.parse_args()
 
-    args.output_dir.mkdir(parents=True, exist_ok=True)
+    run_timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    run_output_dir = args.output_dir if args.no_run_timestamp else (args.output_dir / run_timestamp)
+    run_output_dir.mkdir(parents=True, exist_ok=True)
     results: dict[str, str] = {}
 
     with open(args.train_path, "r", encoding="utf-8") as f:
@@ -395,7 +403,7 @@ def main() -> None:
             args.seed,
             drop_evidence_output=args.drop_evidence_output,
         )
-        out_path = args.output_dir / "train_labeled_gold_only.json"
+        out_path = run_output_dir / "train_labeled_gold_only.json"
         with open(out_path, "w", encoding="utf-8") as f:
             json.dump({"samples": labeled_gold, "gold_indices": gold_indices, "meta": meta}, f, ensure_ascii=False, indent=2)
         results["labeled_path"] = str(out_path)
@@ -415,12 +423,17 @@ def main() -> None:
                     teacher_for_rest=False,
                     drop_evidence_output=args.drop_evidence_output,
                 )
-                p = args.output_dir / fn
+                p = run_output_dir / fn
                 with open(p, "w", encoding="utf-8") as f:
                     json.dump({"samples": lbl, "meta": {"openai_count": len(lbl)}}, f, ensure_ascii=False, indent=2)
                 results[name] = str(p)
                 logger.info("Wrote %s: %d samples", p, len(lbl))
-        out = {"labeled_path": results["labeled_path"], "meta": meta}
+        out = {
+            "labeled_path": results["labeled_path"],
+            "meta": meta,
+            "run_timestamp": run_timestamp,
+            "run_output_dir": str(run_output_dir),
+        }
         if "val_labeled_path" in results:
             out["val_labeled_path"] = results["val_labeled_path"]
         if "test_labeled_path" in results:
@@ -438,12 +451,17 @@ def main() -> None:
             args.seed,
             drop_evidence_output=args.drop_evidence_output,
         )
-        out_path = args.output_dir / "train_labeled.json"
+        out_path = run_output_dir / "train_labeled.json"
         with open(out_path, "w", encoding="utf-8") as f:
             json.dump({"samples": labeled, "meta": meta}, f, ensure_ascii=False, indent=2)
         results["labeled_path"] = str(out_path)
         logger.info("Wrote %s: %d samples", out_path, len(labeled))
-        out = {"labeled_path": results["labeled_path"], "meta": meta}
+        out = {
+            "labeled_path": results["labeled_path"],
+            "meta": meta,
+            "run_timestamp": run_timestamp,
+            "run_output_dir": str(run_output_dir),
+        }
         print(json.dumps(out, ensure_ascii=False))
         return
 
@@ -456,7 +474,7 @@ def main() -> None:
         teacher_for_rest=teacher_for_rest,
         drop_evidence_output=args.drop_evidence_output,
     )
-    out_path = args.output_dir / "train_labeled.json"
+    out_path = run_output_dir / "train_labeled.json"
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump({"samples": labeled, "meta": meta}, f, ensure_ascii=False, indent=2)
     results["labeled_path"] = str(out_path)
@@ -479,13 +497,18 @@ def main() -> None:
                 teacher_for_rest=False,
                 drop_evidence_output=args.drop_evidence_output,
             )
-            p = args.output_dir / fn
+            p = run_output_dir / fn
             with open(p, "w", encoding="utf-8") as f:
                 json.dump({"samples": lbl, "meta": {"openai_count": len(lbl)}}, f, ensure_ascii=False, indent=2)
             results[name] = str(p)
             logger.info("Wrote %s: %d samples", p, len(lbl))
 
-    out = {"labeled_path": results["labeled_path"], "meta": meta}
+    out = {
+        "labeled_path": results["labeled_path"],
+        "meta": meta,
+        "run_timestamp": run_timestamp,
+        "run_output_dir": str(run_output_dir),
+    }
     if "val_labeled_path" in results:
         out["val_labeled_path"] = results["val_labeled_path"]
     if "test_labeled_path" in results:
