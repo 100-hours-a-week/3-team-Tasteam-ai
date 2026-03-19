@@ -115,3 +115,36 @@
 - 효과 확인되면 그때 `scripts/label_for_distill.py`의 `SUMMARY_INSTRUCTIONS`까지 no-evidence 버전으로 분기해서 본격 운영
 
 원하면 다음 답변에서 **“파일별로 정확히 어떤 문자열/블록을 no-evidence로 바꿔야 하는지”** 체크리스트 형태로 바로 써드릴게요.
+
+---
+
+## 그러니까 현재 라벨에서 evidence만 제거한 것을 라벨로 쓰기보다는, 아예 teacher가 evidence도 생성하지 않게 해서 생성한 라벨을 쓰는게 좋다는거지?
+
+네, **맞아요. 그게 더 정석**입니다.
+
+질문하신 두 방법을 비교하면:
+
+1) **기존 라벨에서 evidence 키만 삭제**
+- 장점: 빠름, 저비용
+- 단점: 본문(summary/bullets)은 여전히 “evidence까지 같이 만들던 teacher 분포”의 결과라서,  
+  no-evidence 태스크에 완전히 최적화된 라벨은 아님
+
+2) **teacher가 처음부터 no-evidence 스키마로 생성**
+- 장점: 라벨 분포 자체가 목표 태스크(요약+bullets only)에 맞음  
+- 장점: teacher의 주의/용량이 evidence 인덱싱에 안 분산되어, 0.5B가 배워야 할 신호가 더 깔끔해짐
+- 단점: 라벨 재생성 비용
+
+그래서 **0.5B를 no-evidence 태스크로 제대로 올릴 목적이면 2번이 더 좋다**고 보는 게 맞습니다.
+
+---
+
+현재 코드 기준으로도 teacher 라벨 프롬프트가 evidence 생성을 강하게 요구하고 있어요 (`scripts/label_for_distill.py`의 `SUMMARY_INSTRUCTIONS`에 `evidence` 필수).  
+즉 no-evidence 목표라면, 말씀하신 대로 **teacher 생성 단계부터 evidence를 빼는 게 일관성 측면에서 더 낫습니다.**
+
+---
+
+실무 추천은 보통 이렇게 갑니다:
+- **1차 빠른 검증**: 기존 라벨 evidence 제거본으로 실험
+- **2차 본 실험/운영 후보**: teacher no-evidence로 라벨 재생성해서 재학습
+
+원하시면 다음으로, “teacher no-evidence 라벨링 프롬프트”를 현재 포맷에 맞춰 바로 제안해드릴게요.
