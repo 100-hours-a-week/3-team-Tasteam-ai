@@ -99,11 +99,18 @@ class SummaryRequest(BaseModel):
     limit: int = Field(10, ge=1, le=100, description="각 카테고리당 검색할 최대 리뷰 수")
 
 
+class EvidenceItem(BaseModel):
+    """요약 근거 항목 (review_id, snippet, rank)."""
+    review_id: str = Field(..., description="리뷰 ID")
+    snippet: str = Field(..., description="인용 문장")
+    rank: int = Field(..., description="검색 순위 (0-based)")
+
+
 class CategorySummary(BaseModel):
     """카테고리별 요약 모델"""
     summary: str = Field(..., description="카테고리 요약")
     bullets: List[str] = Field(default_factory=list, description="핵심 포인트 리스트")
-    evidence: List[Dict[str, Any]] = Field(default_factory=list, description="근거 리스트 (review_id, snippet, rank)")
+    evidence: List[EvidenceItem] = Field(default_factory=list, description="근거 리스트 (review_id, snippet, rank)")
 
 
 class SummaryDisplayResponse(BaseModel):
@@ -116,9 +123,9 @@ class SummaryDisplayResponse(BaseModel):
 
 class SummaryBatchRequest(BaseModel):
     """배치 리뷰 요약 요청 모델. 하이브리드 검색 쿼리는 기본 시드만 사용. limit는 전체 레스토랑 공통."""
-    restaurants: List[Dict[str, Any]] = Field(
+    restaurants: List[int] = Field(
         ...,
-        description="레스토랑 데이터 리스트, 각 항목: restaurant_id(필수)."
+        description="레스토랑 ID 리스트"
     )
     limit: int = Field(10, ge=1, le=100, description="각 카테고리당 검색할 최대 리뷰 수 (전체 레스토랑 공통)")
 
@@ -141,6 +148,12 @@ class ComparisonDetail(BaseModel):
     lift_percentage: float = Field(..., description="Lift 퍼센트: (단일−전체)/전체×100")
 
 
+class CategoryLift(BaseModel):
+    """카테고리별 lift 퍼센트 (service, price). 통계 근거로 LLM 설명에 사용."""
+    service: float = Field(0.0, description="서비스 만족 lift (%)")
+    price: float = Field(0.0, description="가격 만족 lift (%)")
+
+
 class ComparisonResponse(BaseModel):
     """다른 음식점과의 비교 응답 모델"""
     restaurant_id: int = Field(..., description="레스토랑 ID")
@@ -148,7 +161,7 @@ class ComparisonResponse(BaseModel):
     comparisons: List[ComparisonDetail] = Field(..., description="비교 항목 리스트")
     total_candidates: int = Field(..., description="근거 후보 총 개수")
     validated_count: int = Field(..., description="검증 통과한 비교 항목 개수")
-    category_lift: Optional[Dict[str, float]] = Field(
+    category_lift: Optional[CategoryLift] = Field(
         None,
         description="카테고리별 lift 퍼센트 (service, price). 통계 근거로 LLM 설명에 사용됨.",
     )

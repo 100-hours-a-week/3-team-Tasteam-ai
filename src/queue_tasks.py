@@ -111,26 +111,28 @@ def run_summary_batch_job(restaurants_json: str, limit: int = 10, run_id: Option
     """요약 배치. run_id 있으면 완료 시 run:{run_id}:done INCR."""
     from .api.dependencies import get_qdrant_client, get_vector_search, get_llm_utils
     from .api.routers.llm import _batch_summarize_async
-    from .aspect_seeds import DEFAULT_SERVICE_SEEDS, DEFAULT_PRICE_SEEDS, DEFAULT_FOOD_SEEDS
     from .models import SummaryBatchRequest
 
     if not run_id:
         run_id = f"offline-{datetime.now().strftime('%Y%m%d-%H%M')}-{uuid.uuid4().hex[:8]}"
     restaurants_data = json.loads(restaurants_json)
+    # 입력 호환: [1,2,3] 또는 [{"restaurant_id": 1}, ...]
+    if restaurants_data and isinstance(restaurants_data, list) and isinstance(restaurants_data[0], dict):
+        restaurant_ids = [r.get("restaurant_id") for r in restaurants_data if r.get("restaurant_id") is not None]
+    else:
+        restaurant_ids = [int(x) for x in (restaurants_data or [])]
     client = get_qdrant_client()
     vs = get_vector_search(qdrant_client=client)
     llm = get_llm_utils()
-    req = SummaryBatchRequest(restaurants=restaurants_data, limit=limit)
-    seed_list = [DEFAULT_SERVICE_SEEDS, DEFAULT_PRICE_SEEDS, DEFAULT_FOOD_SEEDS]
-    name_list = ["service", "price", "food"]
+    req = SummaryBatchRequest(restaurants=restaurant_ids, limit=limit)
 
     async def _run():
-        return await _batch_summarize_async(req, vs, llm, seed_list, name_list)
+        return await _batch_summarize_async(req, vs, llm)
 
     results = asyncio.run(_run())
     _run_id_incr_done(run_id)
     meta = _make_offline_meta(run_id)
-    meta["restaurant_count"] = len(restaurants_data)
+    meta["restaurant_count"] = len(restaurant_ids)
     return json.dumps(
         {"meta": meta, "results": [_to_serializable(r) for r in results]},
         ensure_ascii=False,
