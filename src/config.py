@@ -130,6 +130,8 @@ class _InferenceConfig:
     USE_DISTILL_SUMMARY: bool = os.getenv("USE_DISTILL_SUMMARY", "true").lower() == "true"
     DISTILL_ADAPTER_PATH: Optional[str] = (os.getenv("DISTILL_ADAPTER_PATH", "distill_pipeline_output/artifacts/g4nca6b2/adapter") or "").strip() or None
     DISTILL_BASE_MODEL: str = os.getenv("DISTILL_BASE_MODEL", "Qwen/Qwen2.5-0.5B-Instruct")
+    # Distill summary 출력에서 evidence 키를 제거하는 실험 모드 (0.5B 운영 트랙용)
+    DISTILL_NO_EVIDENCE_OUTPUT: bool = os.getenv("DISTILL_NO_EVIDENCE_OUTPUT", "false").lower() == "true"
 
 
 # --- Retrieval (Qdrant, embedding, top_k, rerank 등) ---

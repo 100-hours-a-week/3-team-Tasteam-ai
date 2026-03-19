@@ -150,6 +150,17 @@ def _extract_json(text: str) -> dict | None:
     return None
 
 
+def _drop_evidence_fields(raw: dict) -> dict:
+    """라벨 output에서 카테고리별 evidence 키 제거."""
+    if not isinstance(raw, dict):
+        return raw
+    for cat in ("service", "price", "food"):
+        cell = raw.get(cat)
+        if isinstance(cell, dict):
+            cell.pop("evidence", None)
+    return raw
+
+
 def _quality_filter(raw: dict, payload: dict) -> tuple[bool, str]:
     """
     품질 필터: JSON 구조, 길이, 금지 표현, 근거 휴리스틱.
@@ -189,6 +200,7 @@ def _label_samples(
     openai_cap: int,
     seed: int,
     teacher_for_rest: bool,
+    drop_evidence_output: bool = False,
 ) -> tuple[list[dict], dict]:
     """한 split 라벨링. teacher_for_rest=False면 전부 OpenAI."""
     rng = random.Random(seed)
@@ -214,6 +226,8 @@ def _label_samples(
         if not ok:
             meta["filter_drop_count"] += 1
             continue
+        if drop_evidence_output:
+            parsed = _drop_evidence_fields(parsed)
         instruction = json.dumps(payload, ensure_ascii=False)
         output = json.dumps(parsed, ensure_ascii=False)
         labeled.append({
@@ -236,6 +250,7 @@ def _label_openai_first_only(
     samples: list[dict],
     openai_cap: int,
     seed: int,
+    drop_evidence_output: bool = False,
 ) -> tuple[list[dict], list[int], dict]:
     """
     OpenAI 골드만 먼저 라벨링 (Pod 없이 호출용).
@@ -267,6 +282,8 @@ def _label_openai_first_only(
         if not ok:
             meta["filter_drop_count"] += 1
             continue
+        if drop_evidence_output:
+            parsed = _drop_evidence_fields(parsed)
         instruction = json.dumps(payload, ensure_ascii=False)
         output = json.dumps(parsed, ensure_ascii=False)
         labeled.append({
@@ -288,6 +305,7 @@ def _label_teacher_rest_and_merge(
     samples: list[dict],
     gold_labeled_path: Path,
     seed: int,
+    drop_evidence_output: bool = False,
 ) -> tuple[list[dict], dict]:
     """
     골드 파일을 불러와 나머지만 teacher로 라벨링 후 병합.
@@ -328,6 +346,8 @@ def _label_teacher_rest_and_merge(
         if not ok:
             meta["filter_drop_count"] += 1
             continue
+        if drop_evidence_output:
+            parsed = _drop_evidence_fields(parsed)
         instruction = json.dumps(payload, ensure_ascii=False)
         output = json.dumps(parsed, ensure_ascii=False)
         result.append({
@@ -353,6 +373,7 @@ def main() -> None:
     parser.add_argument("--test-path", type=Path, default=None, help="test.json (optional, OpenAI-only for eval)")
     parser.add_argument("--openai-cap", type=int, default=500, help="OpenAI gold label cap for train")
     parser.add_argument("--openai-only", action="store_true", help="Teacher를 4o mini로 단일화: 전부 OpenAI(gpt-4o-mini)로만 라벨링, Pod/teacher 미사용")
+    parser.add_argument("--drop-evidence-output", action="store_true", help="라벨 output JSON에서 evidence 키를 제거 (0.5B no-evidence 트랙)")
     parser.add_argument("--output-dir", type=Path, required=True, help="Output directory")
     parser.add_argument("--seed", type=int, default=42, help="Random seed for sampling")
     args = parser.parse_args()
@@ -368,7 +389,12 @@ def main() -> None:
         sys.exit(1)
 
     if args.phase == "openai_first":
-        labeled_gold, gold_indices, meta = _label_openai_first_only(train_samples, args.openai_cap, args.seed)
+        labeled_gold, gold_indices, meta = _label_openai_first_only(
+            train_samples,
+            args.openai_cap,
+            args.seed,
+            drop_evidence_output=args.drop_evidence_output,
+        )
         out_path = args.output_dir / "train_labeled_gold_only.json"
         with open(out_path, "w", encoding="utf-8") as f:
             json.dump({"samples": labeled_gold, "gold_indices": gold_indices, "meta": meta}, f, ensure_ascii=False, indent=2)
@@ -382,7 +408,13 @@ def main() -> None:
                 with open(path, "r", encoding="utf-8") as f:
                     data = json.load(f)
                 samples = data.get("samples", [])
-                lbl, _ = _label_samples(samples, openai_cap=999999, seed=args.seed, teacher_for_rest=False)
+                lbl, _ = _label_samples(
+                    samples,
+                    openai_cap=999999,
+                    seed=args.seed,
+                    teacher_for_rest=False,
+                    drop_evidence_output=args.drop_evidence_output,
+                )
                 p = args.output_dir / fn
                 with open(p, "w", encoding="utf-8") as f:
                     json.dump({"samples": lbl, "meta": {"openai_count": len(lbl)}}, f, ensure_ascii=False, indent=2)
@@ -400,7 +432,12 @@ def main() -> None:
         if not args.gold_labeled_path or not args.gold_labeled_path.exists():
             logger.error("teacher_rest requires --gold-labeled-path")
             sys.exit(1)
-        labeled, meta = _label_teacher_rest_and_merge(train_samples, args.gold_labeled_path, args.seed)
+        labeled, meta = _label_teacher_rest_and_merge(
+            train_samples,
+            args.gold_labeled_path,
+            args.seed,
+            drop_evidence_output=args.drop_evidence_output,
+        )
         out_path = args.output_dir / "train_labeled.json"
         with open(out_path, "w", encoding="utf-8") as f:
             json.dump({"samples": labeled, "meta": meta}, f, ensure_ascii=False, indent=2)
@@ -412,7 +449,13 @@ def main() -> None:
 
     teacher_for_rest = not getattr(args, "openai_only", False)
     openai_cap = 999999 if getattr(args, "openai_only", False) else args.openai_cap
-    labeled, meta = _label_samples(train_samples, openai_cap, args.seed, teacher_for_rest=teacher_for_rest)
+    labeled, meta = _label_samples(
+        train_samples,
+        openai_cap,
+        args.seed,
+        teacher_for_rest=teacher_for_rest,
+        drop_evidence_output=args.drop_evidence_output,
+    )
     out_path = args.output_dir / "train_labeled.json"
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump({"samples": labeled, "meta": meta}, f, ensure_ascii=False, indent=2)
@@ -429,7 +472,13 @@ def main() -> None:
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
             samples = data.get("samples", [])
-            lbl, _ = _label_samples(samples, openai_cap=999999, seed=args.seed, teacher_for_rest=False)
+            lbl, _ = _label_samples(
+                samples,
+                openai_cap=999999,
+                seed=args.seed,
+                teacher_for_rest=False,
+                drop_evidence_output=args.drop_evidence_output,
+            )
             p = args.output_dir / fn
             with open(p, "w", encoding="utf-8") as f:
                 json.dump({"samples": lbl, "meta": {"openai_count": len(lbl)}}, f, ensure_ascii=False, indent=2)

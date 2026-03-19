@@ -184,12 +184,37 @@ def postprocess_prediction(pred_json_str: str, instruction: str) -> str:
     return json.dumps(pred, ensure_ascii=False)
 
 
+def _drop_evidence_fields(pred_json_str: str) -> str:
+    """카테고리별 evidence 키를 제거한 JSON 문자열 반환."""
+    if not pred_json_str or not pred_json_str.strip():
+        return pred_json_str
+    try:
+        pred = json.loads(pred_json_str)
+    except json.JSONDecodeError:
+        return pred_json_str
+    if not isinstance(pred, dict):
+        return pred_json_str
+
+    for cat in ("service", "price", "food"):
+        cell = pred.get(cat)
+        if isinstance(cell, dict):
+            cell.pop("evidence", None)
+            if "summary" not in cell:
+                cell["summary"] = ""
+            if "bullets" not in cell or not isinstance(cell.get("bullets"), list):
+                cell["bullets"] = []
+        else:
+            pred[cat] = {"summary": "", "bullets": []}
+    return json.dumps(pred, ensure_ascii=False)
+
+
 def generate_one(
     model: Any,
     tokenizer: Any,
     instruction: str,
     max_new_tokens: int = 1024,
     postprocess: bool = True,
+    no_evidence_output: bool = False,
 ) -> str:
     """system + few-shot + instruction으로 추론 후 JSON 추출. postprocess=True면 후처리까지 적용."""
     messages = [
@@ -214,8 +239,12 @@ def generate_one(
     raw = generated.strip()
     extracted = extract_json_for_rouge(raw)
     if postprocess:
-        return postprocess_prediction(extracted, instruction)
-    return extracted
+        out = postprocess_prediction(extracted, instruction)
+    else:
+        out = extracted
+    if no_evidence_output:
+        return _drop_evidence_fields(out)
+    return out
 
 
 def generate_summary_from_payload(
@@ -223,13 +252,20 @@ def generate_summary_from_payload(
     model: Any,
     tokenizer: Any,
     max_new_tokens: int = 1024,
+    no_evidence_output: bool = False,
 ) -> Dict[str, Any]:
     """
     payload(service/price/food 리스트)로 instruction 문자열을 만든 뒤 추론·후처리하여
     summary 구조(dict)로 반환. API summary 파이프라인에서 사용.
     """
     instruction = json.dumps(payload, ensure_ascii=False)
-    pred_str = generate_one(model, tokenizer, instruction, max_new_tokens=max_new_tokens)
+    pred_str = generate_one(
+        model,
+        tokenizer,
+        instruction,
+        max_new_tokens=max_new_tokens,
+        no_evidence_output=no_evidence_output,
+    )
     out = json.loads(pred_str)
     return out
 
@@ -257,5 +293,11 @@ def get_distill_model():
 
 def generate_summary_sync(payload: Dict[str, List[str]]) -> Dict[str, Any]:
     """동기: payload → summary dict. USE_DISTILL_SUMMARY일 때만 사용."""
+    from .config import Config
     model, tokenizer = get_distill_model()
-    return generate_summary_from_payload(payload, model, tokenizer)
+    return generate_summary_from_payload(
+        payload,
+        model,
+        tokenizer,
+        no_evidence_output=getattr(Config, "DISTILL_NO_EVIDENCE_OUTPUT", False),
+    )
