@@ -145,6 +145,11 @@ class _RetrievalConfig:
     DENSE_PREFETCH_LIMIT: int = int(os.getenv("DENSE_PREFETCH_LIMIT", "200"))
     SPARSE_PREFETCH_LIMIT: int = int(os.getenv("SPARSE_PREFETCH_LIMIT", "300"))
     FALLBACK_MIN_SCORE: float = float(os.getenv("FALLBACK_MIN_SCORE", "0.2"))
+    # Summary evidence post-processing (bullet -> vector search top1)
+    SUMMARY_EVIDENCE_POSTMAP_ENABLED: bool = os.getenv("SUMMARY_EVIDENCE_POSTMAP_ENABLED", "true").lower() == "true"
+    SUMMARY_EVIDENCE_POSTMAP_TOPK: int = int(os.getenv("SUMMARY_EVIDENCE_POSTMAP_TOPK", "10"))
+    SUMMARY_EVIDENCE_POSTMAP_MIN_SCORE: float = float(os.getenv("SUMMARY_EVIDENCE_POSTMAP_MIN_SCORE", "0.35"))
+    SUMMARY_EVIDENCE_POSTMAP_MAX_REUSE_PER_REVIEW: int = int(os.getenv("SUMMARY_EVIDENCE_POSTMAP_MAX_REUSE_PER_REVIEW", "1"))
 
     ENABLE_SENTIMENT_SAMPLING: bool = os.getenv("ENABLE_SENTIMENT_SAMPLING", "false").lower() == "true"
     SENTIMENT_RECENT_TOP_K: int = int(os.getenv("SENTIMENT_RECENT_TOP_K", "100"))
