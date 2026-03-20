@@ -16,12 +16,14 @@ from ..llm_utils import LLMUtils
 from ..metrics_collector import MetricsCollector
 from ..cpu_monitor import get_or_create_benchmark_cpu_monitor
 from ..gpu_monitor import get_or_create_benchmark_gpu_monitor
+from ..retrieval_client import RetrievalServiceClient
 
 # 의존성 싱글톤 (매 요청 인스턴스 생성 방지 — Qdrant는 스레드 안전 싱글톤, 나머지는 모듈 캐시)
 _qdrant_client_instance: Optional[QdrantClient] = None
 _qdrant_client_lock = threading.Lock()
 _vector_search_singleton: Optional[VectorSearch] = None
 _vector_search_lock = threading.Lock()
+_retrieval_client_singleton: Optional[RetrievalServiceClient] = None
 _sentiment_analyzer_singleton: Optional[SentimentAnalyzer] = None
 _sentiment_analyzer_lock = threading.Lock()
 _default_metrics_collector: Optional[MetricsCollector] = None
@@ -149,7 +151,7 @@ def get_debug_mode(
 
 def get_vector_search(
     qdrant_client: QdrantClient = Depends(get_qdrant_client),
-) -> VectorSearch:
+) -> object:
     """벡터 검색 의존성 (싱글톤 + DCL — 동시 초기화/캐시 race 방지)"""
     global _vector_search_singleton
     if _vector_search_singleton is not None:
@@ -157,6 +159,13 @@ def get_vector_search(
     with _vector_search_lock:
         if _vector_search_singleton is not None:
             return _vector_search_singleton
+        if Config.USE_RETRIEVAL_SERVICE and Config.RETRIEVAL_SERVICE_URL:
+            global _retrieval_client_singleton
+            if _retrieval_client_singleton is None:
+                _retrieval_client_singleton = RetrievalServiceClient(
+                    base_url=Config.RETRIEVAL_SERVICE_URL
+                )
+            return _retrieval_client_singleton
         _vector_search_singleton = VectorSearch(
             qdrant_client=qdrant_client,
             collection_name=Config.COLLECTION_NAME,

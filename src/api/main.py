@@ -116,8 +116,12 @@ def _warm_up_services():
     try:
         client = get_qdrant_client()
         vector_search = get_vector_search(client)
-        list(vector_search.encoder.encode(["warmup"]))
-        logger.info("VectorSearch(임베딩) warm-up 완료")
+        if hasattr(vector_search, "encoder"):
+            list(vector_search.encoder.encode(["warmup"]))
+            logger.info("VectorSearch(임베딩) warm-up 완료")
+        elif hasattr(vector_search, "health"):
+            vector_search.health()
+            logger.info("Retrieval 서비스 연결 warm-up 완료")
         analyzer = get_sentiment_analyzer(vector_search)
         pl = analyzer._get_sentiment_pipeline()
         if pl is not None:
