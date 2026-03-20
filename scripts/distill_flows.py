@@ -23,6 +23,7 @@ Flow (docs/easydistill/distill_by_prefect.md):
   python scripts/distill_flows.py labeling_pod_only --train-path .../train.json --gold-path .../train_labeled_gold_only.json  # OpenAI 생략, Pod teacher만
   python scripts/distill_flows.py train_student_with_pod --labeled-path .../train_labeled.json --output-dir ...
   python scripts/distill_flows.py run_sweep [--sweep-id <sweep_id>] --labeled-path .../train_labeled.json [--out-dir ...]
+  python scripts/distill_flows.py sweep_pod_best_adapter --labeled-path .../train_labeled.json [--sweep-id ...]  # Pod sweep만 실행 후 best adapter 다운로드
   python scripts/distill_flows.py train_and_evaluate --labeled-path .../train_labeled.json [--val-labeled-path ...] [--test-labeled-path ...]  # 학습(Pod) → 평가만
   python scripts/distill_flows.py sweep_eval_merge --labeled-path .../train_labeled.json [--sweep-id ...]  # Pod sweep → evaluate → merge (build_dataset/labeling 생략)
   python scripts/distill_flows.py upload_labeled_artifact --labeled-path .../train_labeled.json  # 기존 labeled만 wandb artifact로 업로드
@@ -1278,6 +1279,51 @@ def run_sweep_and_evaluate_flow(
     return {"sweep_id": sweep_id, "best_adapter_path": best_adapter, "evaluate": ev}
 
 
+@flow(name="run_sweep_pod_best_adapter_flow", log_prints=True)
+def run_sweep_pod_best_adapter_flow(
+    labeled_path: str,
+    sweep_id: str | None = None,
+    sweep_yaml: str | Path | None = None,
+    output_dir: str | Path | None = None,
+    num_pods: int = 2,
+) -> dict:
+    """Pod sweep 실행 후 eval_loss 기준 best adapter artifact만 로컬 다운로드."""
+    if sweep_id is None:
+        ensure_wandb_project_task(project=DEFAULT_WANDB_PROJECT, entity=os.environ.get("WANDB_ENTITY"))
+        yaml_path = sweep_yaml if sweep_yaml is not None else DEFAULT_SWEEP_YAML
+        sweep_id = register_sweep_task(yaml_path)
+    out_dir = str(output_dir) if output_dir else str(_PROJECT_ROOT / "distill_pipeline_output")
+    sweep_complete = check_sweep_complete_task(sweep_id)
+    if not sweep_complete:
+        if num_pods > 1:
+            # 멀티 Pod: 라벨 한 번만 업로드 후 Pod 생성 순차화
+            upload_labeled_to_volume_for_sweep_task(labeled_path)
+            _SWEEP_POD_STAGGER_SEC = 15
+            futures = []
+            for i in range(num_pods):
+                if i > 0:
+                    time.sleep(_SWEEP_POD_STAGGER_SEC)
+                futures.append(
+                    run_sweep_on_pod_task.submit(
+                        sweep_id=sweep_id,
+                        labeled_path=labeled_path,
+                        output_dir=out_dir,
+                        pod_index=i,
+                        skip_upload=True,
+                    )
+                )
+            for f in futures:
+                f.result()
+        else:
+            run_sweep_on_pod_task(sweep_id=sweep_id, labeled_path=labeled_path, output_dir=out_dir)
+    best_adapter = get_best_adapter_from_artifact_task(
+        sweep_id=sweep_id,
+        download_dir=out_dir,
+        metric_name="eval_loss",
+    )
+    return {"sweep_id": sweep_id, "best_adapter_path": best_adapter}
+
+
 @task(name="evaluate-task", log_prints=True)
 def evaluate_task(
     adapter_path: str,
@@ -2314,8 +2360,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Prefect flows for summary KD pipeline (distill_by_prefect.md)")
     parser.add_argument(
         "flow",
-        choices=["build_dataset", "labeling_openai_only", "labeling_with_pod", "labeling_pod_only", "train_student_with_pod", "run_sweep", "train_and_evaluate", "sweep_eval_merge", "evaluate", "evaluate_on_pod", "evaluate_on_pod_download_only", "download_eval_artifact", "download_eval_from_volume", "merge_for_serving", "merge_for_serving_with_pod", "upload_labeled_artifact", "upload_dataset_artifact", "upload_eval_artifact", "all", "all_sweep"],
-        help="Flow to run. evaluate_on_pod: Pod 평가 후 다운로드·judge·kd_sft·artifact. evaluate_on_pod_download_only: Pod 평가 후 다운로드만.",
+        choices=["build_dataset", "labeling_openai_only", "labeling_with_pod", "labeling_pod_only", "train_student_with_pod", "run_sweep", "sweep_pod_best_adapter", "train_and_evaluate", "sweep_eval_merge", "evaluate", "evaluate_on_pod", "evaluate_on_pod_download_only", "download_eval_artifact", "download_eval_from_volume", "merge_for_serving", "merge_for_serving_with_pod", "upload_labeled_artifact", "upload_dataset_artifact", "upload_eval_artifact", "all", "all_sweep"],
+        help="Flow to run. sweep_pod_best_adapter: Pod sweep 후 best adapter 다운로드만. evaluate_on_pod: Pod 평가 후 다운로드·judge·kd_sft·artifact. evaluate_on_pod_download_only: Pod 평가 후 다운로드만.",
     )
     parser.add_argument("--gold-path", type=Path, default=None, help="train_labeled_gold_only.json 경로 (labeling_pod_only 필수)")
     parser.add_argument("--sweep-id", type=str, default=None, help="wandb sweep id (optional; 없으면 --sweep-yaml으로 flow 내부에서 등록)")
@@ -2347,7 +2393,7 @@ def main() -> None:
     parser.add_argument("--public-ip-wait-timeout", type=int, default=180, help="publicIp 할당 대기 초 (labeling_with_pod, labeling_pod_only)")
     parser.add_argument("--vllm-ready-timeout", type=int, default=180, help="vLLM /v1/models 준비 대기 초 (labeling_with_pod, labeling_pod_only)")
     parser.add_argument("--student-model", type=str, default="Qwen/Qwen2.5-0.5B-Instruct", help="Student model")
-    parser.add_argument("--num-pods", type=int, default=2, help="sweep 시 동시 Pod 개수 (sweep_eval_merge, all_sweep; 기본 2)")
+    parser.add_argument("--num-pods", type=int, default=2, help="sweep 시 동시 Pod 개수 (sweep_pod_best_adapter, sweep_eval_merge, all_sweep; 기본 2)")
     args = parser.parse_args()
 
     out_dir = Path(args.out_dir or _PROJECT_ROOT / "distill_pipeline_output")
@@ -2450,6 +2496,18 @@ def main() -> None:
             sweep_yaml=sweep_yaml,
             labeled_path=str(args.labeled_path),
             output_dir=out_dir,
+        )
+        print("Result:", result)
+    elif args.flow == "sweep_pod_best_adapter":
+        if not args.labeled_path:
+            parser.error("sweep_pod_best_adapter requires --labeled-path")
+        sweep_yaml = args.sweep_yaml if args.sweep_yaml is not None else DEFAULT_SWEEP_YAML
+        result = run_sweep_pod_best_adapter_flow(
+            labeled_path=str(args.labeled_path),
+            sweep_id=args.sweep_id,
+            sweep_yaml=sweep_yaml,
+            output_dir=out_dir,
+            num_pods=max(1, int(args.num_pods)),
         )
         print("Result:", result)
     elif args.flow == "train_and_evaluate":
