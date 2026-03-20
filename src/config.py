@@ -136,6 +136,9 @@ class _InferenceConfig:
 class _RetrievalConfig:
     """검색/검열: Qdrant URL, collection, top_k, rerank_k, aspect seed, 벡터 on_disk. 하이브리드 인자는 Summary·Vector API 공통."""
     QDRANT_URL: Optional[str] = os.getenv("QDRANT_URL", "./qdrant_data")
+    # Retrieval 서비스 분리 토글: true이고 URL이 있으면 메인 API는 HTTP 클라이언트 사용
+    USE_RETRIEVAL_SERVICE: bool = os.getenv("USE_RETRIEVAL_SERVICE", "false").lower() == "true"
+    RETRIEVAL_SERVICE_URL: Optional[str] = os.getenv("RETRIEVAL_SERVICE_URL", "").strip() or None
     QDRANT_VECTORS_ON_DISK: bool = os.getenv("QDRANT_VECTORS_ON_DISK", "false").lower() == "true"
     COLLECTION_NAME: str = os.getenv("COLLECTION_NAME", DEFAULT_COLLECTION_NAME)
     # 임베딩/HF 캐시: None이면 라이브러리 기본(/tmp 등). 설정 시 공유 볼륨 권장 (재시작·동시성 안정)

@@ -28,6 +28,14 @@ async def upload_vector_data(
     - **restaurants**: 레스토랑 리스트 (id 선택, name, reviews; 선택사항)
     """
     try:
+        # retrieval-service 모드: 원격 서비스에 업로드 위임
+        if hasattr(vector_search, "_post") and hasattr(vector_search, "base_url"):
+            resp = vector_search._post(
+                "/api/v1/vector/upload/direct",
+                request.model_dump(mode="json"),
+            )
+            return VectorUploadResponse(**resp)
+
         data = {
             "reviews": [r.model_dump() for r in request.reviews],
             "restaurants": [r.model_dump() for r in (request.restaurants or [])],

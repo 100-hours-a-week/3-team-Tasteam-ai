@@ -15,6 +15,8 @@ from fastapi import FastAPI, HTTPException
 from qdrant_client import QdrantClient
 
 from src.config import Config
+from pydantic import BaseModel, Field
+
 from src.models import (
     HealthResponse,
     VectorSearchRequest,
@@ -56,11 +58,31 @@ def get_vector_search() -> VectorSearch:
 
 
 def _to_review_model(payload: Dict[str, Any]) -> ReviewModel:
+    def _to_int(v: Any) -> int:
+        try:
+            return int(v)
+        except Exception:
+            return 0
+
     return ReviewModel(
-        id=int(payload.get("id") or payload.get("review_id") or 0),
-        restaurant_id=int(payload.get("restaurant_id") or 0),
+        id=_to_int(payload.get("id") or payload.get("review_id") or 0),
+        restaurant_id=_to_int(payload.get("restaurant_id") or 0),
         content=payload.get("content") or payload.get("review") or "",
     )
+
+
+class DenseSearchRequest(BaseModel):
+    query_text: str
+    restaurant_id: Optional[int] = None
+    limit: int = Field(20, ge=1, le=200)
+    min_score: float = Field(0.2, ge=0.0, le=1.0)
+    food_category_id: Optional[int] = None
+
+
+class UpsertRestaurantVectorRequest(BaseModel):
+    restaurant_id: int
+    restaurant_name: str
+    food_category_id: Optional[int] = None
 
 
 @app.get("/health", response_model=HealthResponse)
@@ -93,6 +115,11 @@ async def upload_vector_data(request: VectorUploadRequest) -> VectorUploadRespon
         raise HTTPException(status_code=500, detail=f"벡터 업로드 실패: {e}")
 
 
+@app.post("/api/v1/vector/upload/direct", response_model=VectorUploadResponse)
+async def upload_vector_data_direct(request: VectorUploadRequest) -> VectorUploadResponse:
+    return await upload_vector_data(request)
+
+
 @app.post("/api/v1/vector/search/hybrid", response_model=VectorSearchResponse)
 async def search_hybrid(request: VectorSearchRequest) -> VectorSearchResponse:
     try:
@@ -119,6 +146,31 @@ async def search_hybrid(request: VectorSearchRequest) -> VectorSearchResponse:
         raise HTTPException(status_code=500, detail=f"하이브리드 검색 실패: {e}")
 
 
+@app.post("/api/v1/vector/search/dense", response_model=VectorSearchResponse)
+async def search_dense(request: DenseSearchRequest) -> VectorSearchResponse:
+    try:
+        vector_search = get_vector_search()
+        hits = vector_search._query_dense_only(
+            query_text=request.query_text,
+            restaurant_id=request.restaurant_id,
+            limit=request.limit,
+            min_score=request.min_score,
+            food_category_id=request.food_category_id,
+        )
+        results: List[VectorSearchResult] = []
+        for hit in hits:
+            payload = hit.get("payload", {}) or {}
+            results.append(
+                VectorSearchResult(
+                    review=_to_review_model(payload),
+                    score=float(hit.get("score", 0.0)),
+                )
+            )
+        return VectorSearchResponse(results=results, total=len(results))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Dense 검색 실패: {e}")
+
+
 @app.get("/api/v1/vector/reviews/{restaurant_id}")
 async def get_restaurant_reviews(restaurant_id: int, limit: int = 10000) -> Dict[str, Any]:
     try:
@@ -139,6 +191,16 @@ async def get_recent_restaurant_reviews(restaurant_id: int, limit: int = 100) ->
         raise HTTPException(status_code=500, detail=f"최근 리뷰 조회 실패: {e}")
 
 
+@app.get("/api/v1/vector/reviews/all")
+async def get_all_reviews(limit: int = 5000) -> Dict[str, Any]:
+    try:
+        vector_search = get_vector_search()
+        reviews = vector_search.get_all_reviews_for_all_average(limit=limit)
+        return {"total": len(reviews), "reviews": reviews}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"전체 리뷰 조회 실패: {e}")
+
+
 @app.get("/api/v1/vector/restaurants/{restaurant_id}/similar")
 async def find_similar_restaurants(
     restaurant_id: int,
@@ -156,3 +218,39 @@ async def find_similar_restaurants(
         return {"restaurant_id": restaurant_id, "total": len(similar), "results": similar}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"비교군 조회 실패: {e}")
+
+
+@app.get("/api/v1/vector/collection/stats")
+async def collection_stats() -> Dict[str, Any]:
+    try:
+        vector_search = get_vector_search()
+        return {
+            "collection_name": vector_search.collection_name,
+            "points_count": vector_search.get_collection_points_count(),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"컬렉션 통계 조회 실패: {e}")
+
+
+@app.get("/api/v1/vector/collection/point-ids")
+async def collection_point_ids(limit: int = 10000) -> Dict[str, Any]:
+    try:
+        vector_search = get_vector_search()
+        ids = sorted(list(vector_search.get_existing_point_ids(limit=limit)))
+        return {"total": len(ids), "point_ids": ids}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"포인트 ID 조회 실패: {e}")
+
+
+@app.post("/api/v1/vector/restaurants/upsert-vector")
+async def upsert_restaurant_vector(request: UpsertRestaurantVectorRequest) -> Dict[str, Any]:
+    try:
+        vector_search = get_vector_search()
+        success = vector_search.upsert_restaurant_vector(
+            restaurant_id=request.restaurant_id,
+            restaurant_name=request.restaurant_name,
+            food_category_id=request.food_category_id,
+        )
+        return {"success": success}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"레스토랑 벡터 upsert 실패: {e}")

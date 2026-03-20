@@ -1,4 +1,24 @@
 services:
+  retrieval-service:
+    build:
+      context: .
+      dockerfile: Dockerfile.retrieval-service
+    container_name: tasteam-retrieval-service
+    ports:
+      - "8010:8010"
+    env_file:
+      - .env
+    environment:
+      PORT: "8010"
+      HF_HOME: /app/models
+      EMBEDDING_CACHE_DIR: /app/models
+      QDRANT_URL: /app/qdrant_data
+      USE_RETRIEVAL_SERVICE: "false"
+    volumes:
+      - model-cache:/app/models
+      - qdrant-data:/app/qdrant_data
+    restart: unless-stopped
+
   app:
     build:
       context: .
@@ -10,6 +30,8 @@ services:
       - .env
     environment:
       PORT: "8001"
+      USE_RETRIEVAL_SERVICE: "true"
+      RETRIEVAL_SERVICE_URL: "http://retrieval-service:8010"
       # HuggingFace/Transformers cache (persist to avoid re-download on restart)
       HF_HOME: /app/models
       # FastEmbed cache path (VectorSearch sets FASTEMBED_CACHE_PATH from this)
@@ -19,6 +41,8 @@ services:
     volumes:
       - model-cache:/app/models
       - qdrant-data:/app/qdrant_data
+    depends_on:
+      - retrieval-service
     restart: unless-stopped
 
 volumes:
