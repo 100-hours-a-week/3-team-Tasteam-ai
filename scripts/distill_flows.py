@@ -163,6 +163,51 @@ def _register_pod_signal_handlers() -> None:
 _register_pod_signal_handlers()
 
 
+def _extract_run_id_from_report_path(report_path: str | None) -> str | None:
+    """eval_done.json의 report_path에서 run_id(= report.json 부모 디렉터리명) 추출."""
+    if not report_path:
+        return None
+    try:
+        p = Path(report_path)
+        if p.name == "report.json":
+            return p.parent.name or None
+    except Exception:
+        return None
+    return None
+
+
+def _build_eval_report_key_candidates(version: str, run_id: str, eval_group: str | None = None) -> list[str]:
+    groups = [eval_group] if eval_group else ["eva1", "eval"]
+    return [
+        f"distill_pipeline_output/eval_output/{version}/{g}/{run_id}/report.json"
+        for g in groups
+    ]
+
+
+def _download_eval_report_key_only(
+    *,
+    client: Any,
+    volume_id: str,
+    version: str,
+    run_id: str,
+    out_dir: Path,
+    eval_group: str | None = None,
+) -> Path | None:
+    """볼륨에서 report.json 단일 키를 직접 찾아 다운로드."""
+    candidates = _build_eval_report_key_candidates(version, run_id, eval_group)
+    for key in candidates:
+        try:
+            client.head_object(Bucket=volume_id, Key=key)
+            out_dir.mkdir(parents=True, exist_ok=True)
+            local_report = out_dir / "report.json"
+            client.download_file(volume_id, key, str(local_report))
+            logger.info("Downloaded report.json by key: s3://%s/%s -> %s", volume_id, key, local_report)
+            return local_report
+        except Exception:
+            continue
+    return None
+
+
 def _track_pod_created(pod_id: str) -> None:
     with _POD_IDS_LOCK:
         _CREATED_POD_IDS.append(pod_id)
@@ -1468,6 +1513,7 @@ def evaluate_on_pod_task(
     pod_wait_timeout_sec: int = 600,
     skip_artifact_upload: bool = False,
     download_only: bool = False,
+    report_download_mode: str = "key_only",
 ) -> dict:
     """
     Pod에서 eval_distill 실행. 기본은 wandb artifact 업로드 후 로컬에서 artifact 다운로드.
@@ -1567,41 +1613,55 @@ def evaluate_on_pod_task(
             logger.info("Waiting %ss for volume list consistency before download", _sleep_after_done_sec)
             time.sleep(_sleep_after_done_sec)
 
-            # 볼륨에서 버전 서브디렉터리에 다운로드 → 해당 경로의 report만 사용
+            # 볼륨 다운로드 모드: key_only(기본) | auto | prefix
             eval_output_prefix = f"distill_pipeline_output/eval_output/{version}"
-            if prefix_has_objects:
-                if not prefix_has_objects(vol_id, eval_output_prefix):
-                    logger.warning(
-                        "No objects under prefix %s on volume %s; download may be empty",
-                        eval_output_prefix,
-                        vol_id,
-                    )
             eval_out_dir = out_dir / version
             eval_out_dir.mkdir(parents=True, exist_ok=True)
+            run_id = _extract_run_id_from_report_path(done.get("report_path"))
+            report_path: Path | None = None
 
-            n_files = 0
-            _max_download_attempts = 3
-            _retry_delay_sec = 10
-            for attempt in range(1, _max_download_attempts + 1):
-                n_files = download_directory_from_runpod(vol_id, eval_output_prefix, eval_out_dir)
-                logger.info(
-                    "Downloaded %s files from volume (prefix=%s) -> %s (attempt %s/%s)",
-                    n_files,
-                    eval_output_prefix,
-                    eval_out_dir,
-                    attempt,
-                    _max_download_attempts,
+            if report_download_mode in ("key_only", "auto") and run_id:
+                report_path = _download_eval_report_key_only(
+                    client=client,
+                    volume_id=vol_id,
+                    version=version,
+                    run_id=run_id,
+                    out_dir=eval_out_dir,
                 )
-                if n_files > 0:
-                    break
-                if attempt < _max_download_attempts:
-                    logger.warning(
-                        "Downloaded 0 files; waiting %ss and retrying (list may be eventually consistent)",
-                        _retry_delay_sec,
-                    )
-                    time.sleep(_retry_delay_sec)
 
-            report_path = next(eval_out_dir.rglob("report.json"), None)
+            if report_path is None and report_download_mode in ("prefix", "auto", "key_only"):
+                if report_download_mode == "key_only":
+                    logger.warning("key_only mode could not download report.json; fallback to prefix download")
+                if prefix_has_objects:
+                    if not prefix_has_objects(vol_id, eval_output_prefix):
+                        logger.warning(
+                            "No objects under prefix %s on volume %s; download may be empty",
+                            eval_output_prefix,
+                            vol_id,
+                        )
+
+                n_files = 0
+                _max_download_attempts = 3
+                _retry_delay_sec = 10
+                for attempt in range(1, _max_download_attempts + 1):
+                    n_files = download_directory_from_runpod(vol_id, eval_output_prefix, eval_out_dir)
+                    logger.info(
+                        "Downloaded %s files from volume (prefix=%s) -> %s (attempt %s/%s)",
+                        n_files,
+                        eval_output_prefix,
+                        eval_out_dir,
+                        attempt,
+                        _max_download_attempts,
+                    )
+                    if n_files > 0:
+                        break
+                    if attempt < _max_download_attempts:
+                        logger.warning(
+                            "Downloaded 0 files; waiting %ss and retrying (list may be eventually consistent)",
+                            _retry_delay_sec,
+                        )
+                        time.sleep(_retry_delay_sec)
+                report_path = next(eval_out_dir.rglob("report.json"), None)
             if not report_path or not report_path.is_file():
                 logger.warning("report.json not found under %s", eval_out_dir)
                 return {"report_path": None, "artifact_version": artifact_version_str, "eval_done": done, "download_root": str(out_dir)}
@@ -1710,6 +1770,7 @@ def evaluate_on_pod_flow(
     eval_timeout_sec: int = 14400,
     skip_artifact_upload: bool = False,
     download_only: bool = False,
+    report_download_mode: str = "key_only",
 ) -> dict:
     """Pod에서 평가 실행. 기본은 artifact 업로드 후 로컬 다운로드. skip_artifact_upload=True면 볼륨 다운로드 후 judge·kd_sft·artifact."""
     return evaluate_on_pod_task(
@@ -1725,6 +1786,7 @@ def evaluate_on_pod_flow(
         eval_timeout_sec=eval_timeout_sec,
         skip_artifact_upload=skip_artifact_upload,
         download_only=download_only,
+        report_download_mode=report_download_mode,
     )
 
 
@@ -1737,6 +1799,7 @@ def evaluate_on_pod_download_only_flow(
     base_model: str = "Qwen/Qwen2.5-0.5B-Instruct",
     volume_id: str | None = None,
     eval_timeout_sec: int = 14400,
+    report_download_mode: str = "key_only",
 ) -> dict:
     """Pod에서 평가 실행 후 볼륨에서 다운로드까지만 수행(judge/kd_sft/artifact 없음)."""
     return evaluate_on_pod_task(
@@ -1749,6 +1812,7 @@ def evaluate_on_pod_download_only_flow(
         eval_timeout_sec=eval_timeout_sec,
         skip_artifact_upload=True,
         download_only=True,
+        report_download_mode=report_download_mode,
     )
 
 
@@ -1781,6 +1845,8 @@ def download_eval_from_volume_and_finish_task(
     artifact_name: str = EVAL_ARTIFACT_NAME_DEFAULT,
     project: str = DEFAULT_WANDB_PROJECT,
     entity: str | None = None,
+    eval_run_id: str | None = None,
+    report_download_mode: str = "key_only",
 ) -> dict:
     """
     이미 Pod가 볼륨에 올려둔 eval 결과(version)만 받아와서
@@ -1804,10 +1870,24 @@ def download_eval_from_volume_and_finish_task(
     eval_output_prefix = f"distill_pipeline_output/eval_output/{version}"
     eval_out_dir = out_dir / version
     eval_out_dir.mkdir(parents=True, exist_ok=True)
-    n_files = download_directory_from_runpod(vol_id, eval_output_prefix, eval_out_dir)
-    logger.info("Downloaded %s files from volume (prefix=%s) -> %s", n_files, eval_output_prefix, eval_out_dir)
+    client = get_runpod_s3_client()
+    report_path: Path | None = None
 
-    report_path = next(eval_out_dir.rglob("report.json"), None)
+    if report_download_mode in ("key_only", "auto") and eval_run_id:
+        report_path = _download_eval_report_key_only(
+            client=client,
+            volume_id=vol_id,
+            version=version,
+            run_id=eval_run_id,
+            out_dir=eval_out_dir,
+        )
+
+    if report_path is None:
+        if report_download_mode == "key_only":
+            logger.warning("key_only mode could not download report.json; fallback to prefix download")
+        n_files = download_directory_from_runpod(vol_id, eval_output_prefix, eval_out_dir)
+        logger.info("Downloaded %s files from volume (prefix=%s) -> %s", n_files, eval_output_prefix, eval_out_dir)
+        report_path = next(eval_out_dir.rglob("report.json"), None)
     if not report_path or not report_path.is_file():
         return {"report_path": None, "download_root": str(out_dir), "error": "report.json not found under " + str(eval_out_dir)}
     eval_dir = report_path.parent
@@ -1866,6 +1946,8 @@ def download_eval_from_volume_flow(
     output_dir: str | Path | None = None,
     volume_id: str | None = None,
     base_model: str = "Qwen/Qwen2.5-0.5B-Instruct",
+    eval_run_id: str | None = None,
+    report_download_mode: str = "key_only",
 ) -> dict:
     """볼륨에 이미 있는 eval 결과(version)만 받아와 judge → kd_sft → artifact 업로드."""
     return download_eval_from_volume_and_finish_task(
@@ -1875,6 +1957,8 @@ def download_eval_from_volume_flow(
         output_dir=str(output_dir) if output_dir else None,
         volume_id=volume_id,
         base_model=base_model,
+        eval_run_id=eval_run_id,
+        report_download_mode=report_download_mode,
     )
 
 
@@ -2248,6 +2332,13 @@ def main() -> None:
     parser.add_argument("--test-labeled-path", type=Path, default=None, help="test_labeled.json (for evaluate, evaluate_on_pod)")
     parser.add_argument("--artifact-version", type=str, default="latest", help="For download_eval_artifact: artifact version (latest, v0, v1, ...)")
     parser.add_argument("--eval-version", type=str, default=None, help="For download_eval_from_volume: 볼륨 eval_output 버전 (예: 20260311_064121)")
+    parser.add_argument("--eval-run-id", type=str, default=None, help="For key_only report download: eval run_id (예: 20260313_040905)")
+    parser.add_argument(
+        "--report-download-mode",
+        choices=["key_only", "auto", "prefix"],
+        default="key_only",
+        help="볼륨 report 다운로드 모드 (기본: key_only)",
+    )
     parser.add_argument("--skip-artifact-upload", action="store_true", help="evaluate_on_pod: Pod에서 artifact 업로드 생략, 볼륨에서 다운로드 후 로컬에서 judge·kd_sft (기본은 artifact 업로드)")
     parser.add_argument("--eval-timeout", type=int, default=14400, help="evaluate_on_pod: eval_done.json 대기 초 (기본 14400=4h)")
     parser.add_argument("--eval-path", type=Path, default=None, help="report.json 또는 eval/YYYYMMDD_HHMMSS 디렉터리 (upload_eval_artifact 필수)")
@@ -2446,6 +2537,7 @@ def main() -> None:
             base_model=args.student_model,
             eval_timeout_sec=args.eval_timeout,
             skip_artifact_upload=getattr(args, "skip_artifact_upload", False),
+            report_download_mode=args.report_download_mode,
         )
         print("Result:", result)
     elif args.flow == "evaluate_on_pod_download_only":
@@ -2460,6 +2552,7 @@ def main() -> None:
             output_dir=out_dir,
             base_model=args.student_model,
             eval_timeout_sec=args.eval_timeout,
+            report_download_mode=args.report_download_mode,
         )
         print("Result:", result)
     elif args.flow == "download_eval_artifact":
@@ -2483,6 +2576,8 @@ def main() -> None:
             adapter_path=str(args.adapter_path),
             output_dir=out_dir,
             base_model=args.student_model,
+            eval_run_id=args.eval_run_id,
+            report_download_mode=args.report_download_mode,
         )
         print("Result:", result)
     elif args.flow == "merge_for_serving":
