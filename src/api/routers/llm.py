@@ -69,6 +69,98 @@ _BROAD_QUERY = {
 }
 
 
+def _safe_float(v: Any, default: float = 0.0) -> float:
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return default
+
+
+def _attach_evidence_from_bullets(
+    *,
+    vector_search: VectorSearch,
+    restaurant_id: int,
+    result: Dict[str, Any],
+    hits_data_dict: Dict[str, List[Dict[str, Any]]],
+) -> Dict[str, Any]:
+    """bullet을 쿼리로 top1 근거를 후처리 매핑한다."""
+    if not getattr(Config, "SUMMARY_EVIDENCE_POSTMAP_ENABLED", True):
+        return result
+
+    topk = max(1, int(getattr(Config, "SUMMARY_EVIDENCE_POSTMAP_TOPK", 10)))
+    min_score = _safe_float(getattr(Config, "SUMMARY_EVIDENCE_POSTMAP_MIN_SCORE", 0.35), 0.35)
+    max_reuse = max(1, int(getattr(Config, "SUMMARY_EVIDENCE_POSTMAP_MAX_REUSE_PER_REVIEW", 1)))
+
+    allowed_ids_by_cat: Dict[str, set[str]] = {}
+    for cat in ("service", "price", "food"):
+        allowed: set[str] = set()
+        for ev in hits_data_dict.get(cat, []) or []:
+            rid = ev.get("review_id")
+            if rid is not None:
+                allowed.add(str(rid))
+        allowed_ids_by_cat[cat] = allowed
+
+    used_count: Dict[str, int] = {}
+    for cat in ("service", "price", "food"):
+        cell = result.get(cat) if isinstance(result.get(cat), dict) else {}
+        bullets = cell.get("bullets", [])
+        if not isinstance(bullets, list) or not bullets:
+            cell["evidence"] = []
+            result[cat] = cell
+            continue
+
+        allowed_ids = allowed_ids_by_cat.get(cat, set())
+        cat_evidence: List[Dict[str, Any]] = []
+
+        for bullet in bullets:
+            if not isinstance(bullet, str) or not bullet.strip():
+                continue
+            try:
+                hits = vector_search.query_hybrid_search(
+                    query_text=bullet,
+                    restaurant_id=restaurant_id,
+                    limit=topk,
+                    fallback_min_score=Config.FALLBACK_MIN_SCORE,
+                    dense_prefetch_limit=Config.DENSE_PREFETCH_LIMIT,
+                    sparse_prefetch_limit=Config.SPARSE_PREFETCH_LIMIT,
+                )
+            except Exception:
+                hits = []
+
+            chosen = None
+            for rank, hit in enumerate(hits or []):
+                score = _safe_float((hit or {}).get("score"), 0.0)
+                if score < min_score:
+                    continue
+                payload = (hit or {}).get("payload", {}) or {}
+                rid = payload.get("review_id") or payload.get("id")
+                if rid is None:
+                    continue
+                rid_s = str(rid)
+                # 카테고리 분리: 해당 카테고리 후보 풀에 있는 리뷰만 허용
+                if allowed_ids and rid_s not in allowed_ids:
+                    continue
+                # 충돌 처리: 동일 리뷰 과다 재사용 제한
+                if used_count.get(rid_s, 0) >= max_reuse:
+                    continue
+                chosen = {
+                    "review_id": rid_s,
+                    "snippet": payload.get("content", "") or "",
+                    "rank": rank,
+                }
+                used_count[rid_s] = used_count.get(rid_s, 0) + 1
+                break
+
+            # fallback: threshold 미달/부적합이면 evidence 미부여(억지 매핑 금지)
+            if chosen is not None:
+                cat_evidence.append(chosen)
+
+        cell["evidence"] = cat_evidence
+        result[cat] = cell
+
+    return result
+
+
 def _text_keyword_hit_ratio(texts: List[str], keywords: List[str], *, top_n: int = 8) -> float:
     """상위 N개 텍스트 중 키워드가 1개라도 포함된 비율."""
     xs = [t for t in (texts or []) if t and str(t).strip()]
@@ -289,6 +381,13 @@ async def _process_one_restaurant_async(
         llm_utils,
         request.limit,
     )
+
+    result = _attach_evidence_from_bullets(
+        vector_search=vector_search,
+        restaurant_id=restaurant_id,
+        result=result,
+        hits_data_dict=hits_data_dict,
+    )
     return _build_category_result(result, restaurant_id, first_restaurant_name)
 
 
@@ -453,6 +552,12 @@ async def summarize_reviews(
             hits_data_dict.get("food", []),
             llm_utils,
             request.limit,
+        )
+        result = _attach_evidence_from_bullets(
+            vector_search=vector_search,
+            restaurant_id=request.restaurant_id,
+            result=result,
+            hits_data_dict=hits_data_dict,
         )
         
         # 4. 응답 형식 변환
@@ -796,6 +901,13 @@ async def summarize_reviews_batch(
                 hits_data_dict.get("food", []),
                 llm_utils,
                 request.limit,
+            )
+
+            result = _attach_evidence_from_bullets(
+                vector_search=vector_search,
+                restaurant_id=restaurant_id,
+                result=result,
+                hits_data_dict=hits_data_dict,
             )
             results.append(_build_category_result(result, restaurant_id, summary_restaurant_name))
 
