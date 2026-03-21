@@ -381,6 +381,7 @@ async def _process_one_restaurant_async(
         llm_utils,
         request.limit,
     )
+
     result = _attach_evidence_from_bullets(
         vector_search=vector_search,
         restaurant_id=restaurant_id,
@@ -901,6 +902,7 @@ async def summarize_reviews_batch(
                 llm_utils,
                 request.limit,
             )
+
             result = _attach_evidence_from_bullets(
                 vector_search=vector_search,
                 restaurant_id=restaurant_id,
