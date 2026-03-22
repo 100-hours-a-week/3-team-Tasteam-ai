@@ -119,9 +119,16 @@ def get_category_lengths(instruction: str) -> Dict[str, int]:
     return out
 
 
-def postprocess_prediction(pred_json_str: str, instruction: str) -> str:
+def postprocess_prediction(
+    pred_json_str: str,
+    instruction: str,
+    *,
+    skip_evidence_bullet_alignment: bool = False,
+) -> str:
     """
     추론 결과 후처리: evidence 인덱스 검증·보정, 빈 카테고리 폴백 치환.
+    skip_evidence_bullet_alignment: True면 evidence가 bullets보다 짧을 때 bullet을 자르지 않음
+    (no-evidence 출력 직전 단계에서 모델이 evidence를 비운 경우 대비).
     """
     if not pred_json_str or not pred_json_str.strip():
         return pred_json_str
@@ -168,7 +175,7 @@ def postprocess_prediction(pred_json_str: str, instruction: str) -> str:
             evidence = []
         if len(evidence) > len(bullets):
             evidence = evidence[: len(bullets)]
-        elif len(evidence) < len(bullets):
+        elif len(evidence) < len(bullets) and not skip_evidence_bullet_alignment:
             bullets = bullets[: len(evidence)]
 
         if not summary.strip() and not bullets:
@@ -241,7 +248,11 @@ def generate_one(
     raw = generated.strip()
     extracted = extract_json_for_rouge(raw)
     if postprocess:
-        out = postprocess_prediction(extracted, instruction)
+        out = postprocess_prediction(
+            extracted,
+            instruction,
+            skip_evidence_bullet_alignment=no_evidence_output,
+        )
     else:
         out = extracted
     if no_evidence_output:
@@ -322,7 +333,7 @@ def ensure_distill_adapter_local(adapter_path_str: str) -> str:
     api = wandb.Api()
     art = api.artifact(qualified)
     download_root = p.parent
-    download_root.mkdir(parents=True, parents=True)
+    download_root.mkdir(parents=True, exist_ok=True)
     art.download(root=str(download_root))
     if not _adapter_files_present(p):
         raise RuntimeError(
