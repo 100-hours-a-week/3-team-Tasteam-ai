@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
@@ -274,6 +276,60 @@ def generate_summary_from_payload(
 _distill_model: Optional[Any] = None
 _distill_tokenizer: Optional[Any] = None
 
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _adapter_files_present(adapter_dir: Path) -> bool:
+    if not adapter_dir.is_dir():
+        return False
+    if (adapter_dir / "adapter_config.json").exists():
+        return True
+    return any(adapter_dir.glob("*.safetensors")) or any(adapter_dir.glob("*.bin"))
+
+
+def ensure_distill_adapter_local(adapter_path_str: str) -> str:
+    """
+    로컬에 PEFT 어댑터가 없으면 wandb Python API로 artifact를 받아 저장한 뒤 절대 경로 반환.
+    - DISTILL_ADAPTER_ARTIFACT가 있으면 그 qualified 이름 사용 (entity/project/name:alias).
+    - 없으면 WANDB_ENTITY + DISTILL_ADAPTER_PATH의 .../artifacts/<run_id>/adapter 에서 run_id로
+      qlora-adapter-<run_id>:latest 조합.
+    """
+    from .config import Config
+
+    p = Path(adapter_path_str)
+    if not p.is_absolute():
+        p = (_PROJECT_ROOT / p).resolve()
+    if _adapter_files_present(p):
+        return str(p)
+    if not os.environ.get("WANDB_API_KEY"):
+        raise FileNotFoundError(
+            f"어댑터가 {p} 에 없습니다. 로컬에 배치하거나 WANDB_API_KEY 를 설정해 wandb에서 받으세요."
+        )
+    qualified = getattr(Config, "DISTILL_ADAPTER_ARTIFACT", None)
+    if not qualified:
+        entity = (os.environ.get("WANDB_ENTITY") or "").strip()
+        project = (os.environ.get("WANDB_PROJECT") or "tasteam-distill").strip()
+        run_folder = p.parent.name
+        if not entity or not run_folder:
+            raise ValueError(
+                "로컬 어댑터가 없고 artifact 이름을 알 수 없습니다. "
+                "DISTILL_ADAPTER_ARTIFACT=entity/project/qlora-adapter-<id>:latest 를 설정하거나, "
+                "WANDB_ENTITY 와 DISTILL_ADAPTER_PATH=.../artifacts/<run_id>/adapter 형태를 맞추세요."
+            )
+        qualified = f"{entity}/{project}/qlora-adapter-{run_folder}:latest"
+    import wandb
+
+    api = wandb.Api()
+    art = api.artifact(qualified)
+    download_root = p.parent
+    download_root.mkdir(parents=True, parents=True)
+    art.download(root=str(download_root))
+    if not _adapter_files_present(p):
+        raise RuntimeError(
+            f"artifact {qualified} 다운로드 후에도 예상 경로에 어댑터가 없습니다: {p}"
+        )
+    return str(p)
+
 
 def get_distill_model():
     """Config.USE_DISTILL_SUMMARY일 때만 호출. 싱글톤 (model, tokenizer) 반환."""
@@ -286,8 +342,9 @@ def get_distill_model():
     if not adapter_path:
         raise ValueError("DISTILL_ADAPTER_PATH is required when USE_DISTILL_SUMMARY=true")
     if _distill_model is None:
-        _distill_model, _distill_tokenizer = load_model_and_tokenizer(adapter_path, base_model)
-        logger.info("Distill summary model loaded: base=%s adapter=%s", base_model, adapter_path)
+        resolved = ensure_distill_adapter_local(adapter_path)
+        _distill_model, _distill_tokenizer = load_model_and_tokenizer(resolved, base_model)
+        logger.info("Distill summary model loaded: base=%s adapter=%s", base_model, resolved)
     return _distill_model, _distill_tokenizer
 
 

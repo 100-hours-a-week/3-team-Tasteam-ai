@@ -128,7 +128,9 @@ class _InferenceConfig:
 
     # Distill summary: 자체 훈련 qwen2.5-0.5b-instruct (eval과 동일 프롬프트·후처리). true면 summary는 외부 LLM 대신 로컬 adapter 사용
     USE_DISTILL_SUMMARY: bool = os.getenv("USE_DISTILL_SUMMARY", "true").lower() == "true"
-    DISTILL_ADAPTER_PATH: Optional[str] = (os.getenv("DISTILL_ADAPTER_PATH", "distill_pipeline_output/artifacts/g4nca6b2/adapter") or "").strip() or None
+    DISTILL_ADAPTER_PATH: Optional[str] = (os.getenv("DISTILL_ADAPTER_PATH", "artifacts/2xx5jtnt/adapter") or "").strip() or None
+    # 로컬에 어댑터가 없을 때만 사용: entity/project/qlora-adapter-<id>:latest (미설정 시 WANDB_ENTITY + 경로의 .../artifacts/<run_id>/adapter 로 추론)
+    DISTILL_ADAPTER_ARTIFACT: Optional[str] = (os.getenv("DISTILL_ADAPTER_ARTIFACT") or "").strip() or None
     DISTILL_BASE_MODEL: str = os.getenv("DISTILL_BASE_MODEL", "Qwen/Qwen2.5-0.5B-Instruct")
     # Distill summary 출력에서 evidence 키를 제거하는 실험 모드 (0.5B 운영 트랙용)
     DISTILL_NO_EVIDENCE_OUTPUT: bool = os.getenv("DISTILL_NO_EVIDENCE_OUTPUT", "false").lower() == "true"

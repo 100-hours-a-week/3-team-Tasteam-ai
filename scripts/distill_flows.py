@@ -59,6 +59,7 @@ import argparse
 import json
 import logging
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -1055,6 +1056,57 @@ def run_sweep_flow(
     return run_sweep_agent_task(sweep_id=sweep_id, labeled_path=labeled_path, output_dir=out_dir)
 
 
+def _qlora_adapter_artifact_candidates(run_id: str, run_name: str | None) -> list[str]:
+    """
+    train_qlora.py는 artifact 이름을 qlora-adapter-{run_id}로 올림.
+    run_name(예: whole-sweep-1)과 run_id가 다를 수 있어 둘 다 후보로 둔다.
+    """
+    names: list[str] = []
+    if run_id:
+        n = f"qlora-adapter-{run_id}"
+        if n not in names:
+            names.append(n)
+    if run_name and run_name != run_id:
+        n = f"qlora-adapter-{run_name}"
+        if n not in names:
+            names.append(n)
+    return names
+
+
+def _download_qlora_adapter_for_run(
+    api: Any,
+    entity: str,
+    project: str,
+    run_id: str,
+    run_name: str | None,
+    download_root: Path,
+) -> Path | None:
+    """
+    wandb Python API로만 artifact 다운로드 (train_qlora: qlora-adapter-{run_id} 우선).
+    성공 시 .../adapter 디렉터리 Path 반환.
+    """
+    candidates = _qlora_adapter_artifact_candidates(run_id, run_name)
+    if not candidates:
+        logger.warning("qlora adapter artifact 후보 이름 없음 (run_id=%s, run_name=%s)", run_id, run_name)
+        return None
+    for aname in candidates:
+        qualified = f"{entity}/{project}/{aname}:latest"
+        if download_root.exists():
+            shutil.rmtree(download_root)
+        download_root.mkdir(parents=True)
+        try:
+            art = api.artifact(qualified)
+            art.download(root=str(download_root))
+        except Exception as e:
+            logger.info("wandb API artifact 실패 (%s): %s", qualified, e)
+            continue
+        adapter_path = download_root / "adapter"
+        if adapter_path.is_dir():
+            return adapter_path
+        logger.warning("artifact 다운로드 후 adapter/ 없음 (%s): %s", qualified, download_root)
+    return None
+
+
 def _get_run_metric_value(run: Any, metric_name: str = "eval_loss") -> float | None:
     """run.summary에서 메트릭 값 반환. eval_loss / eval/loss 둘 다 시도."""
     summary = getattr(run, "summary", None) or {}
@@ -1139,8 +1191,8 @@ def get_best_adapter_from_artifact_task(
     metric_name: str = "eval_loss",
 ) -> str | None:
     """
-    wandb API로 sweep의 best run 조회 후, 해당 run의 adapter artifact(qlora-adapter-{run_id})를
-    다운로드하여 로컬 adapter 경로 반환. 확장성·모듈화용 전용 task (sweep 없이 run_id만으로 호출 시에는 별도 wrapper 사용).
+    wandb API로 sweep의 best run 조회 후 adapter artifact 다운로드.
+    train_qlora는 qlora-adapter-{run_id}로 업로드하므로 run_id 우선, run_name은 보조 후보.
     """
     try:
         import wandb
@@ -1155,24 +1207,28 @@ def get_best_adapter_from_artifact_task(
         logger.warning("sweep에 메트릭 %s(또는 eval/loss)가 있는 run이 없음", metric_name)
         return None
     best = min(runs_with_metric, key=lambda r: _get_run_metric_value(r, metric_name))
-    run_name = best.name or getattr(best, "id", None)
-    if not run_name:
-        logger.warning("best run에 name 없음")
+    run_id = str(getattr(best, "id", "") or "")
+    run_name = best.name
+    if not run_id and not run_name:
+        logger.warning("best run에 id/name 없음")
         return None
-    artifact_name = f"qlora-adapter-{run_name}"
-    try:
-        art = api.artifact(f"{best.entity}/{best.project}/{artifact_name}:latest")
-    except Exception as e:
-        logger.warning("wandb artifact 조회 실패 (%s): %s", artifact_name, e)
+    folder_key = run_id or (run_name or "unknown")
+    download_root = Path(download_dir) / "artifacts" / folder_key
+    adapter_path = _download_qlora_adapter_for_run(
+        api=api,
+        entity=best.entity,
+        project=best.project,
+        run_id=run_id,
+        run_name=run_name,
+        download_root=download_root,
+    )
+    if adapter_path is None:
+        logger.warning(
+            "sweep best run adapter artifact 없음 (후보: %s)",
+            _qlora_adapter_artifact_candidates(run_id, run_name),
+        )
         return None
-    root = Path(download_dir) / "artifacts" / run_name
-    root.mkdir(parents=True, exist_ok=True)
-    art.download(root=str(root))
-    adapter_path = root / "adapter"
-    if not adapter_path.is_dir():
-        logger.warning("artifact 내 adapter 디렉터리가 없음: %s", adapter_path)
-        return None
-    logger.info("sweep best run: %s, adapter_path=%s (from artifact)", run_name, adapter_path)
+    logger.info("sweep best run: %s, adapter_path=%s (from artifact)", folder_key, adapter_path)
     return str(adapter_path)
 
 
@@ -1199,20 +1255,22 @@ def get_latest_run_adapter_from_artifact_task(
         return None
     download_dir = Path(download_dir)
     for run in runs:
-        run_name = run.name or getattr(run, "id", None)
-        if not run_name:
+        run_id = str(getattr(run, "id", "") or "")
+        run_name = run.name
+        if not run_id and not run_name:
             continue
-        artifact_name = f"qlora-adapter-{run_name}"
-        try:
-            art = api.artifact(f"{run.entity}/{run.project}/{artifact_name}:latest")
-        except Exception:
-            continue
-        root = download_dir / "artifacts" / run_name
-        root.mkdir(parents=True, exist_ok=True)
-        art.download(root=str(root))
-        adapter_path = root / "adapter"
-        if adapter_path.is_dir():
-            logger.info("latest run adapter: %s -> %s", run_name, adapter_path)
+        folder_key = run_id or (run_name or "unknown")
+        root = download_dir / "artifacts" / folder_key
+        adapter_path = _download_qlora_adapter_for_run(
+            api=api,
+            entity=run.entity,
+            project=run.project,
+            run_id=run_id,
+            run_name=run_name,
+            download_root=root,
+        )
+        if adapter_path is not None and adapter_path.is_dir():
+            logger.info("latest run adapter: %s -> %s", folder_key, adapter_path)
             return str(adapter_path)
     logger.warning("프로젝트 %s 에서 adapter artifact를 가진 run이 없음", path)
     return None
