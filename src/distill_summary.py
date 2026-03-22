@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
@@ -184,12 +186,37 @@ def postprocess_prediction(pred_json_str: str, instruction: str) -> str:
     return json.dumps(pred, ensure_ascii=False)
 
 
+def _drop_evidence_fields(pred_json_str: str) -> str:
+    """카테고리별 evidence 키를 제거한 JSON 문자열 반환."""
+    if not pred_json_str or not pred_json_str.strip():
+        return pred_json_str
+    try:
+        pred = json.loads(pred_json_str)
+    except json.JSONDecodeError:
+        return pred_json_str
+    if not isinstance(pred, dict):
+        return pred_json_str
+
+    for cat in ("service", "price", "food"):
+        cell = pred.get(cat)
+        if isinstance(cell, dict):
+            cell.pop("evidence", None)
+            if "summary" not in cell:
+                cell["summary"] = ""
+            if "bullets" not in cell or not isinstance(cell.get("bullets"), list):
+                cell["bullets"] = []
+        else:
+            pred[cat] = {"summary": "", "bullets": []}
+    return json.dumps(pred, ensure_ascii=False)
+
+
 def generate_one(
     model: Any,
     tokenizer: Any,
     instruction: str,
     max_new_tokens: int = 1024,
     postprocess: bool = True,
+    no_evidence_output: bool = False,
 ) -> str:
     """system + few-shot + instruction으로 추론 후 JSON 추출. postprocess=True면 후처리까지 적용."""
     messages = [
@@ -214,8 +241,12 @@ def generate_one(
     raw = generated.strip()
     extracted = extract_json_for_rouge(raw)
     if postprocess:
-        return postprocess_prediction(extracted, instruction)
-    return extracted
+        out = postprocess_prediction(extracted, instruction)
+    else:
+        out = extracted
+    if no_evidence_output:
+        return _drop_evidence_fields(out)
+    return out
 
 
 def generate_summary_from_payload(
@@ -223,13 +254,20 @@ def generate_summary_from_payload(
     model: Any,
     tokenizer: Any,
     max_new_tokens: int = 1024,
+    no_evidence_output: bool = False,
 ) -> Dict[str, Any]:
     """
     payload(service/price/food 리스트)로 instruction 문자열을 만든 뒤 추론·후처리하여
     summary 구조(dict)로 반환. API summary 파이프라인에서 사용.
     """
     instruction = json.dumps(payload, ensure_ascii=False)
-    pred_str = generate_one(model, tokenizer, instruction, max_new_tokens=max_new_tokens)
+    pred_str = generate_one(
+        model,
+        tokenizer,
+        instruction,
+        max_new_tokens=max_new_tokens,
+        no_evidence_output=no_evidence_output,
+    )
     out = json.loads(pred_str)
     return out
 
@@ -237,6 +275,60 @@ def generate_summary_from_payload(
 # ----- 싱글톤 (API에서 USE_DISTILL_SUMMARY 시 lazy 로드) -----
 _distill_model: Optional[Any] = None
 _distill_tokenizer: Optional[Any] = None
+
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _adapter_files_present(adapter_dir: Path) -> bool:
+    if not adapter_dir.is_dir():
+        return False
+    if (adapter_dir / "adapter_config.json").exists():
+        return True
+    return any(adapter_dir.glob("*.safetensors")) or any(adapter_dir.glob("*.bin"))
+
+
+def ensure_distill_adapter_local(adapter_path_str: str) -> str:
+    """
+    로컬에 PEFT 어댑터가 없으면 wandb Python API로 artifact를 받아 저장한 뒤 절대 경로 반환.
+    - DISTILL_ADAPTER_ARTIFACT가 있으면 그 qualified 이름 사용 (entity/project/name:alias).
+    - 없으면 WANDB_ENTITY + DISTILL_ADAPTER_PATH의 .../artifacts/<run_id>/adapter 에서 run_id로
+      qlora-adapter-<run_id>:latest 조합.
+    """
+    from .config import Config
+
+    p = Path(adapter_path_str)
+    if not p.is_absolute():
+        p = (_PROJECT_ROOT / p).resolve()
+    if _adapter_files_present(p):
+        return str(p)
+    if not os.environ.get("WANDB_API_KEY"):
+        raise FileNotFoundError(
+            f"어댑터가 {p} 에 없습니다. 로컬에 배치하거나 WANDB_API_KEY 를 설정해 wandb에서 받으세요."
+        )
+    qualified = getattr(Config, "DISTILL_ADAPTER_ARTIFACT", None)
+    if not qualified:
+        entity = (os.environ.get("WANDB_ENTITY") or "").strip()
+        project = (os.environ.get("WANDB_PROJECT") or "tasteam-distill").strip()
+        run_folder = p.parent.name
+        if not entity or not run_folder:
+            raise ValueError(
+                "로컬 어댑터가 없고 artifact 이름을 알 수 없습니다. "
+                "DISTILL_ADAPTER_ARTIFACT=entity/project/qlora-adapter-<id>:latest 를 설정하거나, "
+                "WANDB_ENTITY 와 DISTILL_ADAPTER_PATH=.../artifacts/<run_id>/adapter 형태를 맞추세요."
+            )
+        qualified = f"{entity}/{project}/qlora-adapter-{run_folder}:latest"
+    import wandb
+
+    api = wandb.Api()
+    art = api.artifact(qualified)
+    download_root = p.parent
+    download_root.mkdir(parents=True, parents=True)
+    art.download(root=str(download_root))
+    if not _adapter_files_present(p):
+        raise RuntimeError(
+            f"artifact {qualified} 다운로드 후에도 예상 경로에 어댑터가 없습니다: {p}"
+        )
+    return str(p)
 
 
 def get_distill_model():
@@ -250,12 +342,19 @@ def get_distill_model():
     if not adapter_path:
         raise ValueError("DISTILL_ADAPTER_PATH is required when USE_DISTILL_SUMMARY=true")
     if _distill_model is None:
-        _distill_model, _distill_tokenizer = load_model_and_tokenizer(adapter_path, base_model)
-        logger.info("Distill summary model loaded: base=%s adapter=%s", base_model, adapter_path)
+        resolved = ensure_distill_adapter_local(adapter_path)
+        _distill_model, _distill_tokenizer = load_model_and_tokenizer(resolved, base_model)
+        logger.info("Distill summary model loaded: base=%s adapter=%s", base_model, resolved)
     return _distill_model, _distill_tokenizer
 
 
 def generate_summary_sync(payload: Dict[str, List[str]]) -> Dict[str, Any]:
     """동기: payload → summary dict. USE_DISTILL_SUMMARY일 때만 사용."""
+    from .config import Config
     model, tokenizer = get_distill_model()
-    return generate_summary_from_payload(payload, model, tokenizer)
+    return generate_summary_from_payload(
+        payload,
+        model,
+        tokenizer,
+        no_evidence_output=getattr(Config, "DISTILL_NO_EVIDENCE_OUTPUT", False),
+    )

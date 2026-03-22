@@ -41,12 +41,14 @@ def _generate_one(
     instruction: str,
     max_new_tokens: int = 1024,
     no_postprocess: bool = False,
+    no_evidence_output: bool = False,
 ) -> str:
     """eval_distill과 동일: system + few-shot + instruction으로 추론 후 JSON 추출·후처리. (distill_summary 공통 모듈 사용)"""
     return distill_generate_one(
         model, tokenizer, instruction,
         max_new_tokens=max_new_tokens,
         postprocess=not no_postprocess,
+        no_evidence_output=no_evidence_output,
     )
 
 
@@ -115,6 +117,39 @@ JUDGE_USER_TEMPLATE_V2 = """## Instruction (원문 리뷰/입력)
 
 위 Prediction이 teacher 기준(스키마, 폴백 정책, 스타일, evidence 기반)을 따르는지 6축으로 1~5점 평가한 JSON을 출력하세요."""
 
+JUDGE_SYSTEM_PROMPT_V2_NO_EVIDENCE = """당신은 teacher(label_for_distill) 기준의 요약 품질을 평가하는 심사위원입니다.
+단, 이번 평가는 no-evidence 트랙으로 evidence 항목은 평가에서 제외합니다.
+
+## 평가 기준
+1. **스키마 준수**: service, price, food, overall_summary 필수. 각 카테고리는 summary, bullets 필수. overall_summary에는 summary만 허용.
+2. **폴백 정책**: 근거가 부족할 때 "언급이 적어요" 같은 폴백 문구 사용. price는 가격 직접 언급이 없어도 가성비/양/구성 우회표현 허용.
+3. **스타일**: "~해요" 체, summary 1문장, overall_summary 2~3문장, bullets 구체적·중복 제거.
+4. **faithfulness**: 입력에 없는 내용 추론 금지.
+5. **category_correctness**: service/price/food 분리 정확성.
+
+## 출력 형식 (반드시 유효한 JSON만)
+{
+  "schema_adherence": 1~5,
+  "fallback_adherence": 1~5,
+  "style_adherence": 1~5,
+  "faithfulness": 1~5,
+  "category_correctness": 1~5,
+  "reason": "한 줄 요약 (선택)"
+}
+모든 점수는 1(매우 나쁨) ~ 5(매우 좋음) 정수입니다.
+"""
+
+JUDGE_USER_TEMPLATE_V2_NO_EVIDENCE = """## Instruction (원문 리뷰/입력)
+{instruction}
+
+## Reference (teacher 정답 요약; evidence 필드는 무시)
+{reference}
+
+## Prediction (평가 대상; evidence 필드는 무시)
+{prediction}
+
+위 Prediction이 no-evidence 기준(스키마, 폴백, 스타일, faithfulness, 카테고리 분리)을 따르는지 5축으로 1~5점 평가한 JSON을 출력하세요."""
+
 JUDGE_AXES = (
     "schema_adherence",
     "fallback_adherence",
@@ -123,6 +158,30 @@ JUDGE_AXES = (
     "faithfulness",
     "category_correctness",
 )
+
+JUDGE_AXES_NO_EVIDENCE = (
+    "schema_adherence",
+    "fallback_adherence",
+    "style_adherence",
+    "faithfulness",
+    "category_correctness",
+)
+
+
+def _strip_evidence_json_text(raw: str) -> str:
+    if not raw:
+        return raw
+    try:
+        obj = json.loads(raw)
+    except Exception:
+        return raw
+    if not isinstance(obj, dict):
+        return raw
+    for cat in ("service", "price", "food"):
+        cell = obj.get(cat)
+        if isinstance(cell, dict):
+            cell.pop("evidence", None)
+    return json.dumps(obj, ensure_ascii=False)
 
 
 def _clamp_score(v: Any) -> int:
@@ -140,12 +199,15 @@ def _call_judge(
     model: str = "gpt-4o",
     api_key: str | None = None,
 ) -> dict[str, Any]:
-    """OpenAI GPT-4o로 LLM-as-a-judge 평가. rubric_version: v1(단일 총점) | v2(6축)."""
+    """OpenAI GPT-4o로 LLM-as-a-judge 평가. rubric_version: v1(단일 총점) | v2(6축) | v2_no_evidence(5축)."""
     from openai import OpenAI
 
     if rubric_version == "v1":
         sys_prompt = JUDGE_SYSTEM_PROMPT_V1
         user_tpl = JUDGE_USER_TEMPLATE_V1
+    elif rubric_version == "v2_no_evidence":
+        sys_prompt = JUDGE_SYSTEM_PROMPT_V2_NO_EVIDENCE
+        user_tpl = JUDGE_USER_TEMPLATE_V2_NO_EVIDENCE
     else:
         sys_prompt = JUDGE_SYSTEM_PROMPT_V2
         user_tpl = JUDGE_USER_TEMPLATE_V2
@@ -172,6 +234,8 @@ def _call_judge(
 
     if rubric_version == "v1":
         return _parse_judge_v1(text)
+    if rubric_version == "v2_no_evidence":
+        return _parse_judge_v2_no_evidence(text)
     return _parse_judge_v2(text)
 
 
@@ -221,6 +285,35 @@ def _fallback_parse_judge_v2(text: str) -> dict[str, Any]:
     return out
 
 
+def _parse_judge_v2_no_evidence(text: str) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, dict):
+            out["reason"] = parsed.get("reason", "")
+            scores: list[int] = []
+            for ax in JUDGE_AXES_NO_EVIDENCE:
+                val = _clamp_score(parsed.get(ax, 1))
+                out[ax] = val
+                scores.append(val)
+            out["score"] = round(sum(scores) / len(scores), 2) if scores else 1
+        else:
+            out = _fallback_parse_judge_v2_no_evidence(text)
+    except json.JSONDecodeError:
+        out = _fallback_parse_judge_v2_no_evidence(text)
+    return out
+
+
+def _fallback_parse_judge_v2_no_evidence(text: str) -> dict[str, Any]:
+    out: dict[str, Any] = {"reason": f"parse_failed: {text[:200]}"}
+    for ax in JUDGE_AXES_NO_EVIDENCE:
+        m = re.search(rf'"{re.escape(ax)}"\s*:\s*(\d+)', text)
+        out[ax] = _clamp_score(int(m.group(1))) if m else 1
+    scores = [out[ax] for ax in JUDGE_AXES_NO_EVIDENCE]
+    out["score"] = round(sum(scores) / len(scores), 2) if scores else 1
+    return out
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="LLM-as-a-Judge: student 추론 + GPT-4o 평가")
     parser.add_argument("--report", type=Path, default=None, help="eval_distill report.json (meta.llm_judge_sample_ids 사용)")
@@ -232,8 +325,10 @@ def main() -> None:
     parser.add_argument("--openai-model", type=str, default="gpt-4o", help="Judge 모델 (OpenAI)")
     parser.add_argument("--openai-api-key", type=str, default=None, help="또는 OPENAI_API_KEY 환경변수")
     parser.add_argument("--max-samples", type=int, default=0, help="평가할 최대 샘플 수 (0=전부)")
-    parser.add_argument("--rubric-version", choices=["v1", "v2"], default="v2", help="v1: 단일 총점, v2: 6축 루브릭 (기본 v2)")
+    parser.add_argument("--rubric-version", choices=["v1", "v2", "v2_no_evidence"], default="v2", help="v1: 단일 총점, v2: 6축, v2_no_evidence: 5축")
     parser.add_argument("--no-postprocess", action="store_true", help="evidence 범위 보정 등 후처리 비적용 (비교 실험용)")
+    parser.add_argument("--prediction-no-evidence", action="store_true", help="학생 예측에서 evidence 키 제거(no-evidence 운영 트랙)")
+    parser.add_argument("--judge-strip-evidence", action="store_true", help="judge 입력(ref/pred)에서 evidence 필드를 제거하고 평가")
     args = parser.parse_args()
 
     if not args.report and not args.llm_judge_samples:
@@ -285,9 +380,21 @@ def main() -> None:
         logger.info("Inference+Judge: %d/%d sample_id=%s", i + 1, len(samples), s.get("sample_id"))
         ins = s.get("instruction", "")
         ref = s.get("output", "")
-        pred = _generate_one(model, tokenizer, ins, max_new_tokens=1024, no_postprocess=args.no_postprocess)
+        pred = _generate_one(
+            model,
+            tokenizer,
+            ins,
+            max_new_tokens=1024,
+            no_postprocess=args.no_postprocess,
+            no_evidence_output=args.prediction_no_evidence,
+        )
+        judge_ref = ref
+        judge_pred = pred
+        if args.judge_strip_evidence or args.rubric_version == "v2_no_evidence":
+            judge_ref = _strip_evidence_json_text(ref)
+            judge_pred = _strip_evidence_json_text(pred)
         judge_out = _call_judge(
-            ins, ref, pred,
+            ins, judge_ref, judge_pred,
             rubric_version=args.rubric_version,
             model=args.openai_model,
             api_key=api_key,
@@ -302,6 +409,9 @@ def main() -> None:
         }
         if args.rubric_version == "v2":
             for ax in JUDGE_AXES:
+                row[ax] = judge_out.get(ax, 1)
+        elif args.rubric_version == "v2_no_evidence":
+            for ax in JUDGE_AXES_NO_EVIDENCE:
                 row[ax] = judge_out.get(ax, 1)
         results.append(row)
 
@@ -318,6 +428,9 @@ def main() -> None:
     if rubric == "v2":
         for ax in JUDGE_AXES:
             summary[f"avg_{ax}"] = round(sum(r[ax] for r in results) / n, 2) if n else 0
+    elif rubric == "v2_no_evidence":
+        for ax in JUDGE_AXES_NO_EVIDENCE:
+            summary[f"avg_{ax}"] = round(sum(r[ax] for r in results) / n, 2) if n else 0
     out = {"meta": summary, "results": results}
     with open(args.output, "w", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False, indent=2)
@@ -326,6 +439,11 @@ def main() -> None:
         logger.info(
             "Wrote %s (avg_score=%.2f, schema=%.2f, fallback=%.2f, evidence=%.2f)",
             args.output, summary["avg_score"], summary.get("avg_schema_adherence", 0), summary.get("avg_fallback_adherence", 0), summary.get("avg_evidence_validity", 0),
+        )
+    elif rubric == "v2_no_evidence":
+        logger.info(
+            "Wrote %s (avg_score=%.2f, schema=%.2f, fallback=%.2f, faithfulness=%.2f)",
+            args.output, summary["avg_score"], summary.get("avg_schema_adherence", 0), summary.get("avg_fallback_adherence", 0), summary.get("avg_faithfulness", 0),
         )
     else:
         logger.info("Wrote %s (avg_score=%.2f)", args.output, summary["avg_score"])
