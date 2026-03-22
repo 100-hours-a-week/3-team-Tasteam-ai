@@ -7,6 +7,7 @@ student로 instruction에 대해 추론 후 output과 비교.
 
 사용:
   python scripts/eval_distill.py --val-labeled labeled/val_labeled.json --test-labeled labeled/test_labeled.json --adapter-path runs/xxx/adapter --base-model Qwen/Qwen2.5-0.5B-Instruct --output-dir eval/
+  python scripts/eval_distill.py ... --prediction-no-evidence   # eval_llm_as_judge와 동일: distill_summary 프롬프트·후처리 후 evidence 제거
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ import json
 import logging
 import random
 import sys
+import types
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -26,6 +28,21 @@ logger = logging.getLogger(__name__)
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
+
+
+def _install_lightweight_src_package() -> None:
+    """
+    src/__init__.py 가 sentiment_analysis·vector_search 등 전역 import를 하므로,
+    Pod eval처럼 가벼운 환경에서는 import 실패·과도한 의존성이 난다.
+    namespace 패키지만 sys.modules에 넣어 두면 src.distill_summary 등 서브모듈만 로드된다.
+    (이미 src가 로드된 프로세스에서는 건드리지 않음)
+    """
+    if "src" in sys.modules:
+        return
+    pkg = types.ModuleType("src")
+    pkg.__path__ = [str(_PROJECT_ROOT / "src")]  # type: ignore[attr-defined]
+    sys.modules["src"] = pkg
+
 
 try:
     from rouge_score import rouge_scorer
@@ -192,7 +209,14 @@ def main() -> None:
     parser.add_argument("--base-model", type=str, default="Qwen/Qwen2.5-0.5B-Instruct")
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--max-eval", type=int, default=0, help="Max samples per split (0=all)")
+    parser.add_argument(
+        "--prediction-no-evidence",
+        action="store_true",
+        help="eval_llm_as_judge/API와 동일: distill_summary 프롬프트·후처리 후 evidence 필드 제거",
+    )
     args = parser.parse_args()
+
+    _install_lightweight_src_package()
 
     run_id = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
     out_dir = args.output_dir / "eval" / run_id
@@ -214,7 +238,12 @@ def main() -> None:
 
         if model is None:
             logger.info("Loading model and tokenizer (once for all splits)")
-            model, tokenizer = _load_model_and_tokenizer(str(args.adapter_path), args.base_model)
+            if args.prediction_no_evidence:
+                from src.distill_summary import load_model_and_tokenizer as ds_load
+
+                model, tokenizer = ds_load(str(args.adapter_path), args.base_model)
+            else:
+                model, tokenizer = _load_model_and_tokenizer(str(args.adapter_path), args.base_model)
 
         preds: list[str] = []
         refs: list[str] = []
@@ -223,7 +252,19 @@ def main() -> None:
                 logger.info("%s: %d/%d", split, i + 1, len(samples))
             ins = s.get("instruction", "")
             ref = s.get("output", "")
-            pred = _generate_one(model, tokenizer, ins, max_new_tokens=1024)
+            if args.prediction_no_evidence:
+                from src.distill_summary import generate_one as ds_generate_one
+
+                pred = ds_generate_one(
+                    model,
+                    tokenizer,
+                    ins,
+                    max_new_tokens=1024,
+                    postprocess=True,
+                    no_evidence_output=True,
+                )
+            else:
+                pred = _generate_one(model, tokenizer, ins, max_new_tokens=1024)
             preds.append(pred)
             refs.append(ref)
 
@@ -254,6 +295,8 @@ def main() -> None:
         "adapter_path": str(args.adapter_path),
         "base_model": args.base_model,
         "llm_judge_sample_ids": llm_judge_sample_ids,
+        "prediction_no_evidence": bool(args.prediction_no_evidence),
+        "inference_stack": "distill_summary_no_evidence" if args.prediction_no_evidence else "eval_distill_legacy",
     }
     with open(report_path, "w", encoding="utf-8") as f:
         json.dump(report, f, ensure_ascii=False, indent=2)
