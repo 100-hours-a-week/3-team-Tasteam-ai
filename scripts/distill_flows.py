@@ -23,6 +23,7 @@ Flow (docs/easydistill/distill_by_prefect.md):
   python scripts/distill_flows.py labeling_pod_only --train-path .../train.json --gold-path .../train_labeled_gold_only.json  # OpenAI 생략, Pod teacher만
   python scripts/distill_flows.py train_student_with_pod --labeled-path .../train_labeled.json --output-dir ...
   python scripts/distill_flows.py run_sweep [--sweep-id <sweep_id>] --labeled-path .../train_labeled.json [--out-dir ...]
+  python scripts/distill_flows.py sweep_pod_best_adapter --labeled-path .../train_labeled.json [--sweep-id ...]  # Pod sweep만 실행 후 best adapter 다운로드
   python scripts/distill_flows.py train_and_evaluate --labeled-path .../train_labeled.json [--val-labeled-path ...] [--test-labeled-path ...]  # 학습(Pod) → 평가만
   python scripts/distill_flows.py sweep_eval_merge --labeled-path .../train_labeled.json [--sweep-id ...]  # Pod sweep → evaluate → merge (build_dataset/labeling 생략)
   python scripts/distill_flows.py upload_labeled_artifact --labeled-path .../train_labeled.json  # 기존 labeled만 wandb artifact로 업로드
@@ -58,6 +59,7 @@ import argparse
 import json
 import logging
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -161,6 +163,51 @@ def _register_pod_signal_handlers() -> None:
 
 
 _register_pod_signal_handlers()
+
+
+def _extract_run_id_from_report_path(report_path: str | None) -> str | None:
+    """eval_done.json의 report_path에서 run_id(= report.json 부모 디렉터리명) 추출."""
+    if not report_path:
+        return None
+    try:
+        p = Path(report_path)
+        if p.name == "report.json":
+            return p.parent.name or None
+    except Exception:
+        return None
+    return None
+
+
+def _build_eval_report_key_candidates(version: str, run_id: str, eval_group: str | None = None) -> list[str]:
+    groups = [eval_group] if eval_group else ["eva1", "eval"]
+    return [
+        f"distill_pipeline_output/eval_output/{version}/{g}/{run_id}/report.json"
+        for g in groups
+    ]
+
+
+def _download_eval_report_key_only(
+    *,
+    client: Any,
+    volume_id: str,
+    version: str,
+    run_id: str,
+    out_dir: Path,
+    eval_group: str | None = None,
+) -> Path | None:
+    """볼륨에서 report.json 단일 키를 직접 찾아 다운로드."""
+    candidates = _build_eval_report_key_candidates(version, run_id, eval_group)
+    for key in candidates:
+        try:
+            client.head_object(Bucket=volume_id, Key=key)
+            out_dir.mkdir(parents=True, exist_ok=True)
+            local_report = out_dir / "report.json"
+            client.download_file(volume_id, key, str(local_report))
+            logger.info("Downloaded report.json by key: s3://%s/%s -> %s", volume_id, key, local_report)
+            return local_report
+        except Exception:
+            continue
+    return None
 
 
 def _track_pod_created(pod_id: str) -> None:
@@ -1009,6 +1056,57 @@ def run_sweep_flow(
     return run_sweep_agent_task(sweep_id=sweep_id, labeled_path=labeled_path, output_dir=out_dir)
 
 
+def _qlora_adapter_artifact_candidates(run_id: str, run_name: str | None) -> list[str]:
+    """
+    train_qlora.py는 artifact 이름을 qlora-adapter-{run_id}로 올림.
+    run_name(예: whole-sweep-1)과 run_id가 다를 수 있어 둘 다 후보로 둔다.
+    """
+    names: list[str] = []
+    if run_id:
+        n = f"qlora-adapter-{run_id}"
+        if n not in names:
+            names.append(n)
+    if run_name and run_name != run_id:
+        n = f"qlora-adapter-{run_name}"
+        if n not in names:
+            names.append(n)
+    return names
+
+
+def _download_qlora_adapter_for_run(
+    api: Any,
+    entity: str,
+    project: str,
+    run_id: str,
+    run_name: str | None,
+    download_root: Path,
+) -> Path | None:
+    """
+    wandb Python API로만 artifact 다운로드 (train_qlora: qlora-adapter-{run_id} 우선).
+    성공 시 .../adapter 디렉터리 Path 반환.
+    """
+    candidates = _qlora_adapter_artifact_candidates(run_id, run_name)
+    if not candidates:
+        logger.warning("qlora adapter artifact 후보 이름 없음 (run_id=%s, run_name=%s)", run_id, run_name)
+        return None
+    for aname in candidates:
+        qualified = f"{entity}/{project}/{aname}:latest"
+        if download_root.exists():
+            shutil.rmtree(download_root)
+        download_root.mkdir(parents=True)
+        try:
+            art = api.artifact(qualified)
+            art.download(root=str(download_root))
+        except Exception as e:
+            logger.info("wandb API artifact 실패 (%s): %s", qualified, e)
+            continue
+        adapter_path = download_root / "adapter"
+        if adapter_path.is_dir():
+            return adapter_path
+        logger.warning("artifact 다운로드 후 adapter/ 없음 (%s): %s", qualified, download_root)
+    return None
+
+
 def _get_run_metric_value(run: Any, metric_name: str = "eval_loss") -> float | None:
     """run.summary에서 메트릭 값 반환. eval_loss / eval/loss 둘 다 시도."""
     summary = getattr(run, "summary", None) or {}
@@ -1093,8 +1191,8 @@ def get_best_adapter_from_artifact_task(
     metric_name: str = "eval_loss",
 ) -> str | None:
     """
-    wandb API로 sweep의 best run 조회 후, 해당 run의 adapter artifact(qlora-adapter-{run_id})를
-    다운로드하여 로컬 adapter 경로 반환. 확장성·모듈화용 전용 task (sweep 없이 run_id만으로 호출 시에는 별도 wrapper 사용).
+    wandb API로 sweep의 best run 조회 후 adapter artifact 다운로드.
+    train_qlora는 qlora-adapter-{run_id}로 업로드하므로 run_id 우선, run_name은 보조 후보.
     """
     try:
         import wandb
@@ -1109,24 +1207,28 @@ def get_best_adapter_from_artifact_task(
         logger.warning("sweep에 메트릭 %s(또는 eval/loss)가 있는 run이 없음", metric_name)
         return None
     best = min(runs_with_metric, key=lambda r: _get_run_metric_value(r, metric_name))
-    run_name = best.name or getattr(best, "id", None)
-    if not run_name:
-        logger.warning("best run에 name 없음")
+    run_id = str(getattr(best, "id", "") or "")
+    run_name = best.name
+    if not run_id and not run_name:
+        logger.warning("best run에 id/name 없음")
         return None
-    artifact_name = f"qlora-adapter-{run_name}"
-    try:
-        art = api.artifact(f"{best.entity}/{best.project}/{artifact_name}:latest")
-    except Exception as e:
-        logger.warning("wandb artifact 조회 실패 (%s): %s", artifact_name, e)
+    folder_key = run_id or (run_name or "unknown")
+    download_root = Path(download_dir) / "artifacts" / folder_key
+    adapter_path = _download_qlora_adapter_for_run(
+        api=api,
+        entity=best.entity,
+        project=best.project,
+        run_id=run_id,
+        run_name=run_name,
+        download_root=download_root,
+    )
+    if adapter_path is None:
+        logger.warning(
+            "sweep best run adapter artifact 없음 (후보: %s)",
+            _qlora_adapter_artifact_candidates(run_id, run_name),
+        )
         return None
-    root = Path(download_dir) / "artifacts" / run_name
-    root.mkdir(parents=True, exist_ok=True)
-    art.download(root=str(root))
-    adapter_path = root / "adapter"
-    if not adapter_path.is_dir():
-        logger.warning("artifact 내 adapter 디렉터리가 없음: %s", adapter_path)
-        return None
-    logger.info("sweep best run: %s, adapter_path=%s (from artifact)", run_name, adapter_path)
+    logger.info("sweep best run: %s, adapter_path=%s (from artifact)", folder_key, adapter_path)
     return str(adapter_path)
 
 
@@ -1153,20 +1255,22 @@ def get_latest_run_adapter_from_artifact_task(
         return None
     download_dir = Path(download_dir)
     for run in runs:
-        run_name = run.name or getattr(run, "id", None)
-        if not run_name:
+        run_id = str(getattr(run, "id", "") or "")
+        run_name = run.name
+        if not run_id and not run_name:
             continue
-        artifact_name = f"qlora-adapter-{run_name}"
-        try:
-            art = api.artifact(f"{run.entity}/{run.project}/{artifact_name}:latest")
-        except Exception:
-            continue
-        root = download_dir / "artifacts" / run_name
-        root.mkdir(parents=True, exist_ok=True)
-        art.download(root=str(root))
-        adapter_path = root / "adapter"
-        if adapter_path.is_dir():
-            logger.info("latest run adapter: %s -> %s", run_name, adapter_path)
+        folder_key = run_id or (run_name or "unknown")
+        root = download_dir / "artifacts" / folder_key
+        adapter_path = _download_qlora_adapter_for_run(
+            api=api,
+            entity=run.entity,
+            project=run.project,
+            run_id=run_id,
+            run_name=run_name,
+            download_root=root,
+        )
+        if adapter_path is not None and adapter_path.is_dir():
+            logger.info("latest run adapter: %s -> %s", folder_key, adapter_path)
             return str(adapter_path)
     logger.warning("프로젝트 %s 에서 adapter artifact를 가진 run이 없음", path)
     return None
@@ -1231,6 +1335,51 @@ def run_sweep_and_evaluate_flow(
         base_model=base_model,
     )
     return {"sweep_id": sweep_id, "best_adapter_path": best_adapter, "evaluate": ev}
+
+
+@flow(name="run_sweep_pod_best_adapter_flow", log_prints=True)
+def run_sweep_pod_best_adapter_flow(
+    labeled_path: str,
+    sweep_id: str | None = None,
+    sweep_yaml: str | Path | None = None,
+    output_dir: str | Path | None = None,
+    num_pods: int = 2,
+) -> dict:
+    """Pod sweep 실행 후 eval_loss 기준 best adapter artifact만 로컬 다운로드."""
+    if sweep_id is None:
+        ensure_wandb_project_task(project=DEFAULT_WANDB_PROJECT, entity=os.environ.get("WANDB_ENTITY"))
+        yaml_path = sweep_yaml if sweep_yaml is not None else DEFAULT_SWEEP_YAML
+        sweep_id = register_sweep_task(yaml_path)
+    out_dir = str(output_dir) if output_dir else str(_PROJECT_ROOT / "distill_pipeline_output")
+    sweep_complete = check_sweep_complete_task(sweep_id)
+    if not sweep_complete:
+        if num_pods > 1:
+            # 멀티 Pod: 라벨 한 번만 업로드 후 Pod 생성 순차화
+            upload_labeled_to_volume_for_sweep_task(labeled_path)
+            _SWEEP_POD_STAGGER_SEC = 15
+            futures = []
+            for i in range(num_pods):
+                if i > 0:
+                    time.sleep(_SWEEP_POD_STAGGER_SEC)
+                futures.append(
+                    run_sweep_on_pod_task.submit(
+                        sweep_id=sweep_id,
+                        labeled_path=labeled_path,
+                        output_dir=out_dir,
+                        pod_index=i,
+                        skip_upload=True,
+                    )
+                )
+            for f in futures:
+                f.result()
+        else:
+            run_sweep_on_pod_task(sweep_id=sweep_id, labeled_path=labeled_path, output_dir=out_dir)
+    best_adapter = get_best_adapter_from_artifact_task(
+        sweep_id=sweep_id,
+        download_dir=out_dir,
+        metric_name="eval_loss",
+    )
+    return {"sweep_id": sweep_id, "best_adapter_path": best_adapter}
 
 
 @task(name="evaluate-task", log_prints=True)
@@ -1468,6 +1617,7 @@ def evaluate_on_pod_task(
     pod_wait_timeout_sec: int = 600,
     skip_artifact_upload: bool = False,
     download_only: bool = False,
+    report_download_mode: str = "key_only",
 ) -> dict:
     """
     Pod에서 eval_distill 실행. 기본은 wandb artifact 업로드 후 로컬에서 artifact 다운로드.
@@ -1567,41 +1717,55 @@ def evaluate_on_pod_task(
             logger.info("Waiting %ss for volume list consistency before download", _sleep_after_done_sec)
             time.sleep(_sleep_after_done_sec)
 
-            # 볼륨에서 버전 서브디렉터리에 다운로드 → 해당 경로의 report만 사용
+            # 볼륨 다운로드 모드: key_only(기본) | auto | prefix
             eval_output_prefix = f"distill_pipeline_output/eval_output/{version}"
-            if prefix_has_objects:
-                if not prefix_has_objects(vol_id, eval_output_prefix):
-                    logger.warning(
-                        "No objects under prefix %s on volume %s; download may be empty",
-                        eval_output_prefix,
-                        vol_id,
-                    )
             eval_out_dir = out_dir / version
             eval_out_dir.mkdir(parents=True, exist_ok=True)
+            run_id = _extract_run_id_from_report_path(done.get("report_path"))
+            report_path: Path | None = None
 
-            n_files = 0
-            _max_download_attempts = 3
-            _retry_delay_sec = 10
-            for attempt in range(1, _max_download_attempts + 1):
-                n_files = download_directory_from_runpod(vol_id, eval_output_prefix, eval_out_dir)
-                logger.info(
-                    "Downloaded %s files from volume (prefix=%s) -> %s (attempt %s/%s)",
-                    n_files,
-                    eval_output_prefix,
-                    eval_out_dir,
-                    attempt,
-                    _max_download_attempts,
+            if report_download_mode in ("key_only", "auto") and run_id:
+                report_path = _download_eval_report_key_only(
+                    client=client,
+                    volume_id=vol_id,
+                    version=version,
+                    run_id=run_id,
+                    out_dir=eval_out_dir,
                 )
-                if n_files > 0:
-                    break
-                if attempt < _max_download_attempts:
-                    logger.warning(
-                        "Downloaded 0 files; waiting %ss and retrying (list may be eventually consistent)",
-                        _retry_delay_sec,
-                    )
-                    time.sleep(_retry_delay_sec)
 
-            report_path = next(eval_out_dir.rglob("report.json"), None)
+            if report_path is None and report_download_mode in ("prefix", "auto", "key_only"):
+                if report_download_mode == "key_only":
+                    logger.warning("key_only mode could not download report.json; fallback to prefix download")
+                if prefix_has_objects:
+                    if not prefix_has_objects(vol_id, eval_output_prefix):
+                        logger.warning(
+                            "No objects under prefix %s on volume %s; download may be empty",
+                            eval_output_prefix,
+                            vol_id,
+                        )
+
+                n_files = 0
+                _max_download_attempts = 3
+                _retry_delay_sec = 10
+                for attempt in range(1, _max_download_attempts + 1):
+                    n_files = download_directory_from_runpod(vol_id, eval_output_prefix, eval_out_dir)
+                    logger.info(
+                        "Downloaded %s files from volume (prefix=%s) -> %s (attempt %s/%s)",
+                        n_files,
+                        eval_output_prefix,
+                        eval_out_dir,
+                        attempt,
+                        _max_download_attempts,
+                    )
+                    if n_files > 0:
+                        break
+                    if attempt < _max_download_attempts:
+                        logger.warning(
+                            "Downloaded 0 files; waiting %ss and retrying (list may be eventually consistent)",
+                            _retry_delay_sec,
+                        )
+                        time.sleep(_retry_delay_sec)
+                report_path = next(eval_out_dir.rglob("report.json"), None)
             if not report_path or not report_path.is_file():
                 logger.warning("report.json not found under %s", eval_out_dir)
                 return {"report_path": None, "artifact_version": artifact_version_str, "eval_done": done, "download_root": str(out_dir)}
@@ -1710,6 +1874,7 @@ def evaluate_on_pod_flow(
     eval_timeout_sec: int = 14400,
     skip_artifact_upload: bool = False,
     download_only: bool = False,
+    report_download_mode: str = "key_only",
 ) -> dict:
     """Pod에서 평가 실행. 기본은 artifact 업로드 후 로컬 다운로드. skip_artifact_upload=True면 볼륨 다운로드 후 judge·kd_sft·artifact."""
     return evaluate_on_pod_task(
@@ -1725,6 +1890,7 @@ def evaluate_on_pod_flow(
         eval_timeout_sec=eval_timeout_sec,
         skip_artifact_upload=skip_artifact_upload,
         download_only=download_only,
+        report_download_mode=report_download_mode,
     )
 
 
@@ -1737,6 +1903,7 @@ def evaluate_on_pod_download_only_flow(
     base_model: str = "Qwen/Qwen2.5-0.5B-Instruct",
     volume_id: str | None = None,
     eval_timeout_sec: int = 14400,
+    report_download_mode: str = "key_only",
 ) -> dict:
     """Pod에서 평가 실행 후 볼륨에서 다운로드까지만 수행(judge/kd_sft/artifact 없음)."""
     return evaluate_on_pod_task(
@@ -1749,6 +1916,7 @@ def evaluate_on_pod_download_only_flow(
         eval_timeout_sec=eval_timeout_sec,
         skip_artifact_upload=True,
         download_only=True,
+        report_download_mode=report_download_mode,
     )
 
 
@@ -1781,6 +1949,8 @@ def download_eval_from_volume_and_finish_task(
     artifact_name: str = EVAL_ARTIFACT_NAME_DEFAULT,
     project: str = DEFAULT_WANDB_PROJECT,
     entity: str | None = None,
+    eval_run_id: str | None = None,
+    report_download_mode: str = "key_only",
 ) -> dict:
     """
     이미 Pod가 볼륨에 올려둔 eval 결과(version)만 받아와서
@@ -1804,10 +1974,24 @@ def download_eval_from_volume_and_finish_task(
     eval_output_prefix = f"distill_pipeline_output/eval_output/{version}"
     eval_out_dir = out_dir / version
     eval_out_dir.mkdir(parents=True, exist_ok=True)
-    n_files = download_directory_from_runpod(vol_id, eval_output_prefix, eval_out_dir)
-    logger.info("Downloaded %s files from volume (prefix=%s) -> %s", n_files, eval_output_prefix, eval_out_dir)
+    client = get_runpod_s3_client()
+    report_path: Path | None = None
 
-    report_path = next(eval_out_dir.rglob("report.json"), None)
+    if report_download_mode in ("key_only", "auto") and eval_run_id:
+        report_path = _download_eval_report_key_only(
+            client=client,
+            volume_id=vol_id,
+            version=version,
+            run_id=eval_run_id,
+            out_dir=eval_out_dir,
+        )
+
+    if report_path is None:
+        if report_download_mode == "key_only":
+            logger.warning("key_only mode could not download report.json; fallback to prefix download")
+        n_files = download_directory_from_runpod(vol_id, eval_output_prefix, eval_out_dir)
+        logger.info("Downloaded %s files from volume (prefix=%s) -> %s", n_files, eval_output_prefix, eval_out_dir)
+        report_path = next(eval_out_dir.rglob("report.json"), None)
     if not report_path or not report_path.is_file():
         return {"report_path": None, "download_root": str(out_dir), "error": "report.json not found under " + str(eval_out_dir)}
     eval_dir = report_path.parent
@@ -1866,6 +2050,8 @@ def download_eval_from_volume_flow(
     output_dir: str | Path | None = None,
     volume_id: str | None = None,
     base_model: str = "Qwen/Qwen2.5-0.5B-Instruct",
+    eval_run_id: str | None = None,
+    report_download_mode: str = "key_only",
 ) -> dict:
     """볼륨에 이미 있는 eval 결과(version)만 받아와 judge → kd_sft → artifact 업로드."""
     return download_eval_from_volume_and_finish_task(
@@ -1875,6 +2061,8 @@ def download_eval_from_volume_flow(
         output_dir=str(output_dir) if output_dir else None,
         volume_id=volume_id,
         base_model=base_model,
+        eval_run_id=eval_run_id,
+        report_download_mode=report_download_mode,
     )
 
 
@@ -2230,8 +2418,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Prefect flows for summary KD pipeline (distill_by_prefect.md)")
     parser.add_argument(
         "flow",
-        choices=["build_dataset", "labeling_openai_only", "labeling_with_pod", "labeling_pod_only", "train_student_with_pod", "run_sweep", "train_and_evaluate", "sweep_eval_merge", "evaluate", "evaluate_on_pod", "evaluate_on_pod_download_only", "download_eval_artifact", "download_eval_from_volume", "merge_for_serving", "merge_for_serving_with_pod", "upload_labeled_artifact", "upload_dataset_artifact", "upload_eval_artifact", "all", "all_sweep"],
-        help="Flow to run. evaluate_on_pod: Pod 평가 후 다운로드·judge·kd_sft·artifact. evaluate_on_pod_download_only: Pod 평가 후 다운로드만.",
+        choices=["build_dataset", "labeling_openai_only", "labeling_with_pod", "labeling_pod_only", "train_student_with_pod", "run_sweep", "sweep_pod_best_adapter", "train_and_evaluate", "sweep_eval_merge", "evaluate", "evaluate_on_pod", "evaluate_on_pod_download_only", "download_eval_artifact", "download_eval_from_volume", "merge_for_serving", "merge_for_serving_with_pod", "upload_labeled_artifact", "upload_dataset_artifact", "upload_eval_artifact", "all", "all_sweep"],
+        help="Flow to run. sweep_pod_best_adapter: Pod sweep 후 best adapter 다운로드만. evaluate_on_pod: Pod 평가 후 다운로드·judge·kd_sft·artifact. evaluate_on_pod_download_only: Pod 평가 후 다운로드만.",
     )
     parser.add_argument("--gold-path", type=Path, default=None, help="train_labeled_gold_only.json 경로 (labeling_pod_only 필수)")
     parser.add_argument("--sweep-id", type=str, default=None, help="wandb sweep id (optional; 없으면 --sweep-yaml으로 flow 내부에서 등록)")
@@ -2248,6 +2436,13 @@ def main() -> None:
     parser.add_argument("--test-labeled-path", type=Path, default=None, help="test_labeled.json (for evaluate, evaluate_on_pod)")
     parser.add_argument("--artifact-version", type=str, default="latest", help="For download_eval_artifact: artifact version (latest, v0, v1, ...)")
     parser.add_argument("--eval-version", type=str, default=None, help="For download_eval_from_volume: 볼륨 eval_output 버전 (예: 20260311_064121)")
+    parser.add_argument("--eval-run-id", type=str, default=None, help="For key_only report download: eval run_id (예: 20260313_040905)")
+    parser.add_argument(
+        "--report-download-mode",
+        choices=["key_only", "auto", "prefix"],
+        default="key_only",
+        help="볼륨 report 다운로드 모드 (기본: key_only)",
+    )
     parser.add_argument("--skip-artifact-upload", action="store_true", help="evaluate_on_pod: Pod에서 artifact 업로드 생략, 볼륨에서 다운로드 후 로컬에서 judge·kd_sft (기본은 artifact 업로드)")
     parser.add_argument("--eval-timeout", type=int, default=14400, help="evaluate_on_pod: eval_done.json 대기 초 (기본 14400=4h)")
     parser.add_argument("--eval-path", type=Path, default=None, help="report.json 또는 eval/YYYYMMDD_HHMMSS 디렉터리 (upload_eval_artifact 필수)")
@@ -2256,7 +2451,7 @@ def main() -> None:
     parser.add_argument("--public-ip-wait-timeout", type=int, default=180, help="publicIp 할당 대기 초 (labeling_with_pod, labeling_pod_only)")
     parser.add_argument("--vllm-ready-timeout", type=int, default=180, help="vLLM /v1/models 준비 대기 초 (labeling_with_pod, labeling_pod_only)")
     parser.add_argument("--student-model", type=str, default="Qwen/Qwen2.5-0.5B-Instruct", help="Student model")
-    parser.add_argument("--num-pods", type=int, default=2, help="sweep 시 동시 Pod 개수 (sweep_eval_merge, all_sweep; 기본 2)")
+    parser.add_argument("--num-pods", type=int, default=2, help="sweep 시 동시 Pod 개수 (sweep_pod_best_adapter, sweep_eval_merge, all_sweep; 기본 2)")
     args = parser.parse_args()
 
     out_dir = Path(args.out_dir or _PROJECT_ROOT / "distill_pipeline_output")
@@ -2361,6 +2556,18 @@ def main() -> None:
             output_dir=out_dir,
         )
         print("Result:", result)
+    elif args.flow == "sweep_pod_best_adapter":
+        if not args.labeled_path:
+            parser.error("sweep_pod_best_adapter requires --labeled-path")
+        sweep_yaml = args.sweep_yaml if args.sweep_yaml is not None else DEFAULT_SWEEP_YAML
+        result = run_sweep_pod_best_adapter_flow(
+            labeled_path=str(args.labeled_path),
+            sweep_id=args.sweep_id,
+            sweep_yaml=sweep_yaml,
+            output_dir=out_dir,
+            num_pods=max(1, int(args.num_pods)),
+        )
+        print("Result:", result)
     elif args.flow == "train_and_evaluate":
         if not args.labeled_path:
             parser.error("train_and_evaluate requires --labeled-path")
@@ -2446,6 +2653,7 @@ def main() -> None:
             base_model=args.student_model,
             eval_timeout_sec=args.eval_timeout,
             skip_artifact_upload=getattr(args, "skip_artifact_upload", False),
+            report_download_mode=args.report_download_mode,
         )
         print("Result:", result)
     elif args.flow == "evaluate_on_pod_download_only":
@@ -2460,6 +2668,7 @@ def main() -> None:
             output_dir=out_dir,
             base_model=args.student_model,
             eval_timeout_sec=args.eval_timeout,
+            report_download_mode=args.report_download_mode,
         )
         print("Result:", result)
     elif args.flow == "download_eval_artifact":
@@ -2483,6 +2692,8 @@ def main() -> None:
             adapter_path=str(args.adapter_path),
             output_dir=out_dir,
             base_model=args.student_model,
+            eval_run_id=args.eval_run_id,
+            report_download_mode=args.report_download_mode,
         )
         print("Result:", result)
     elif args.flow == "merge_for_serving":
