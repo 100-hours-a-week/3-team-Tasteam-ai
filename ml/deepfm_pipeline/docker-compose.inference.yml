@@ -7,7 +7,7 @@ services:
     env_file:
       - ../../.env
     environment:
-      S3_BUCKET: tasteam-stg-analytics
+      S3_BUCKET: tasteam-prod-analytics
       RAW_BASE_PREFIX: evt.user-activity.s3-ingest.v1/raw
       RAW_DOWNLOAD_DIR: /data/raw_download
       CANDIDATES_CSV: /data/raw_candidates.csv
