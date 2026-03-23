@@ -1643,6 +1643,7 @@ def evaluate_on_pod_task(
     skip_artifact_upload: bool = False,
     download_only: bool = False,
     report_download_mode: str = "key_only",
+
     full_no_evidence_eval: bool = True,
     judge_prediction_no_evidence: bool = False,
 ) -> dict:
@@ -1916,6 +1917,7 @@ def evaluate_on_pod_flow(
     skip_artifact_upload: bool = False,
     download_only: bool = False,
     report_download_mode: str = "key_only",
+
     full_no_evidence_eval: bool = True,
     judge_prediction_no_evidence: bool = False,
 ) -> dict:
@@ -1934,6 +1936,7 @@ def evaluate_on_pod_flow(
         skip_artifact_upload=skip_artifact_upload,
         download_only=download_only,
         report_download_mode=report_download_mode,
+
         full_no_evidence_eval=full_no_evidence_eval,
         judge_prediction_no_evidence=judge_prediction_no_evidence,
     )
@@ -1949,6 +1952,7 @@ def evaluate_on_pod_download_only_flow(
     volume_id: str | None = None,
     eval_timeout_sec: int = 14400,
     report_download_mode: str = "key_only",
+
     full_no_evidence_eval: bool = True,
     judge_prediction_no_evidence: bool = False,
 ) -> dict:
@@ -1964,6 +1968,7 @@ def evaluate_on_pod_download_only_flow(
         skip_artifact_upload=True,
         download_only=True,
         report_download_mode=report_download_mode,
+
         full_no_evidence_eval=full_no_evidence_eval,
         judge_prediction_no_evidence=judge_prediction_no_evidence,
     )
@@ -2727,6 +2732,7 @@ def main() -> None:
             eval_timeout_sec=args.eval_timeout,
             skip_artifact_upload=getattr(args, "skip_artifact_upload", False),
             report_download_mode=args.report_download_mode,
+
             full_no_evidence_eval=not args.legacy_evidence_eval,
             judge_prediction_no_evidence=args.judge_prediction_no_evidence,
         )
@@ -2744,6 +2750,7 @@ def main() -> None:
             base_model=args.student_model,
             eval_timeout_sec=args.eval_timeout,
             report_download_mode=args.report_download_mode,
+
             full_no_evidence_eval=not args.legacy_evidence_eval,
             judge_prediction_no_evidence=args.judge_prediction_no_evidence,
         )

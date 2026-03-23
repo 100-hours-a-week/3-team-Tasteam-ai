@@ -43,6 +43,7 @@ def _generate_one(
     max_new_tokens: int = 1024,
     no_postprocess: bool = False,
     no_evidence_output: bool = False,
+
     no_evidence_prompt: bool = False,
 ) -> str:
     """eval_distill과 동일: system + few-shot + instruction으로 추론 후 JSON 추출·후처리. (distill_summary 공통 모듈 사용)"""
@@ -51,6 +52,7 @@ def _generate_one(
         max_new_tokens=max_new_tokens,
         postprocess=not no_postprocess,
         no_evidence_output=no_evidence_output,
+
         no_evidence_prompt=no_evidence_prompt,
     )
 
@@ -329,6 +331,7 @@ def main() -> None:
     parser.add_argument("--openai-api-key", type=str, default=None, help="또는 OPENAI_API_KEY 환경변수")
     parser.add_argument("--max-samples", type=int, default=0, help="평가할 최대 샘플 수 (0=전부)")
     parser.add_argument("--rubric-version", choices=["v1", "v2", "v2_no_evidence"], default="v2", help="v1: 단일 총점, v2: 6축, v2_no_evidence: 5축")
+
     parser.add_argument(
         "--postprocess",
         action="store_true",
@@ -346,6 +349,7 @@ def main() -> None:
         help="v1/v2에서도 no-evidence 스키마 프롬프트 사용(비교 실험용)",
     )
     parser.add_argument("--prediction-no-evidence", action="store_true", help="학생 예측에서 evidence 키 제거(evidence 스키마 추론일 때)")
+
     parser.add_argument("--judge-strip-evidence", action="store_true", help="judge 입력(ref/pred)에서 evidence 필드를 제거하고 평가")
     args = parser.parse_args()
 
@@ -418,9 +422,11 @@ def main() -> None:
             tokenizer,
             ins,
             max_new_tokens=1024,
+
             no_postprocess=not use_postprocess,
             no_evidence_output=args.prediction_no_evidence,
             no_evidence_prompt=use_no_evidence_prompt,
+
         )
         judge_ref = ref
         judge_pred = pred

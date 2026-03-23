@@ -233,6 +233,7 @@ def postprocess_prediction(
     return json.dumps(pred, ensure_ascii=False)
 
 
+
 def postprocess_prediction_no_evidence(pred_json_str: str, instruction: str) -> str:
     """
     evidence 필드 없는 스키마용 후처리: summary/bullets/폴백만 정리 (evidence 인덱스 로직 없음).
@@ -282,6 +283,7 @@ def postprocess_prediction_no_evidence(pred_json_str: str, instruction: str) -> 
     return json.dumps(pred, ensure_ascii=False)
 
 
+
 def _drop_evidence_fields(pred_json_str: str) -> str:
     """카테고리별 evidence 키를 제거한 JSON 문자열 반환."""
     if not pred_json_str or not pred_json_str.strip():
@@ -313,7 +315,9 @@ def generate_one(
     max_new_tokens: int = 1024,
     postprocess: bool = True,
     no_evidence_output: bool = False,
+
     no_evidence_prompt: bool = False,
+
 ) -> str:
     """
     system + few-shot + instruction으로 추론 후 JSON 추출.
@@ -351,6 +355,7 @@ def generate_one(
     raw = generated.strip()
     extracted = extract_json_for_rouge(raw)
     if postprocess:
+
         if no_evidence_prompt:
             out = postprocess_prediction_no_evidence(extracted, instruction)
         else:
@@ -359,6 +364,7 @@ def generate_one(
                 instruction,
                 skip_evidence_bullet_alignment=no_evidence_output,
             )
+
     else:
         out = extracted
     if no_evidence_output:
@@ -387,8 +393,10 @@ def generate_summary_from_payload(
         tokenizer,
         instruction,
         max_new_tokens=max_new_tokens,
+
         postprocess=False,
         no_evidence_prompt=True,
+
         no_evidence_output=no_evidence_output,
     )
     out = json.loads(pred_str)
@@ -445,7 +453,9 @@ def ensure_distill_adapter_local(adapter_path_str: str) -> str:
     api = wandb.Api()
     art = api.artifact(qualified)
     download_root = p.parent
+
     download_root.mkdir(parents=True, exist_ok=True)
+
     art.download(root=str(download_root))
     if not _adapter_files_present(p):
         raise RuntimeError(
