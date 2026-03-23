@@ -2,6 +2,7 @@
 # 추론 이미지 엔트리포인트: S3 폴링 → Raw 다운로드 → 파이프라인 CSV 변환 → 추론 → (선택) S3 업로드
 # 환경변수:
 #   S3_ENV 또는 S3_BUCKET  - S3 폴링 시 버킷 (S3_ENV=dev|stg|prod)
+#   RAW_BASE_PREFIX        - S3 raw base prefix (기본: raw)
 #   RAW_DOWNLOAD_DIR       - /data/raw_download
 #   RUN_DIR                - /model (모델 run 디렉터리, 볼륨 마운트 또는 아티팩트 다운로드 대상)
 #   PIPELINE_VERSION       - RUN_DIR에 모델이 없을 때 사용. wandb artifact에서 해당 버전 다운로드 (WANDB_API_KEY 필요)
@@ -17,6 +18,7 @@ set -e
 cd /app
 
 RAW_DOWNLOAD_DIR="${RAW_DOWNLOAD_DIR:-/data/raw_download}"
+RAW_BASE_PREFIX="${RAW_BASE_PREFIX:-raw}"
 RUN_DIR="${RUN_DIR:-/model}"
 ARTIFACT_CACHE_DIR="${ARTIFACT_CACHE_DIR:-/model}"
 OUT_PATH="${OUT_PATH:-/data/recommendations.csv}"
@@ -46,9 +48,9 @@ if [ -z "${SKIP_S3_POLL}" ]; then
     POLL_ARGS=(--profile "${AWS_PROFILE}")
   fi
   if [ -n "${S3_BUCKET}" ]; then
-    python scripts/s3_raw_poll_download.py --bucket "$S3_BUCKET" --out-dir "$RAW_DOWNLOAD_DIR" "${POLL_ARGS[@]}"
+    python scripts/s3_raw_poll_download.py --bucket "$S3_BUCKET" --out-dir "$RAW_DOWNLOAD_DIR" --base-prefix "$RAW_BASE_PREFIX" "${POLL_ARGS[@]}"
   elif [ -n "${S3_ENV}" ]; then
-    python scripts/s3_raw_poll_download.py --env "$S3_ENV" --out-dir "$RAW_DOWNLOAD_DIR" "${POLL_ARGS[@]}"
+    python scripts/s3_raw_poll_download.py --env "$S3_ENV" --out-dir "$RAW_DOWNLOAD_DIR" --base-prefix "$RAW_BASE_PREFIX" "${POLL_ARGS[@]}"
   else
     echo "S3_BUCKET or S3_ENV not set. Set SKIP_S3_POLL=1 and pass --raw-candidates /path/to/candidates.csv"
     exit 1

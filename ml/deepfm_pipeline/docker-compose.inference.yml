@@ -1,0 +1,28 @@
+services:
+  deepfm-inference:
+    build:
+      context: .
+      dockerfile: Dockerfile.inference
+    container_name: deepfm-inference
+    environment:
+      # 버킷은 env 또는 직접 지정 중 하나만 사용
+      S3_BUCKET: tasteam-stg-analytics
+      # S3_ENV: stg
+
+      # 변경된 S3 raw 루트 prefix
+      RAW_BASE_PREFIX: evt.user-activity.s3-ingest.v1/raw
+
+      # 경로/출력 설정
+      RAW_DOWNLOAD_DIR: /data/raw_download
+      CANDIDATES_CSV: /data/raw_candidates.csv
+      OUT_PATH: /data/recommendations.csv
+      RUN_DIR: /model
+
+      # 필요 시 지정 (artifact 다운로드 사용 시)
+      # PIPELINE_VERSION: deepfm-1.0.xxx
+      # WANDB_API_KEY: ${WANDB_API_KEY}
+      # AWS_PROFILE: default
+    volumes:
+      - ./local/model:/model
+      - ./local/data:/data
+    restart: "no"
