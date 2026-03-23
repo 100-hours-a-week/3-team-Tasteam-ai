@@ -55,7 +55,11 @@ if [ -z "${SKIP_S3_POLL}" ]; then
     echo "S3_BUCKET or S3_ENV not set. Set SKIP_S3_POLL=1 and pass --raw-candidates /path/to/candidates.csv"
     exit 1
   fi
-  python scripts/raw_to_pipeline_csv.py --raw-dir "$RAW_DOWNLOAD_DIR" --out "$CANDIDATES_CSV"
+  python scripts/raw_to_pipeline_csv.py --raw-dir "$RAW_DOWNLOAD_DIR" --out "$CANDIDATES_CSV" --base-prefix "$RAW_BASE_PREFIX"
+  if [ ! -s "$CANDIDATES_CSV" ]; then
+    echo "No candidate rows after raw transform. Check RAW_BASE_PREFIX=${RAW_BASE_PREFIX} and source raw schema."
+    exit 1
+  fi
 fi
 
 if [ -n "${UPLOAD_TO_S3}" ] && [ "${UPLOAD_TO_S3}" = "1" ]; then
