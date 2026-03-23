@@ -3,7 +3,7 @@
 KD SFT 분석: docs/distill/troubleshooting/kd_sft_analysis.md 에서 제안한 3가지 확인을 수행.
 
 1. JSON 파싱 성공률 (eval 샘플에서 %)
-2. 스키마 정확도 (필수 키 존재 / 타입 맞는지)
+2. 스키마 정확도 (필수 키 존재 / 타입 맞는지; no-evidence 평가는 summary+bullets만)
 3. 길이·포맷 drift (pred vs ref 평균 길이, 비율)
 
 입력: llm_as_a_judge_results.json 또는 pred/ref 포함 JSON (results 배열 또는 samples).
@@ -13,6 +13,8 @@ KD SFT 분석: docs/distill/troubleshooting/kd_sft_analysis.md 에서 제안한 
   python scripts/kd_sft_analysis.py --input .../llm_as_a_judge_results.json
   python scripts/kd_sft_analysis.py --input ... --output-dir .../eval/20260303_053420
   python scripts/kd_sft_analysis.py --input ... --output .../eval/kd_sft_analysis_report_v3_jv2.json
+  # llm_as_a_judge_results.json 의 meta(judge_rubric_version v2_no_evidence 등)로 no-evidence 스키마 자동 선택
+  python scripts/kd_sft_analysis.py --input ... --no-evidence-schema
 """
 
 from __future__ import annotations
@@ -29,20 +31,41 @@ REQUIRED_TOP_KEYS = {"service", "price", "food"}
 OPTIONAL_TOP_KEYS = {"overall_summary"}
 # 각 축(service/price/food) 내부: summary(str), bullets(list), evidence(list of int)
 ASPECT_KEYS = {"summary", "bullets", "evidence"}
+# no-evidence 스키마: summary + bullets만 (evidence 불필요)
+ASPECT_KEYS_NO_EVIDENCE = {"summary", "bullets"}
 # overall_summary는 summary만 있으면 됨
 OVERALL_KEYS = {"summary"}
 
 
 def _load_input(path: Path) -> list[dict]:
+    samples, _ = _load_input_and_meta(path)
+    return samples
+
+
+def _load_input_and_meta(path: Path) -> tuple[list[dict], dict[str, Any] | None]:
     with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
+    meta: dict[str, Any] | None = None
+    if isinstance(data, dict) and "meta" in data and isinstance(data["meta"], dict):
+        meta = data["meta"]
     if isinstance(data, dict) and "results" in data:
-        return data["results"]
+        return data["results"], meta
     if isinstance(data, dict) and "samples" in data:
-        return data["samples"]
+        return data["samples"], meta
     if isinstance(data, list):
-        return data
-    return []
+        return data, meta
+    return [], meta
+
+
+def _infer_no_evidence_schema_from_meta(meta: dict[str, Any] | None) -> bool:
+    """llm_as_a_judge_results.json meta에서 no-evidence 스키마로 볼지 추론."""
+    if not meta:
+        return False
+    if meta.get("judge_rubric_version") == "v2_no_evidence":
+        return True
+    if meta.get("inference_no_evidence_prompt") is True:
+        return True
+    return False
 
 
 def _extract_json_from_text(text: str) -> str | None:
@@ -114,13 +137,26 @@ def _check_aspect_cell(v: Any) -> bool:
     return True
 
 
+def _check_aspect_cell_no_evidence(v: Any) -> bool:
+    """한 축이 {summary, bullets}만 필수 (evidence 없음)."""
+    if not isinstance(v, dict):
+        return False
+    if "summary" not in v or not isinstance(v["summary"], str):
+        return False
+    if "bullets" not in v or not isinstance(v["bullets"], list):
+        return False
+    if not all(isinstance(x, str) for x in v["bullets"]):
+        return False
+    return True
+
+
 def _check_overall_cell(v: Any) -> bool:
     if not isinstance(v, dict):
         return False
     return "summary" in v and isinstance(v["summary"], str)
 
 
-def _schema_ok(parsed: dict, required_top_keys: set[str]) -> bool:
+def _schema_ok(parsed: dict, required_top_keys: set[str], *, no_evidence_schema: bool = False) -> bool:
     """필수 최상위 키 존재 + 각 축 타입/구조 일치."""
     if not isinstance(parsed, dict):
         return False
@@ -132,17 +168,28 @@ def _schema_ok(parsed: dict, required_top_keys: set[str]) -> bool:
             if not _check_overall_cell(v):
                 return False
         else:
-            if not _check_aspect_cell(v):
-                return False
+            if no_evidence_schema:
+                if not _check_aspect_cell_no_evidence(v):
+                    return False
+            else:
+                if not _check_aspect_cell(v):
+                    return False
     return True
 
 
-def run_analysis(samples: list[dict], ref_key: str = "ref", pred_key: str = "pred") -> dict:
+def run_analysis(
+    samples: list[dict],
+    ref_key: str = "ref",
+    pred_key: str = "pred",
+    *,
+    no_evidence_schema: bool = False,
+) -> dict:
     """3가지 지표 계산."""
     n = len(samples)
     if n == 0:
         return {
             "n_samples": 0,
+            "schema_mode": "no_evidence" if no_evidence_schema else "evidence",
             "json_parse_success_rate": 0.0,
             "schema_accuracy": 0.0,
             "length_drift": {},
@@ -177,7 +224,7 @@ def run_analysis(samples: list[dict], ref_key: str = "ref", pred_key: str = "pre
         p_ok = parsed is not None
         if p_ok:
             parse_ok += 1
-        s_ok = _schema_ok(parsed, required_top_keys) if parsed else False
+        s_ok = _schema_ok(parsed, required_top_keys, no_evidence_schema=no_evidence_schema) if parsed else False
         if s_ok:
             schema_ok_count += 1
 
@@ -197,6 +244,7 @@ def run_analysis(samples: list[dict], ref_key: str = "ref", pred_key: str = "pre
     return {
         "n_samples": n,
         "required_top_keys": list(required_top_keys),
+        "schema_mode": "no_evidence" if no_evidence_schema else "evidence",
         "json_parse_success_rate": round(parse_ok / n, 4) if n else 0.0,
         "json_parse_success_count": parse_ok,
         "schema_accuracy": round(schema_ok_count / n, 4) if n else 0.0,
@@ -219,19 +267,45 @@ def main() -> None:
     parser.add_argument("--output", type=Path, default=None, help="보고서 저장 경로 (파일 경로 지정 시 output-dir 무시, 파일명 자유 지정)")
     parser.add_argument("--ref-key", type=str, default="ref", help="참조 필드 이름 (ref 또는 output)")
     parser.add_argument("--pred-key", type=str, default="pred", help="예측 필드 이름")
+    parser.add_argument(
+        "--no-evidence-schema",
+        action="store_true",
+        help="축별 스키마를 summary+bullets만으로 검사 (evidence 불필요).",
+    )
+    parser.add_argument(
+        "--evidence-schema",
+        action="store_true",
+        help="축별 스키마에 evidence 필수 (기본값; meta 자동 감지와 함께 쓸 때 명시).",
+    )
     args = parser.parse_args()
+
+    if args.no_evidence_schema and args.evidence_schema:
+        print("Error: --no-evidence-schema and --evidence-schema cannot be used together", file=sys.stderr)
+        sys.exit(1)
 
     path = args.input
     if not path.exists():
         print(f"Error: not found: {path}", file=sys.stderr)
         sys.exit(1)
 
-    samples = _load_input(path)
+    samples, file_meta = _load_input_and_meta(path)
     if not samples:
         print("Error: no results/samples in input", file=sys.stderr)
         sys.exit(1)
 
-    result = run_analysis(samples, ref_key=args.ref_key, pred_key=args.pred_key)
+    if args.no_evidence_schema:
+        no_ev_schema = True
+    elif args.evidence_schema:
+        no_ev_schema = False
+    else:
+        no_ev_schema = _infer_no_evidence_schema_from_meta(file_meta)
+
+    result = run_analysis(
+        samples,
+        ref_key=args.ref_key,
+        pred_key=args.pred_key,
+        no_evidence_schema=no_ev_schema,
+    )
 
     if args.output is not None:
         report_path = Path(args.output)
@@ -248,6 +322,7 @@ def main() -> None:
     print("=" * 60)
     print("KD SFT 분석 결과 (docs/distill/troubleshooting/kd_sft_analysis.md)")
     print("=" * 60)
+    print(f"스키마 모드: {result.get('schema_mode', 'evidence')}")
     print(f"샘플 수: {result['n_samples']}")
     print(f"1. JSON 파싱 성공률: {result['json_parse_success_rate']:.2%} ({result['json_parse_success_count']}/{result['n_samples']})")
     print(f"2. 스키마 정확도(전체): {result['schema_accuracy']:.2%}")
