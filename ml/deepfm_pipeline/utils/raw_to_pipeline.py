@@ -78,7 +78,7 @@ def _load_partition_csvs(base_dir: Path, data_type: str, base_prefix: str = "raw
     for part_dir in sorted(prefix.iterdir()):
         if not part_dir.is_dir() or not part_dir.name.startswith("dt="):
             continue
-        for pattern in ("part-*.csv", "part-*.json.gz"):
+        for pattern in ("*.csv", "*.json.gz"):
             for f in part_dir.glob(pattern):
                 try:
                     df = read_table(f)
