@@ -73,14 +73,22 @@ def _download_partition(
     exclude_marker=True면 _SUCCESS는 다운로드하지 않음.
     반환: 다운로드된 로컬 파일 경로 목록.
     """
+    prefix = s3_prefix.rstrip("/")
     keys = _s3_list_partition_keys(client, bucket, s3_prefix)
     local_dir.mkdir(parents=True, exist_ok=True)
     downloaded = []
     for key in keys:
-        name = key.split("/")[-1]
+        # list_objects_v2 결과의 Contents[].Key만 사용하며, 디렉터리 마커/자기 자신 키는 제외
+        if key == prefix or key.endswith("/"):
+            continue
+        name = key.rsplit("/", 1)[-1]
+        # 실제 파일명이 없는 키는 제외
+        if not name:
+            continue
         if exclude_marker and name == SUCCESS_MARKER:
             continue
         local_path = local_dir / name
+        local_path.parent.mkdir(parents=True, exist_ok=True)
         client.download_file(bucket, key, str(local_path))
         downloaded.append(local_path)
     return downloaded
