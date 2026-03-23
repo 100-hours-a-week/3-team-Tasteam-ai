@@ -13,7 +13,7 @@ services:
       CANDIDATES_CSV: /data/raw_candidates.csv
       OUT_PATH: /data/recommendations.csv
       RUN_DIR: /model
-      PIPELINE_VERSION: deepfm-1.0.xxx
+      PIPELINE_VERSION: deepfm-1.0.20260310124157
     volumes:
       - ./local/model:/model
       - ./local/data:/data
