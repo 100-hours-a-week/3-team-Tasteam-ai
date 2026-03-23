@@ -5,9 +5,10 @@ S3 Raw 데이터 폴링·다운로드. service_constract.md §4 준수.
       데이터 파일(part-*.csv 등)을 다운로드한다.
 
 경로 계약:
-  s3://tasteam-{env}-analytics/raw/events/dt=YYYY-MM-DD/part-00001.csv, _SUCCESS
-  s3://tasteam-{env}-analytics/raw/restaurants/dt=YYYY-MM-DD/...
-  s3://tasteam-{env}-analytics/raw/menus/dt=YYYY-MM-DD/...
+  s3://tasteam-{env}-analytics/{base_prefix}/events/dt=YYYY-MM-DD/part-00001.csv, _SUCCESS
+  s3://tasteam-{env}-analytics/{base_prefix}/restaurants/dt=YYYY-MM-DD/...
+  s3://tasteam-{env}-analytics/{base_prefix}/menus/dt=YYYY-MM-DD/...
+기본 base_prefix: raw
 """
 
 from __future__ import annotations
@@ -21,6 +22,11 @@ SUCCESS_MARKER = "_SUCCESS"
 RAW_DATA_TYPES = ("events", "restaurants", "menus")
 
 
+def _normalize_base_prefix(base_prefix: str) -> str:
+    """양 끝 슬래시를 제거해 S3 prefix 결합을 안정화."""
+    return base_prefix.strip("/")
+
+
 def _s3_list_partition_keys(client, bucket: str, prefix: str) -> list[str]:
     """prefix 하위의 객체 키 목록 (최대 1000)."""
     paginator = client.get_paginator("list_objects_v2")
@@ -31,12 +37,13 @@ def _s3_list_partition_keys(client, bucket: str, prefix: str) -> list[str]:
     return keys
 
 
-def _partitions_with_success(client, bucket: str, data_type: str) -> list[str]:
+def _partitions_with_success(client, bucket: str, data_type: str, base_prefix: str) -> list[str]:
     """
-    raw/{data_type}/ 하위에서 _SUCCESS가 있는 dt= 파티션만 반환.
+    {base_prefix}/{data_type}/ 하위에서 _SUCCESS가 있는 dt= 파티션만 반환.
     반환: ['dt=2025-03-01', 'dt=2025-03-02', ...] (정렬됨)
     """
-    prefix = f"raw/{data_type}/"
+    normalized_prefix = _normalize_base_prefix(base_prefix)
+    prefix = f"{normalized_prefix}/{data_type}/"
     keys = _s3_list_partition_keys(client, bucket, prefix)
     # dt=YYYY-MM-DD/ 형태의 파티션만 추출
     partition_dirs: set[str] = set()
@@ -93,6 +100,7 @@ def list_partitions_only(
     data_types: list[str] | None = None,
     dt_filter: str | None = None,
     profile_name: str | None = None,
+    base_prefix: str = "raw",
 ) -> dict[str, list[str]]:
     """
     _SUCCESS가 있는 파티션만 조회 (다운로드 없음).
@@ -105,7 +113,7 @@ def list_partitions_only(
     client = _s3_client(profile_name)
     result: dict[str, list[str]] = {}
     for data_type in types:
-        all_ready = _partitions_with_success(client, bucket, data_type)
+        all_ready = _partitions_with_success(client, bucket, data_type, base_prefix)
         if dt_filter:
             want = f"dt={dt_filter}"
             result[data_type] = [want] if want in all_ready else []
@@ -120,12 +128,13 @@ def poll_and_download(
     data_types: list[str] | None = None,
     dt_filter: str | None = None,
     profile_name: str | None = None,
+    base_prefix: str = "raw",
 ) -> dict[str, list[Path]]:
     """
     _SUCCESS가 있는 파티션만 찾아서 해당 파티션의 데이터 파일을 out_dir에 다운로드.
 
     - bucket: S3 버킷명 (예: tasteam-dev-analytics)
-    - out_dir: 로컬 기준 디렉터리. 하위에 raw/events/dt=.../ 등으로 저장됨
+    - out_dir: 로컬 기준 디렉터리. 하위에 {base_prefix}/events/dt=.../ 등으로 저장됨
     - data_types: ['events', 'restaurants', 'menus'] 중 다운로드할 타입. None이면 전부
     - dt_filter: 지정 시 해당 dt= 하나만 (예: 2025-03-01). None이면 _SUCCESS 있는 모든 dt
     - profile_name: AWS CLI 프로필 이름 (미지정 시 AWS_PROFILE 환경변수 또는 기본 자격증명)
@@ -140,10 +149,11 @@ def poll_and_download(
 
     client = _s3_client(profile_name)
     result: dict[str, list[Path]] = {t: [] for t in types}
+    normalized_prefix = _normalize_base_prefix(base_prefix)
 
     for data_type in types:
-        prefix_base = f"raw/{data_type}/"
-        all_ready = _partitions_with_success(client, bucket, data_type)
+        prefix_base = f"{normalized_prefix}/{data_type}/"
+        all_ready = _partitions_with_success(client, bucket, data_type, normalized_prefix)
         if dt_filter:
             want = f"dt={dt_filter}"
             partitions = [want] if want in all_ready else []
@@ -152,7 +162,7 @@ def poll_and_download(
 
         for part in partitions:
             s3_prefix = prefix_base + part + "/"
-            local_part_dir = out_dir / "raw" / data_type / part
+            local_part_dir = out_dir / normalized_prefix / data_type / part
             files = _download_partition(client, bucket, s3_prefix, local_part_dir)
             result[data_type].extend(files)
 
@@ -174,6 +184,7 @@ def main() -> None:
     )
     p.add_argument("--dt", type=str, default=None, help="특정 dt만 (YYYY-MM-DD). 없으면 _SUCCESS 있는 전부")
     p.add_argument("--profile", type=str, default=None, help="AWS CLI 프로필 이름 (미지정 시 환경설정/인스턴스 프로파일 사용)")
+    p.add_argument("--base-prefix", type=str, default="raw", help="데이터 루트 prefix (기본: raw)")
     p.add_argument("--list-only", action="store_true", help="다운로드 없이 _SUCCESS 있는 파티션만 목록 출력")
     args = p.parse_args()
 
@@ -195,6 +206,7 @@ def main() -> None:
             data_types=data_types,
             dt_filter=args.dt,
             profile_name=profile,
+            base_prefix=args.base_prefix,
         )
         for t, partitions in result.items():
             print(f"{t}: {partitions}")
@@ -210,6 +222,7 @@ def main() -> None:
         data_types=data_types,
         dt_filter=args.dt,
         profile_name=profile,
+        base_prefix=args.base_prefix,
     )
     total = 0
     for t, paths in result.items():
