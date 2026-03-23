@@ -104,6 +104,7 @@ def run(
         if not raw_path.exists():
             raise FileNotFoundError(f"raw_candidates_path not found: {raw_path}")
         raw_df = read_table(raw_path)
+        print(f"[score_batch] Loaded raw candidates: {len(raw_df)} rows from {raw_path}")
         raw_rows = raw_df.to_dict("records")
         feature_rows = raw_rows_to_feature_matrix(raw_rows, run_dir)
         X = np.array(feature_rows, dtype=np.float32)
@@ -170,6 +171,7 @@ def run(
             df_out.loc[i, "rank"] = r
 
     df_out = df_out.sort_values(["_user_key", "rank"]).drop(columns=["_user_key"])
+    print(f"[score_batch] Rows before restaurant_id filtering: {len(df_out)}")
 
     # restaurant_id가 있는 행만 내보냄 (유효한 추천만)
     def _not_empty(v) -> bool:
@@ -177,13 +179,22 @@ def run(
             return False
         s = str(v).strip()
         return s != "" and s.lower() != "nan"
-    mask = df_out["restaurant_id"].apply(_not_empty)
+    rest_series = df_out["restaurant_id"]
+    print(f"[score_batch] restaurant_id sample(before filter): {rest_series.head(10).tolist()}")
+    mask = rest_series.apply(_not_empty)
+    removed_empty = int((~mask).sum())
     df_out = df_out.loc[mask].copy()
+    print(f"[score_batch] Removed empty restaurant_id rows: {removed_empty}, remaining: {len(df_out)}")
 
     # restaurant_id를 정수로 캐스팅 (숫자면 int, 아니면 행 제거)
     r = pd.to_numeric(df_out["restaurant_id"], errors="coerce")
+    non_numeric_count = int(r.isna().sum())
+    if non_numeric_count > 0:
+        bad_sample = df_out.loc[r.isna(), "restaurant_id"].head(10).tolist()
+        print(f"[score_batch] Non-numeric restaurant_id rows: {non_numeric_count}, sample: {bad_sample}")
     df_out = df_out.loc[r.notna()].copy()
     df_out["restaurant_id"] = r.loc[r.notna()].astype(np.int64)
+    print(f"[score_batch] Remaining after numeric restaurant_id cast: {len(df_out)}")
 
     # user_id를 정수로 캐스팅 (숫자면 int, 아니면 빈 문자열 유지)
     u = pd.to_numeric(df_out["user_id"], errors="coerce")
