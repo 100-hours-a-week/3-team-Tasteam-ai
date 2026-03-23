@@ -36,7 +36,20 @@ def main() -> None:
         action="store_true",
         help="wandb artifact 업로드 생략; 로컬에서 볼륨에서 다운로드하도록 eval_done.json에 download_from_volume 기록",
     )
+    parser.add_argument(
+        "--prediction-no-evidence",
+        action="store_true",
+        help="distill_summary: eval_llm_as_judge v2_no_evidence 기본과 동일 (no-evidence 프롬프트, 후처리 끔)",
+    )
+    parser.add_argument(
+        "--prediction-no-evidence-output",
+        action="store_true",
+        help="eval_distill --prediction-no-evidence-output (no_evidence_output=True)",
+    )
     args = parser.parse_args()
+
+    if args.prediction_no_evidence_output and not args.prediction_no_evidence:
+        parser.error("--prediction-no-evidence-output requires --prediction-no-evidence")
 
     cmd = [
         sys.executable,
@@ -45,6 +58,10 @@ def main() -> None:
         "--base-model", args.base_model,
         "--output-dir", str(args.output_dir),
     ]
+    if args.prediction_no_evidence:
+        cmd.append("--prediction-no-evidence")
+    if args.prediction_no_evidence_output:
+        cmd.append("--prediction-no-evidence-output")
     if args.val_labeled and args.val_labeled.exists():
         cmd.extend(["--val-labeled", str(args.val_labeled)])
     if args.test_labeled and args.test_labeled.exists():
@@ -93,6 +110,8 @@ def main() -> None:
                     "adapter_path": str(args.adapter_path),
                     "base_model": args.base_model,
                     "report_path": report_path,
+                    "prediction_no_evidence": bool(args.prediction_no_evidence),
+                    "prediction_no_evidence_output": bool(args.prediction_no_evidence_output),
                 },
             )
             artifact.add_dir(str(eval_dir), name="eval")

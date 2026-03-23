@@ -33,7 +33,7 @@ Flow (docs/easydistill/distill_by_prefect.md):
   python scripts/distill_flows.py all_sweep [--sweep-id <sweep_id>]  # sweep-id 없으면 flow 내부에서 sweep 등록 후 실행
   python scripts/distill_flows.py merge_for_serving --adapter-path .../adapter [--out-dir ...]  # 로컬 merge (파이프라인 기본)
   python scripts/distill_flows.py merge_for_serving_with_pod --adapter-path .../adapter  # 수동: Pod에서 merge (볼륨 사용)
-  python scripts/distill_flows.py evaluate_on_pod --adapter-path .../adapter --val-labeled-path .../val_labeled.json [--test-labeled-path ...]  # Pod에서 평가 후 artifact 업로드·로컬 다운로드
+  python scripts/distill_flows.py evaluate_on_pod --adapter-path .../adapter --val-labeled-path .../val_labeled.json [--test-labeled-path ...]  # Pod: eval_distill = judge v2_no_evidence 추론 기본(no-evidence 프롬프트·후처리 끔) + 로컬 judge (기존 evidence는 --legacy-evidence-eval)
   python scripts/distill_flows.py download_eval_artifact --artifact-version v1 [--out-dir ...]  # 평가 artifact를 지정 버전으로 다운로드
   python scripts/distill_flows.py download_eval_from_volume --eval-version 20260311_064121 --val-labeled-path .../val_labeled.json --adapter-path .../adapter  # 볼륨에 이미 있는 eval만 받아와 judge→kd_sft→artifact
 
@@ -116,6 +116,20 @@ except ImportError:
     object_exists = None
 
 logger = logging.getLogger(__name__)
+
+
+def _eval_llm_judge_cli_extras(
+    full_no_evidence: bool,
+    judge_prediction_no_evidence: bool = False,
+) -> list[str]:
+    """eval_llm_as_judge.py: v2_no_evidence면 기본 no postprocess + no-evidence 프롬프트(스크립트 기본값)."""
+    extras: list[str] = []
+    if full_no_evidence:
+        extras.extend(["--rubric-version", "v2_no_evidence"])
+    if judge_prediction_no_evidence:
+        extras.append("--prediction-no-evidence")
+    return extras
+
 
 # Ctrl+C/SIGTERM 시 생성된 RunPod Pod 정리 (control_c_not_shutdown_error.md)
 _CREATED_POD_IDS: list[str] = []
@@ -1389,6 +1403,8 @@ def evaluate_task(
     val_labeled_path: str | None = None,
     test_labeled_path: str | None = None,
     base_model: str = "Qwen/Qwen2.5-0.5B-Instruct",
+    full_no_evidence_eval: bool = False,
+    judge_prediction_no_evidence: bool = False,
 ) -> dict:
     """eval_distill.py subprocess: ROUGE/BERTScore on val/test labeled (OpenAI ground truth)."""
     out_dir = Path(output_dir or _PROJECT_ROOT / "distill_pipeline_output")
@@ -1417,6 +1433,10 @@ def evaluate_task(
         cmd.extend(["--val-labeled", str(val_labeled_path)])
     if test_labeled_path and Path(test_labeled_path).exists():
         cmd.extend(["--test-labeled", str(test_labeled_path)])
+    if full_no_evidence_eval:
+        cmd.append("--prediction-no-evidence")
+        if judge_prediction_no_evidence:
+            cmd.append("--prediction-no-evidence-output")
 
     result = subprocess.run(cmd, cwd=str(_PROJECT_ROOT), capture_output=True, text=True)
     if result.returncode != 0:
@@ -1450,6 +1470,7 @@ def evaluate_task(
             "--base-model", base_model,
             "--output", str(llm_judge_path),
         ]
+        cmd_judge.extend(_eval_llm_judge_cli_extras(full_no_evidence_eval, judge_prediction_no_evidence))
         rj = subprocess.run(cmd_judge, cwd=str(_PROJECT_ROOT), capture_output=True, text=True)
         if rj.returncode != 0:
             logger.warning("eval_llm_as_judge failed: %s", rj.stderr or rj.stdout)
@@ -1482,6 +1503,8 @@ def evaluate_flow(
     test_labeled_path: str | None = None,
     output_dir: str | Path | None = None,
     base_model: str = "Qwen/Qwen2.5-0.5B-Instruct",
+    full_no_evidence_eval: bool = False,
+    judge_prediction_no_evidence: bool = False,
 ) -> dict:
     """val/test 평가 (ROUGE/BERTScore) → LLM-as-a-Judge → kd_sft_analysis → eval 아티팩트 업로드."""
     return evaluate_task(
@@ -1490,6 +1513,8 @@ def evaluate_flow(
         test_labeled_path=test_labeled_path,
         output_dir=str(output_dir) if output_dir else None,
         base_model=base_model,
+        full_no_evidence_eval=full_no_evidence_eval,
+        judge_prediction_no_evidence=judge_prediction_no_evidence,
     )
 
 
@@ -1618,10 +1643,15 @@ def evaluate_on_pod_task(
     skip_artifact_upload: bool = False,
     download_only: bool = False,
     report_download_mode: str = "key_only",
+
+    full_no_evidence_eval: bool = True,
+    judge_prediction_no_evidence: bool = False,
 ) -> dict:
     """
     Pod에서 eval_distill 실행. 기본은 wandb artifact 업로드 후 로컬에서 artifact 다운로드.
     skip_artifact_upload=True 시 볼륨에서 다운로드. download_only=True면 다운로드 후 즉시 반환(judge/kd_sft/artifact 생략).
+    full_no_evidence_eval=True(기본): Pod eval_distill은 eval_llm_as_judge v2_no_evidence 추론 기본과 동일(no-evidence 프롬프트, 후처리 끔); 로컬 judge도 v2_no_evidence.
+    judge_prediction_no_evidence=True: Pod에 --prediction-no-evidence-output, 로컬 judge에 --prediction-no-evidence (출력 evidence drop, llm_as_a_judge meta prediction_no_evidence_flag: true).
     """
     if RunPodClient is None:
         raise RuntimeError("RunPodClient not available.")
@@ -1667,6 +1697,13 @@ def evaluate_on_pod_task(
         raise FileNotFoundError("eval_distill.py and run_eval_and_upload_artifact.py must exist in scripts/")
     upload_file_to_volume(eval_script, volume_id=vol_id, object_key="distill_pipeline_output/eval_scripts/eval_distill.py")
     upload_file_to_volume(wrapper_script, volume_id=vol_id, object_key="distill_pipeline_output/eval_scripts/run_eval_and_upload_artifact.py")
+    # --prediction-no-evidence 시 eval_distill이 src.distill_summary 를 import 하므로 Pod 볼륨에 src 패키지 필요
+    if full_no_evidence_eval:
+        src_dir = _PROJECT_ROOT / "src"
+        if not src_dir.is_dir():
+            raise FileNotFoundError(f"src package not found for Pod eval: {src_dir}")
+        n_src = upload_directory(client, vol_id, src_dir, "distill_pipeline_output/src")
+        logger.info("Uploaded src/ to eval volume for distill_summary (%s files)", n_src)
 
     cmd = [
         "/workspace/distill_pipeline_output/eval_scripts/run_eval_and_upload_artifact.py",
@@ -1683,6 +1720,10 @@ def evaluate_on_pod_task(
         cmd.extend(["--wandb-entity", entity])
     if skip_artifact_upload:
         cmd.append("--skip-artifact-upload")
+    if full_no_evidence_eval:
+        cmd.append("--prediction-no-evidence")
+        if judge_prediction_no_evidence:
+            cmd.append("--prediction-no-evidence-output")
 
     payload = RunPodClient.get_default_pod_payload(use="eval", docker_start_cmd=cmd)
     runpod_client = RunPodClient(token=token)
@@ -1798,6 +1839,7 @@ def evaluate_on_pod_task(
                     "--base-model", base_model,
                     "--output", str(llm_judge_path),
                 ]
+                cmd_judge.extend(_eval_llm_judge_cli_extras(full_no_evidence_eval, judge_prediction_no_evidence))
                 rj = subprocess.run(cmd_judge, cwd=str(_PROJECT_ROOT), capture_output=True, text=True)
                 if rj.returncode != 0:
                     logger.warning("eval_llm_as_judge failed: %s", rj.stderr or rj.stdout)
@@ -1875,6 +1917,9 @@ def evaluate_on_pod_flow(
     skip_artifact_upload: bool = False,
     download_only: bool = False,
     report_download_mode: str = "key_only",
+
+    full_no_evidence_eval: bool = True,
+    judge_prediction_no_evidence: bool = False,
 ) -> dict:
     """Pod에서 평가 실행. 기본은 artifact 업로드 후 로컬 다운로드. skip_artifact_upload=True면 볼륨 다운로드 후 judge·kd_sft·artifact."""
     return evaluate_on_pod_task(
@@ -1891,6 +1936,9 @@ def evaluate_on_pod_flow(
         skip_artifact_upload=skip_artifact_upload,
         download_only=download_only,
         report_download_mode=report_download_mode,
+
+        full_no_evidence_eval=full_no_evidence_eval,
+        judge_prediction_no_evidence=judge_prediction_no_evidence,
     )
 
 
@@ -1904,6 +1952,9 @@ def evaluate_on_pod_download_only_flow(
     volume_id: str | None = None,
     eval_timeout_sec: int = 14400,
     report_download_mode: str = "key_only",
+
+    full_no_evidence_eval: bool = True,
+    judge_prediction_no_evidence: bool = False,
 ) -> dict:
     """Pod에서 평가 실행 후 볼륨에서 다운로드까지만 수행(judge/kd_sft/artifact 없음)."""
     return evaluate_on_pod_task(
@@ -1917,6 +1968,9 @@ def evaluate_on_pod_download_only_flow(
         skip_artifact_upload=True,
         download_only=True,
         report_download_mode=report_download_mode,
+
+        full_no_evidence_eval=full_no_evidence_eval,
+        judge_prediction_no_evidence=judge_prediction_no_evidence,
     )
 
 
@@ -2002,6 +2056,9 @@ def download_eval_from_volume_and_finish_task(
         report_data = json.load(f)
     sample_ids = report_data.get("meta", {}).get("llm_judge_sample_ids", [])
     if sample_ids:
+        _meta = report_data.get("meta", {}) or {}
+        judge_no_ev = bool(_meta.get("prediction_no_evidence")) or _meta.get("inference_stack") == "distill_summary_no_evidence"
+        judge_pred_no_ev = bool(_meta.get("prediction_no_evidence_flag", False))
         cmd_judge = [
             sys.executable,
             str(_SCRIPT_DIR / "eval_llm_as_judge.py"),
@@ -2011,6 +2068,7 @@ def download_eval_from_volume_and_finish_task(
             "--base-model", base_model,
             "--output", str(llm_judge_path),
         ]
+        cmd_judge.extend(_eval_llm_judge_cli_extras(judge_no_ev, judge_pred_no_ev))
         rj = subprocess.run(cmd_judge, cwd=str(_PROJECT_ROOT), capture_output=True, text=True)
         if rj.returncode != 0:
             logger.warning("eval_llm_as_judge failed: %s", rj.stderr or rj.stdout)
@@ -2444,6 +2502,20 @@ def main() -> None:
         help="볼륨 report 다운로드 모드 (기본: key_only)",
     )
     parser.add_argument("--skip-artifact-upload", action="store_true", help="evaluate_on_pod: Pod에서 artifact 업로드 생략, 볼륨에서 다운로드 후 로컬에서 judge·kd_sft (기본은 artifact 업로드)")
+    parser.add_argument(
+        "--legacy-evidence-eval",
+        action="store_true",
+        help="evaluate_on_pod / evaluate_on_pod_download_only: 기존 evidence 스키마 eval_distill + v2 judge (기본 no-evidence 파이프라인 끔)",
+    )
+    parser.add_argument(
+        "--judge-prediction-no-evidence",
+        action="store_true",
+        help=(
+            "evaluate_on_pod / evaluate_on_pod_download_only / evaluate: Pod·로컬 eval_distill에 --prediction-no-evidence-output, "
+            "judge에 --prediction-no-evidence (출력 evidence drop, llm_as_a_judge_results prediction_no_evidence_flag: true). "
+            "--legacy-evidence-eval 과 함께 사용 불가."
+        ),
+    )
     parser.add_argument("--eval-timeout", type=int, default=14400, help="evaluate_on_pod: eval_done.json 대기 초 (기본 14400=4h)")
     parser.add_argument("--eval-path", type=Path, default=None, help="report.json 또는 eval/YYYYMMDD_HHMMSS 디렉터리 (upload_eval_artifact 필수)")
     parser.add_argument("--openai-cap", type=int, default=500, help="OpenAI labeling cap (for labeling_with_pod, all)")
@@ -2453,6 +2525,10 @@ def main() -> None:
     parser.add_argument("--student-model", type=str, default="Qwen/Qwen2.5-0.5B-Instruct", help="Student model")
     parser.add_argument("--num-pods", type=int, default=2, help="sweep 시 동시 Pod 개수 (sweep_pod_best_adapter, sweep_eval_merge, all_sweep; 기본 2)")
     args = parser.parse_args()
+
+    if getattr(args, "judge_prediction_no_evidence", False) and getattr(args, "legacy_evidence_eval", False):
+        if args.flow in ("evaluate_on_pod", "evaluate_on_pod_download_only", "evaluate"):
+            parser.error("--judge-prediction-no-evidence cannot be used with --legacy-evidence-eval")
 
     out_dir = Path(args.out_dir or _PROJECT_ROOT / "distill_pipeline_output")
 
@@ -2638,6 +2714,8 @@ def main() -> None:
             test_labeled_path=str(args.test_labeled_path) if args.test_labeled_path else None,
             output_dir=out_dir,
             base_model=args.student_model,
+            full_no_evidence_eval=bool(args.judge_prediction_no_evidence),
+            judge_prediction_no_evidence=args.judge_prediction_no_evidence,
         )
         print("Result:", result)
     elif args.flow == "evaluate_on_pod":
@@ -2654,6 +2732,9 @@ def main() -> None:
             eval_timeout_sec=args.eval_timeout,
             skip_artifact_upload=getattr(args, "skip_artifact_upload", False),
             report_download_mode=args.report_download_mode,
+
+            full_no_evidence_eval=not args.legacy_evidence_eval,
+            judge_prediction_no_evidence=args.judge_prediction_no_evidence,
         )
         print("Result:", result)
     elif args.flow == "evaluate_on_pod_download_only":
@@ -2669,6 +2750,9 @@ def main() -> None:
             base_model=args.student_model,
             eval_timeout_sec=args.eval_timeout,
             report_download_mode=args.report_download_mode,
+
+            full_no_evidence_eval=not args.legacy_evidence_eval,
+            judge_prediction_no_evidence=args.judge_prediction_no_evidence,
         )
         print("Result:", result)
     elif args.flow == "download_eval_artifact":

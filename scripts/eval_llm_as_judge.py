@@ -7,6 +7,7 @@ sample_ids는 --report( eval_distill report.json ) 또는 --llm-judge-samples(�
 사용:
   python scripts/eval_llm_as_judge.py --report eval/YYYYMMDD_HHMMSS/report.json \\
     --val-labeled labeled/.../val_labeled.json --adapter-path .../adapter --output .../llm_as_a_judge_results.json
+  # --rubric-version v2_no_evidence 만 주면: 기본 no postprocess + no-evidence 프롬프트 (--postprocess / --evidence-prompt 로 전환)
   python scripts/eval_llm_as_judge.py --llm-judge-samples .../llm_as_a_judge_samples.json \\
     --val-labeled ... --adapter-path ... --output .../llm_as_a_judge_results.json
 """
@@ -42,6 +43,8 @@ def _generate_one(
     max_new_tokens: int = 1024,
     no_postprocess: bool = False,
     no_evidence_output: bool = False,
+
+    no_evidence_prompt: bool = False,
 ) -> str:
     """eval_distill과 동일: system + few-shot + instruction으로 추론 후 JSON 추출·후처리. (distill_summary 공통 모듈 사용)"""
     return distill_generate_one(
@@ -49,6 +52,8 @@ def _generate_one(
         max_new_tokens=max_new_tokens,
         postprocess=not no_postprocess,
         no_evidence_output=no_evidence_output,
+
+        no_evidence_prompt=no_evidence_prompt,
     )
 
 
@@ -326,10 +331,42 @@ def main() -> None:
     parser.add_argument("--openai-api-key", type=str, default=None, help="또는 OPENAI_API_KEY 환경변수")
     parser.add_argument("--max-samples", type=int, default=0, help="평가할 최대 샘플 수 (0=전부)")
     parser.add_argument("--rubric-version", choices=["v1", "v2", "v2_no_evidence"], default="v2", help="v1: 단일 총점, v2: 6축, v2_no_evidence: 5축")
-    parser.add_argument("--no-postprocess", action="store_true", help="evidence 범위 보정 등 후처리 비적용 (비교 실험용)")
-    parser.add_argument("--prediction-no-evidence", action="store_true", help="학생 예측에서 evidence 키 제거(no-evidence 운영 트랙)")
+
+    parser.add_argument(
+        "--postprocess",
+        action="store_true",
+        help="학생 추론 후 postprocess_prediction 적용. v2_no_evidence 기본은 끔(명시 시에만 켜짐). v1/v2는 기본 켜짐.",
+    )
+    parser.add_argument("--no-postprocess", action="store_true", help="후처리 끔 (v1/v2에서 명시 시)")
+    parser.add_argument(
+        "--evidence-prompt",
+        action="store_true",
+        help="evidence 포함 스키마 프롬프트. v2_no_evidence 기본은 no-evidence 프롬프트(이 플래그로 evidence 스키마로 전환).",
+    )
+    parser.add_argument(
+        "--no-evidence-prompt",
+        action="store_true",
+        help="v1/v2에서도 no-evidence 스키마 프롬프트 사용(비교 실험용)",
+    )
+    parser.add_argument("--prediction-no-evidence", action="store_true", help="학생 예측에서 evidence 키 제거(evidence 스키마 추론일 때)")
+
     parser.add_argument("--judge-strip-evidence", action="store_true", help="judge 입력(ref/pred)에서 evidence 필드를 제거하고 평가")
     args = parser.parse_args()
+
+    if args.postprocess and args.no_postprocess:
+        raise ValueError("--postprocess와 --no-postprocess 동시 지정 불가")
+    if args.evidence_prompt and args.no_evidence_prompt:
+        raise ValueError("--evidence-prompt와 --no-evidence-prompt 동시 지정 불가")
+
+    # v2_no_evidence: 기본 no postprocess + no-evidence 프롬프트 (--postprocess / --evidence-prompt로 전환)
+    if args.rubric_version == "v2_no_evidence":
+        use_postprocess = bool(args.postprocess)
+        use_no_evidence_prompt = not bool(args.evidence_prompt)
+    else:
+        use_postprocess = not bool(args.no_postprocess)
+        if args.postprocess:
+            use_postprocess = True
+        use_no_evidence_prompt = bool(args.no_evidence_prompt)
 
     if not args.report and not args.llm_judge_samples:
         raise ValueError("--report 또는 --llm-judge-samples 중 하나 필요")
@@ -385,8 +422,11 @@ def main() -> None:
             tokenizer,
             ins,
             max_new_tokens=1024,
-            no_postprocess=args.no_postprocess,
+
+            no_postprocess=not use_postprocess,
             no_evidence_output=args.prediction_no_evidence,
+            no_evidence_prompt=use_no_evidence_prompt,
+
         )
         judge_ref = ref
         judge_pred = pred
@@ -424,6 +464,9 @@ def main() -> None:
         "judge_model": args.openai_model,
         "adapter_path": str(args.adapter_path),
         "judge_rubric_version": rubric,
+        "inference_postprocess": use_postprocess,
+        "inference_no_evidence_prompt": use_no_evidence_prompt,
+        "prediction_no_evidence_flag": bool(args.prediction_no_evidence),
     }
     if rubric == "v2":
         for ax in JUDGE_AXES:
