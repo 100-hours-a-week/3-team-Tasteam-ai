@@ -39,9 +39,17 @@ def main() -> None:
     parser.add_argument(
         "--prediction-no-evidence",
         action="store_true",
-        help="distill_summary 프롬프트·후처리 + 최종 evidence 제거 (eval_llm_as_judge와 동일 트랙)",
+        help="distill_summary: eval_llm_as_judge v2_no_evidence 기본과 동일 (no-evidence 프롬프트, 후처리 끔)",
+    )
+    parser.add_argument(
+        "--prediction-no-evidence-output",
+        action="store_true",
+        help="eval_distill --prediction-no-evidence-output (no_evidence_output=True)",
     )
     args = parser.parse_args()
+
+    if args.prediction_no_evidence_output and not args.prediction_no_evidence:
+        parser.error("--prediction-no-evidence-output requires --prediction-no-evidence")
 
     cmd = [
         sys.executable,
@@ -52,6 +60,8 @@ def main() -> None:
     ]
     if args.prediction_no_evidence:
         cmd.append("--prediction-no-evidence")
+    if args.prediction_no_evidence_output:
+        cmd.append("--prediction-no-evidence-output")
     if args.val_labeled and args.val_labeled.exists():
         cmd.extend(["--val-labeled", str(args.val_labeled)])
     if args.test_labeled and args.test_labeled.exists():
@@ -101,6 +111,7 @@ def main() -> None:
                     "base_model": args.base_model,
                     "report_path": report_path,
                     "prediction_no_evidence": bool(args.prediction_no_evidence),
+                    "prediction_no_evidence_output": bool(args.prediction_no_evidence_output),
                 },
             )
             artifact.add_dir(str(eval_dir), name="eval")

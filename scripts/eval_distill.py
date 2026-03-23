@@ -7,7 +7,8 @@ student로 instruction에 대해 추론 후 output과 비교.
 
 사용:
   python scripts/eval_distill.py --val-labeled labeled/val_labeled.json --test-labeled labeled/test_labeled.json --adapter-path runs/xxx/adapter --base-model Qwen/Qwen2.5-0.5B-Instruct --output-dir eval/
-  python scripts/eval_distill.py ... --prediction-no-evidence   # eval_llm_as_judge와 동일: distill_summary 프롬프트·후처리 후 evidence 제거
+  python scripts/eval_distill.py ... --prediction-no-evidence   # v2_no_evidence 정렬: no-evidence 프롬프트, 후처리 끔
+  python scripts/eval_distill.py ... --prediction-no-evidence --prediction-no-evidence-output  # 출력에서 evidence 필드 제거(no_evidence_output=True)
 """
 
 from __future__ import annotations
@@ -212,9 +213,24 @@ def main() -> None:
     parser.add_argument(
         "--prediction-no-evidence",
         action="store_true",
-        help="eval_llm_as_judge/API와 동일: distill_summary 프롬프트·후처리 후 evidence 필드 제거",
+        help=(
+            "distill_summary 경로 사용. eval_llm_as_judge v2_no_evidence 기본과 맞춤: "
+            "no-evidence 프롬프트, postprocess 끔 (report meta에 inference_* 기록)"
+        ),
+    )
+    parser.add_argument(
+        "--prediction-no-evidence-output",
+        action="store_true",
+        help=(
+            "distill_summary.generate_one 에 no_evidence_output=True (_drop_evidence_fields). "
+            "eval_llm_as_judge.py 의 --prediction-no-evidence 와 동일 의미. "
+            "--prediction-no-evidence 와 함께 써야 함."
+        ),
     )
     args = parser.parse_args()
+
+    if args.prediction_no_evidence_output and not args.prediction_no_evidence:
+        parser.error("--prediction-no-evidence-output requires --prediction-no-evidence")
 
     _install_lightweight_src_package()
 
@@ -255,13 +271,16 @@ def main() -> None:
             if args.prediction_no_evidence:
                 from src.distill_summary import generate_one as ds_generate_one
 
+                # v2_no_evidence 기본은 no_evidence_output 끔; --prediction-no-evidence-output 이면
+                # eval_llm_as_judge --prediction-no-evidence 와 동일(no_evidence_output=True).
                 pred = ds_generate_one(
                     model,
                     tokenizer,
                     ins,
                     max_new_tokens=1024,
-                    postprocess=True,
-                    no_evidence_output=True,
+                    postprocess=False,
+                    no_evidence_prompt=True,
+                    no_evidence_output=bool(args.prediction_no_evidence_output),
                 )
             else:
                 pred = _generate_one(model, tokenizer, ins, max_new_tokens=1024)
@@ -298,6 +317,10 @@ def main() -> None:
         "prediction_no_evidence": bool(args.prediction_no_evidence),
         "inference_stack": "distill_summary_no_evidence" if args.prediction_no_evidence else "eval_distill_legacy",
     }
+    if args.prediction_no_evidence:
+        report["meta"]["inference_postprocess"] = False
+        report["meta"]["inference_no_evidence_prompt"] = True
+        report["meta"]["prediction_no_evidence_flag"] = bool(args.prediction_no_evidence_output)
     with open(report_path, "w", encoding="utf-8") as f:
         json.dump(report, f, ensure_ascii=False, indent=2)
 
