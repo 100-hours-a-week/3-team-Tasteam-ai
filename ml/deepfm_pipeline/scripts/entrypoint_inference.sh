@@ -9,7 +9,9 @@
 #   OUT_PATH               - /data/recommendations.csv (UPLOAD_TO_S3 미설정 시 로컬 출력)
 #   CANDIDATES_CSV         - /data/raw_candidates.csv
 #   SKIP_S3_POLL=1         - 다운로드/변환 생략
-#   UPLOAD_TO_S3=1         - 추론 후 결과를 S3에 업로드 (recommendations/... + _SUCCESS). S3_ENV 필요.
+#   UPLOAD_TO_S3=1         - 추론 후 결과를 S3에 업로드 (recommendations/... + _SUCCESS).
+#   RECOMMENDATION_BUCKET  - 업로드 대상 버킷. 미지정 시 S3_BUCKET, 그 다음 S3_ENV로 계산.
+#   RECOMMENDATION_BASE_PREFIX - 업로드 key prefix (기본: recommendations)
 #   RECOMMENDATION_DT      - 선택. YYYY-MM-DD (기본: UTC 오늘)
 #   RECOMMENDATION_OUTPUT_FORMAT - csv | json.gz (기본: csv). S3 업로드 파일 형식.
 #   WANDB_API_KEY          - PIPELINE_VERSION 사용 시 아티팩트 다운로드에 필요.
@@ -63,11 +65,20 @@ if [ -z "${SKIP_S3_POLL}" ]; then
 fi
 
 if [ -n "${UPLOAD_TO_S3}" ] && [ "${UPLOAD_TO_S3}" = "1" ]; then
-  if [ -z "${S3_ENV}" ]; then
-    echo "UPLOAD_TO_S3=1 requires S3_ENV (dev|stg|prod)"
+  S3_ARGS=("${RUN_ARGS[@]}" --raw-candidates "$CANDIDATES_CSV")
+  if [ -n "${RECOMMENDATION_BUCKET}" ]; then
+    S3_ARGS+=(--bucket "$RECOMMENDATION_BUCKET")
+  elif [ -n "${S3_BUCKET}" ]; then
+    S3_ARGS+=(--bucket "$S3_BUCKET")
+  elif [ -n "${S3_ENV}" ]; then
+    S3_ARGS+=(--env "$S3_ENV")
+  else
+    echo "UPLOAD_TO_S3=1 requires one of RECOMMENDATION_BUCKET, S3_BUCKET, or S3_ENV"
     exit 1
   fi
-  S3_ARGS=("${RUN_ARGS[@]}" --raw-candidates "$CANDIDATES_CSV" --env "$S3_ENV")
+  if [ -n "${RECOMMENDATION_BASE_PREFIX}" ]; then
+    S3_ARGS+=(--recommendation-prefix "$RECOMMENDATION_BASE_PREFIX")
+  fi
   if [ -n "${AWS_PROFILE}" ]; then
     S3_ARGS+=(--profile "${AWS_PROFILE}")
   fi
