@@ -2,13 +2,16 @@
 # 추론 이미지 엔트리포인트: S3 폴링 → Raw 다운로드 → 파이프라인 CSV 변환 → 추론 → (선택) S3 업로드
 # 환경변수:
 #   S3_ENV 또는 S3_BUCKET  - S3 폴링 시 버킷 (S3_ENV=dev|stg|prod)
+#   RAW_BASE_PREFIX        - S3 raw base prefix (기본: raw)
 #   RAW_DOWNLOAD_DIR       - /data/raw_download
 #   RUN_DIR                - /model (모델 run 디렉터리, 볼륨 마운트 또는 아티팩트 다운로드 대상)
 #   PIPELINE_VERSION       - RUN_DIR에 모델이 없을 때 사용. wandb artifact에서 해당 버전 다운로드 (WANDB_API_KEY 필요)
 #   OUT_PATH               - /data/recommendations.csv (UPLOAD_TO_S3 미설정 시 로컬 출력)
 #   CANDIDATES_CSV         - /data/raw_candidates.csv
 #   SKIP_S3_POLL=1         - 다운로드/변환 생략
-#   UPLOAD_TO_S3=1         - 추론 후 결과를 S3에 업로드 (recommendations/... + _SUCCESS). S3_ENV 필요.
+#   UPLOAD_TO_S3=1         - 추론 후 결과를 S3에 업로드 (recommendations/... + _SUCCESS).
+#   RECOMMENDATION_BUCKET  - 업로드 대상 버킷. 미지정 시 S3_BUCKET, 그 다음 S3_ENV로 계산.
+#   RECOMMENDATION_BASE_PREFIX - 업로드 key prefix (기본: recommendations)
 #   RECOMMENDATION_DT      - 선택. YYYY-MM-DD (기본: UTC 오늘)
 #   RECOMMENDATION_OUTPUT_FORMAT - csv | json.gz (기본: csv). S3 업로드 파일 형식.
 #   WANDB_API_KEY          - PIPELINE_VERSION 사용 시 아티팩트 다운로드에 필요.
@@ -17,6 +20,7 @@ set -e
 cd /app
 
 RAW_DOWNLOAD_DIR="${RAW_DOWNLOAD_DIR:-/data/raw_download}"
+RAW_BASE_PREFIX="${RAW_BASE_PREFIX:-raw}"
 RUN_DIR="${RUN_DIR:-/model}"
 ARTIFACT_CACHE_DIR="${ARTIFACT_CACHE_DIR:-/model}"
 OUT_PATH="${OUT_PATH:-/data/recommendations.csv}"
@@ -46,22 +50,35 @@ if [ -z "${SKIP_S3_POLL}" ]; then
     POLL_ARGS=(--profile "${AWS_PROFILE}")
   fi
   if [ -n "${S3_BUCKET}" ]; then
-    python scripts/s3_raw_poll_download.py --bucket "$S3_BUCKET" --out-dir "$RAW_DOWNLOAD_DIR" "${POLL_ARGS[@]}"
+    python scripts/s3_raw_poll_download.py --bucket "$S3_BUCKET" --out-dir "$RAW_DOWNLOAD_DIR" --base-prefix "$RAW_BASE_PREFIX" "${POLL_ARGS[@]}"
   elif [ -n "${S3_ENV}" ]; then
-    python scripts/s3_raw_poll_download.py --env "$S3_ENV" --out-dir "$RAW_DOWNLOAD_DIR" "${POLL_ARGS[@]}"
+    python scripts/s3_raw_poll_download.py --env "$S3_ENV" --out-dir "$RAW_DOWNLOAD_DIR" --base-prefix "$RAW_BASE_PREFIX" "${POLL_ARGS[@]}"
   else
     echo "S3_BUCKET or S3_ENV not set. Set SKIP_S3_POLL=1 and pass --raw-candidates /path/to/candidates.csv"
     exit 1
   fi
-  python scripts/raw_to_pipeline_csv.py --raw-dir "$RAW_DOWNLOAD_DIR" --out "$CANDIDATES_CSV"
+  python scripts/raw_to_pipeline_csv.py --raw-dir "$RAW_DOWNLOAD_DIR" --out "$CANDIDATES_CSV" --base-prefix "$RAW_BASE_PREFIX"
+  if [ ! -s "$CANDIDATES_CSV" ]; then
+    echo "No candidate rows after raw transform. Check RAW_BASE_PREFIX=${RAW_BASE_PREFIX} and source raw schema."
+    exit 1
+  fi
 fi
 
 if [ -n "${UPLOAD_TO_S3}" ] && [ "${UPLOAD_TO_S3}" = "1" ]; then
-  if [ -z "${S3_ENV}" ]; then
-    echo "UPLOAD_TO_S3=1 requires S3_ENV (dev|stg|prod)"
+  S3_ARGS=("${RUN_ARGS[@]}" --raw-candidates "$CANDIDATES_CSV")
+  if [ -n "${RECOMMENDATION_BUCKET}" ]; then
+    S3_ARGS+=(--bucket "$RECOMMENDATION_BUCKET")
+  elif [ -n "${S3_BUCKET}" ]; then
+    S3_ARGS+=(--bucket "$S3_BUCKET")
+  elif [ -n "${S3_ENV}" ]; then
+    S3_ARGS+=(--env "$S3_ENV")
+  else
+    echo "UPLOAD_TO_S3=1 requires one of RECOMMENDATION_BUCKET, S3_BUCKET, or S3_ENV"
     exit 1
   fi
-  S3_ARGS=("${RUN_ARGS[@]}" --raw-candidates "$CANDIDATES_CSV" --env "$S3_ENV")
+  if [ -n "${RECOMMENDATION_BASE_PREFIX}" ]; then
+    S3_ARGS+=(--recommendation-prefix "$RECOMMENDATION_BASE_PREFIX")
+  fi
   if [ -n "${AWS_PROFILE}" ]; then
     S3_ARGS+=(--profile "${AWS_PROFILE}")
   fi

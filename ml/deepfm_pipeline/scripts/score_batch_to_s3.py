@@ -60,7 +60,13 @@ def main() -> None:
     p.add_argument("--candidates-path", default=None, help="후보 feature CSV 경로 (--raw-candidates 사용 시 생략)")
     p.add_argument("--raw-candidates", default=None, help="Raw 후보 CSV (raw_to_pipeline 등). run_dir vocab으로 인코딩 후 추론.")
     p.add_argument("--meta-path", default=None, help="선택. user_id/anonymous_id/restaurant_id/context_snapshot 메타 CSV 경로")
-    p.add_argument("--env", required=True, choices=["dev", "stg", "prod"], help="tasteam-{env}-analytics 버킷 선택")
+    p.add_argument("--env", default=None, choices=["dev", "stg", "prod"], help="tasteam-{env}-analytics 버킷 선택 (--bucket 미지정 시 사용)")
+    p.add_argument("--bucket", default=None, help="S3 버킷 직접 지정 (--env 대신 사용 가능)")
+    p.add_argument(
+        "--recommendation-prefix",
+        default="recommendations",
+        help="추천 결과 key prefix (예: recommendations 또는 evt.user-activity.s3-ingest.v1/recommendations)",
+    )
     p.add_argument("--dt", default=None, help="선택. YYYY-MM-DD (기본: UTC 오늘)")
     p.add_argument("--output-format", choices=["csv", "json.gz"], default="csv", help="추천 결과 파일 형식 (S3 업로드)")
     p.add_argument("--profile", type=str, default=None, help="AWS CLI 프로필 이름 (미지정 시 환경설정/인스턴스 프로파일 사용)")
@@ -104,8 +110,11 @@ def main() -> None:
 
     pv = (run_dir / "pipeline_version.txt").read_text(encoding="utf-8").strip() if (run_dir / "pipeline_version.txt").exists() else (pv_arg or "deepfm-1.0.unknown")
     dt = args.dt or datetime.now(timezone.utc).date().isoformat()
-    bucket = f"tasteam-{args.env}-analytics"
-    key_prefix = f"recommendations/pipeline_version={pv}/dt={dt}"
+    bucket = args.bucket or (f"tasteam-{args.env}-analytics" if args.env else None)
+    if not bucket:
+        p.error("One of --bucket or --env is required")
+    rec_prefix = (args.recommendation_prefix or "recommendations").strip("/")
+    key_prefix = f"{rec_prefix}/pipeline_version={pv}/dt={dt}"
     out_fmt = (args.output_format or "csv").lower()
     out_filename = "part-00001.json.gz" if out_fmt == "json.gz" else "part-00001.csv"
     out_url = f"s3://{bucket}/{key_prefix}/{out_filename}"

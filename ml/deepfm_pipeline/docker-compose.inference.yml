@@ -1,0 +1,21 @@
+services:
+  deepfm-inference:
+    build:
+      context: .
+      dockerfile: Dockerfile.inference
+    container_name: deepfm-inference
+    env_file:
+      - ../../.env
+    environment:
+      S3_BUCKET: tasteam-prod-analytics
+      RAW_BASE_PREFIX: evt.user-activity.s3-ingest.v1/raw
+      UPLOAD_TO_S3: "1"
+      RECOMMENDATION_BASE_PREFIX: evt.user-activity.s3-ingest.v1/recommendations
+      RAW_DOWNLOAD_DIR: /data/raw_download
+      CANDIDATES_CSV: /data/raw_candidates.csv
+      OUT_PATH: /data/recommendations.csv
+      RUN_DIR: /model
+      PIPELINE_VERSION: deepfm-1.0.20260310124157
+    volumes:
+      - ./local/model:/model
+      - ./local/data:/data

@@ -19,6 +19,10 @@ from typing import Any
 import pandas as pd
 
 
+def _normalize_base_prefix(base_prefix: str) -> str:
+    return base_prefix.strip("/")
+
+
 def read_table(path: Path) -> pd.DataFrame:
     """
     CSV 또는 .json.gz 파일을 DataFrame으로 로드.
@@ -64,16 +68,28 @@ def _safe_str(v: Any) -> str:
     return str(v).strip()
 
 
-def _load_partition_csvs(base_dir: Path, data_type: str) -> pd.DataFrame:
-    """raw/{data_type}/dt=*/part-*.csv 및 part-*.json.gz 를 모두 읽어 하나의 DataFrame으로."""
-    prefix = base_dir / "raw" / data_type
+def _first_present(row: pd.Series, *keys: str) -> Any:
+    """
+    row에서 첫 번째로 존재하는 키의 값을 반환.
+    snake_case / camelCase 스키마를 모두 수용하기 위한 유틸.
+    """
+    for k in keys:
+        if k in row:
+            return row.get(k)
+    return None
+
+
+def _load_partition_csvs(base_dir: Path, data_type: str, base_prefix: str = "raw") -> pd.DataFrame:
+    """{base_prefix}/{data_type}/dt=*/part-*.csv 및 part-*.json.gz 를 모두 읽어 하나의 DataFrame으로."""
+    normalized_prefix = _normalize_base_prefix(base_prefix)
+    prefix = base_dir / normalized_prefix / data_type
     if not prefix.exists():
         return pd.DataFrame()
     frames = []
     for part_dir in sorted(prefix.iterdir()):
         if not part_dir.is_dir() or not part_dir.name.startswith("dt="):
             continue
-        for pattern in ("part-*.csv", "part-*.json.gz"):
+        for pattern in ("*.csv", "*.json.gz"):
             for f in part_dir.glob(pattern):
                 try:
                     df = read_table(f)
@@ -164,17 +180,17 @@ def transform_raw_to_pipeline_rows(
 
     rows = []
     for _, ev in events_df.iterrows():
-        rid = _safe_str(ev.get("restaurant_id"))
+        rid = _safe_str(_first_present(ev, "restaurant_id", "restaurantId"))
         rest = rest_lookup.get(rid, {}) if rid else {}
         menu = menu_lookup.get(rid, {}) if rid else {}
 
-        event_name = _safe_str(ev.get("event_name")).lower()
+        event_name = _safe_str(_first_present(ev, "event_name", "eventName")).lower()
         signal_type = EVENT_NAME_TO_SIGNAL.get(event_name, event_name.upper() if event_name else "IMPRESSION")
         if signal_type not in POSITIVE_SIGNALS:
             signal_type = "IMPRESSION"
         label = 1 if signal_type in POSITIVE_SIGNALS else 0
 
-        day_of_week, time_slot = _parse_occurred_at(ev.get("occurred_at"))
+        day_of_week, time_slot = _parse_occurred_at(_first_present(ev, "occurred_at", "occurredAt"))
 
         # primary_category: food_category_name. 파이프라인은 categories JSON도 사용
         primary_category = _safe_str(rest.get("food_category_name"))
@@ -184,9 +200,9 @@ def transform_raw_to_pipeline_rows(
         avg_pt = _price_mean_to_tier(menu.get("price_mean")) or price_tier or ""
 
         row = {
-            "member_id": _safe_str(ev.get("member_id")),
-            "user_id": _safe_str(ev.get("member_id")),
-            "anonymous_id": _safe_str(ev.get("anonymous_id")),
+            "member_id": _safe_str(_first_present(ev, "member_id", "memberId")),
+            "user_id": _safe_str(_first_present(ev, "member_id", "memberId", "user_id", "userId")),
+            "anonymous_id": _safe_str(_first_present(ev, "anonymous_id", "anonymousId")),
             "restaurant_id": rid,
             "primary_category": primary_category,
             "categories": categories,
@@ -196,9 +212,9 @@ def transform_raw_to_pipeline_rows(
             "geohash": _safe_str(rest.get("geohash")),
             "price_tier": price_tier,
             "avg_price_tier": avg_pt,
-            "dining_type": _safe_str(ev.get("dining_type")),
-            "distance_bucket": _safe_str(ev.get("distance_bucket")),
-            "weather_bucket": _safe_str(ev.get("weather_bucket")),
+            "dining_type": _safe_str(_first_present(ev, "dining_type", "diningType")),
+            "distance_bucket": _safe_str(_first_present(ev, "distance_bucket", "distanceBucket")),
+            "weather_bucket": _safe_str(_first_present(ev, "weather_bucket", "weatherBucket")),
             "day_of_week": day_of_week,
             "time_slot": time_slot,
             "signal_type": signal_type,
@@ -220,19 +236,20 @@ def raw_dir_to_pipeline_csv(
     raw_download_dir: str | Path,
     output_path: str | Path,
     data_types: tuple[str, ...] = ("events", "restaurants", "menus"),
+    base_prefix: str = "raw",
 ) -> int:
     """
-    s3_raw_poll_download.py 로 받은 로컬 디렉터리(raw/events/, raw/restaurants/, raw/menus/)를
+    s3_raw_poll_download.py 로 받은 로컬 디렉터리({base_prefix}/events/, {base_prefix}/restaurants/, {base_prefix}/menus/)를
     읽어 파이프라인용 CSV 하나로 저장.
 
-    - raw_download_dir: 다운로드 기준 디렉터리 (그 하위에 raw/events/dt=.../ 등이 있음)
+    - raw_download_dir: 다운로드 기준 디렉터리 (그 하위에 {base_prefix}/events/dt=.../ 등이 있음)
     - output_path: 출력 CSV 경로 (train.csv 또는 training_dataset.csv 등)
     - 반환: 저장된 행 수
     """
     base = Path(raw_download_dir)
-    events_df = _load_partition_csvs(base, "events")
-    restaurants_df = _load_partition_csvs(base, "restaurants") if "restaurants" in data_types else pd.DataFrame()
-    menus_df = _load_partition_csvs(base, "menus") if "menus" in data_types else pd.DataFrame()
+    events_df = _load_partition_csvs(base, "events", base_prefix=base_prefix)
+    restaurants_df = _load_partition_csvs(base, "restaurants", base_prefix=base_prefix) if "restaurants" in data_types else pd.DataFrame()
+    menus_df = _load_partition_csvs(base, "menus", base_prefix=base_prefix) if "menus" in data_types else pd.DataFrame()
 
     rows = transform_raw_to_pipeline_rows(events_df, restaurants_df, menus_df)
     if not rows:
