@@ -32,6 +32,66 @@ from utils.dataPreprocess import raw_rows_to_feature_matrix
 from utils.raw_to_pipeline import read_table
 
 
+def _coalesce_meta_series(df: pd.DataFrame, keys: tuple[str, ...]) -> pd.Series:
+    """여러 컬럼 중 비어 있지 않은 첫 값을 행마다 채운다 (get 체인 폴백 버그 방지)."""
+    acc: pd.Series | None = None
+    for k in keys:
+        if k not in df.columns:
+            continue
+        s = df[k].astype("string")
+        empty = s.isna() | s.str.strip().eq("") | s.str.lower().eq("nan")
+        s = s.mask(empty, pd.NA)
+        if acc is None:
+            acc = s
+        else:
+            acc = acc.fillna(s)
+    if acc is None:
+        return pd.Series(pd.NA, index=df.index, dtype="string").fillna("")
+    return acc.fillna("")
+
+
+def _cast_user_id_for_contract(s: pd.Series) -> pd.Series:
+    """
+    계약상 user_id는 보통 정수(bigint). 숫자로 안전히 변환되면 int, 아니면 문자열 유지 후 로그.
+    """
+    out: list[object] = []
+    non_int_samples: list[str] = []
+    for v in s:
+        if v is pd.NA or (isinstance(v, (float, np.floating)) and pd.isna(v)):
+            out.append("")
+            continue
+        t = str(v).strip()
+        if t == "" or t.lower() == "nan":
+            out.append("")
+            continue
+        iv: int | None = None
+        try:
+            if "e" not in t.lower() and "." not in t:
+                iv = int(t, 10)
+        except ValueError:
+            iv = None
+        if iv is None:
+            try:
+                x = float(t)
+                if np.isfinite(x) and x == int(x):
+                    iv = int(x)
+            except (ValueError, TypeError, OverflowError):
+                iv = None
+        if iv is not None and -(2**63) <= iv < 2**63:
+            out.append(iv)
+            continue
+        out.append(t)
+        if t:
+            non_int_samples.append(t[:120])
+    if non_int_samples:
+        sample = list(dict.fromkeys(non_int_samples))[:8]
+        print(
+            f"[score_batch] user_id: {len(non_int_samples)} value(s) not stored as int64; "
+            f"kept as string. unique samples (up to 8): {sample}"
+        )
+    return pd.Series(out, index=s.index, dtype=object)
+
+
 def load_run(run_dir: Path) -> tuple[DeepFM, list[int], str]:
     """run_dir에서 model.pt, feature_sizes.txt, pipeline_version.txt 로드."""
     model_path = run_dir / "model.pt"
@@ -103,7 +163,7 @@ def run(
         raw_path = Path(raw_candidates_path)
         if not raw_path.exists():
             raise FileNotFoundError(f"raw_candidates_path not found: {raw_path}")
-        raw_df = read_table(raw_path)
+        raw_df = read_table(raw_path, normalize_column_names=True, string_id_columns=True)
         print(f"[score_batch] Loaded raw candidates: {len(raw_df)} rows from {raw_path}")
         raw_rows = raw_df.to_dict("records")
         feature_rows = raw_rows_to_feature_matrix(raw_rows, run_dir)
@@ -127,18 +187,28 @@ def run(
     exp_ts = expires_at.isoformat()
 
     if meta_from_raw:
-        user_id = raw_df.get("user_id", raw_df.get("member_id", pd.Series([""] * len(raw_df))))
-        anonymous_id = raw_df.get("anonymous_id", pd.Series([""] * len(raw_df)))
-        restaurant_id = raw_df["restaurant_id"] if "restaurant_id" in raw_df.columns else list(range(len(scores)))
-        context_snapshot = raw_df.get("context_snapshot", pd.Series(["{}"] * len(raw_df)))
+        user_id = _coalesce_meta_series(raw_df, ("user_id", "member_id"))
+        anonymous_id = _coalesce_meta_series(raw_df, ("anonymous_id", "anonymous_cohort_id"))
+        if "restaurant_id" in raw_df.columns:
+            restaurant_id = _coalesce_meta_series(raw_df, ("restaurant_id",))
+        else:
+            restaurant_id = list(range(len(scores)))
+        context_snapshot = _coalesce_meta_series(raw_df, ("context_snapshot",)).astype("string")
+        _cs_empty = context_snapshot.isna() | context_snapshot.str.strip().eq("")
+        context_snapshot = context_snapshot.mask(_cs_empty, "{}")
     elif meta_path and Path(meta_path).exists():
-        meta = read_table(Path(meta_path))
+        meta = read_table(Path(meta_path), normalize_column_names=True, string_id_columns=True)
         if len(meta) != len(scores):
             raise ValueError(f"Meta rows {len(meta)} != candidate rows {len(scores)}")
-        user_id = meta.get("user_id", meta.get("member_id", pd.Series([""] * len(meta))))
-        anonymous_id = meta.get("anonymous_id", pd.Series([""] * len(meta)))
-        restaurant_id = meta["restaurant_id"] if "restaurant_id" in meta.columns else list(range(len(scores)))
-        context_snapshot = meta.get("context_snapshot", pd.Series(["{}"] * len(meta)))
+        user_id = _coalesce_meta_series(meta, ("user_id", "member_id"))
+        anonymous_id = _coalesce_meta_series(meta, ("anonymous_id", "anonymous_cohort_id"))
+        if "restaurant_id" in meta.columns:
+            restaurant_id = _coalesce_meta_series(meta, ("restaurant_id",))
+        else:
+            restaurant_id = list(range(len(scores)))
+        context_snapshot = _coalesce_meta_series(meta, ("context_snapshot",)).astype("string")
+        _cs_empty_m = context_snapshot.isna() | context_snapshot.str.strip().eq("")
+        context_snapshot = context_snapshot.mask(_cs_empty_m, "{}")
     else:
         user_id = [""] * len(scores)
         anonymous_id = [""] * len(scores)
@@ -196,9 +266,8 @@ def run(
     df_out["restaurant_id"] = r.loc[r.notna()].astype(np.int64)
     print(f"[score_batch] Remaining after numeric restaurant_id cast: {len(df_out)}")
 
-    # user_id를 정수로 캐스팅 (숫자면 int, 아니면 빈 문자열 유지)
-    u = pd.to_numeric(df_out["user_id"], errors="coerce")
-    df_out["user_id"] = u.apply(lambda x: int(x) if pd.notna(x) else "")
+    # user_id: 정수로 안전히 변환 가능하면 int, 아니면 문자열 유지 (비정수는 로그)
+    df_out["user_id"] = _cast_user_id_for_contract(df_out["user_id"].astype("string"))
 
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
