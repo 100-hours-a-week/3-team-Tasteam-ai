@@ -1,0 +1,253 @@
+services:
+  retrieval-service:
+    profiles: ["app"]
+    build:
+      context: .
+      dockerfile: Dockerfile.retrieval-service
+    container_name: tasteam-retrieval-service
+    ports:
+      - "8010:8010"
+    env_file:
+      - .env
+    environment:
+      PORT: "8010"
+      HF_HOME: /app/models
+      EMBEDDING_CACHE_DIR: /app/models
+      QDRANT_URL: /app/qdrant_data
+      USE_RETRIEVAL_SERVICE: "false"
+    volumes:
+      - model-cache:/app/models
+      - qdrant-data:/app/qdrant_data
+    restart: unless-stopped
+    networks:
+      - tasteam-net
+
+  app:
+    profiles: ["app"]
+    build:
+      context: .
+      dockerfile: dockerfile
+    container_name: tasteam-app
+    ports:
+      - "8001:8001"
+    env_file:
+      - .env
+    environment:
+      PORT: "8001"
+      USE_RETRIEVAL_SERVICE: "true"
+      RETRIEVAL_SERVICE_URL: "http://retrieval-service:8010"
+      HF_HOME: /app/models
+      EMBEDDING_CACHE_DIR: /app/models
+      QDRANT_URL: /app/qdrant_data
+    volumes:
+      - model-cache:/app/models
+      - qdrant-data:/app/qdrant_data
+    depends_on:
+      - retrieval-service
+    restart: unless-stopped
+    networks:
+      - tasteam-net
+
+  redis:
+    profiles: ["batch"]
+    image: redis:7-alpine
+    container_name: tasteam-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+    networks:
+      - tasteam-net
+
+  spark-service:
+    profiles: ["batch"]
+    build:
+      context: .
+      dockerfile: Dockerfile.spark-service
+    container_name: tasteam-spark-service
+    ports:
+      - "8002:8002"
+    env_file:
+      - .env
+    environment:
+      SPARK_SERVICE_PORT: "8002"
+      SPARK_SERVICE_URL: ""
+    restart: unless-stopped
+    networks:
+      - tasteam-net
+
+  batch-worker:
+    profiles: ["batch"]
+    build:
+      context: .
+      dockerfile: dockerfile
+    container_name: tasteam-batch-worker
+    command: ["python", "scripts/rq_worker.py"]
+    env_file:
+      - .env
+    environment:
+      BATCH_USE_QUEUE: "true"
+      REDIS_HOST: "redis"
+      REDIS_PORT: "6379"
+      REDIS_DB: "0"
+      SPARK_SERVICE_URL: "http://spark-service:8002"
+      HF_HOME: /app/models
+      EMBEDDING_CACHE_DIR: /app/models
+      QDRANT_URL: /app/qdrant_data
+    volumes:
+      - model-cache:/app/models
+      - qdrant-data:/app/qdrant_data
+    depends_on:
+      - redis
+      - spark-service
+    restart: unless-stopped
+    networks:
+      - tasteam-net
+
+  jobmgr:
+    profiles: ["obs"]
+    build:
+      context: .
+      dockerfile: Dockerfile.metrics
+    container_name: tasteam-jobmgr
+    ports:
+      - "1041:1041"
+    restart: unless-stopped
+    networks:
+      - tasteam-net
+
+  node-exporter:
+    profiles: ["obs"]
+    image: prom/node-exporter:v1.7.0
+    container_name: tasteam-node-exporter
+    ports:
+      - "9100:9100"
+    restart: unless-stopped
+    networks:
+      - tasteam-net
+
+  alertmanager:
+    profiles: ["obs"]
+    image: prom/alertmanager:v0.26.0
+    container_name: tasteam-alertmanager
+    ports:
+      - "9093:9093"
+    volumes:
+      - ./configs/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    command:
+      - "--config.file=/etc/alertmanager/alertmanager.yml"
+    restart: unless-stopped
+    networks:
+      - tasteam-net
+
+  prometheus:
+    profiles: ["obs"]
+    image: prom/prometheus:v2.42.0
+    container_name: tasteam-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./configs/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./configs/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+    depends_on:
+      - jobmgr
+      - node-exporter
+      - alertmanager
+    restart: unless-stopped
+    networks:
+      - tasteam-net
+
+  grafana:
+    profiles: ["obs"]
+    image: grafana/grafana:9.3.6
+    container_name: tasteam-grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./configs/grafana/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./configs/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+    networks:
+      - tasteam-net
+
+  deepfm-training:
+    profiles: ["ml"]
+    build:
+      context: ./ml/deepfm_pipeline
+      dockerfile: Dockerfile.training
+    container_name: tasteam-deepfm-training
+    env_file:
+      - .env
+    environment:
+      PYTHONUNBUFFERED: "1"
+      DATA_DIR: /data
+      OUTPUT_DIR: /output
+    volumes:
+      - deepfm-data:/data
+      - deepfm-output:/output
+    command: ["--help"]
+    restart: "no"
+    networks:
+      - tasteam-net
+
+  deepfm-inference:
+    profiles: ["ml"]
+    build:
+      context: ./ml/deepfm_pipeline
+      dockerfile: Dockerfile.inference
+    container_name: tasteam-deepfm-inference
+    env_file:
+      - .env
+    environment:
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - deepfm-data:/data
+      - deepfm-output:/output
+    command: ["--help"]
+    restart: "no"
+    networks:
+      - tasteam-net
+
+  distill-orchestrator:
+    profiles: ["ml"]
+    build:
+      context: .
+      dockerfile: Dockerfile.distill-orchestrator
+    container_name: tasteam-distill-orchestrator
+    env_file:
+      - .env
+    environment:
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - distill-output:/app/distill_pipeline_output
+    command: ["--help"]
+    restart: "no"
+    networks:
+      - tasteam-net
+
+volumes:
+  model-cache:
+    name: tasteam_model-cache
+  qdrant-data:
+    name: tasteam_qdrant-data
+  redis-data:
+    name: tasteam_redis-data
+  grafana-data:
+    name: tasteam_grafana-data
+  deepfm-data:
+    name: tasteam_deepfm-data
+  deepfm-output:
+    name: tasteam_deepfm-output
+  distill-output:
+    name: tasteam_distill-output
+
+networks:
+  tasteam-net:
+    name: tasteam_tasteam-net

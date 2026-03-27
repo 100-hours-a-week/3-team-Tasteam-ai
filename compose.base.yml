@@ -1,0 +1,14 @@
+name: tasteam
+
+networks:
+  tasteam-net:
+    driver: bridge
+
+volumes:
+  model-cache: {}
+  qdrant-data: {}
+  redis-data: {}
+  grafana-data: {}
+  deepfm-data: {}
+  deepfm-output: {}
+  distill-output: {}

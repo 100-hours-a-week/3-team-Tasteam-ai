@@ -1,0 +1,64 @@
+services:
+  deepfm-training:
+    build:
+      context: ./ml/deepfm_pipeline
+      dockerfile: Dockerfile.training
+    container_name: tasteam-deepfm-training
+    env_file:
+      - .env
+    environment:
+      PYTHONUNBUFFERED: "1"
+      DATA_DIR: /data
+      OUTPUT_DIR: /output
+    volumes:
+      - deepfm-data:/data
+      - deepfm-output:/output
+    command: ["--help"]
+    restart: "no"
+    networks:
+      - tasteam-net
+
+  deepfm-inference:
+    build:
+      context: ./ml/deepfm_pipeline
+      dockerfile: Dockerfile.inference
+    container_name: tasteam-deepfm-inference
+    env_file:
+      - .env
+    environment:
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - deepfm-data:/data
+      - deepfm-output:/output
+    command: ["--help"]
+    restart: "no"
+    networks:
+      - tasteam-net
+
+  distill-orchestrator:
+    build:
+      context: .
+      dockerfile: Dockerfile.distill-orchestrator
+    container_name: tasteam-distill-orchestrator
+    env_file:
+      - .env
+    environment:
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - distill-output:/app/distill_pipeline_output
+    command: ["--help"]
+    restart: "no"
+    networks:
+      - tasteam-net
+
+volumes:
+  deepfm-data:
+    name: tasteam_deepfm-data
+  deepfm-output:
+    name: tasteam_deepfm-output
+  distill-output:
+    name: tasteam_distill-output
+
+networks:
+  tasteam-net:
+    name: tasteam_tasteam-net

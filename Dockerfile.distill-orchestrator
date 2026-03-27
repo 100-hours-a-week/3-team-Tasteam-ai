@@ -1,0 +1,33 @@
+# Distill Prefect 오케스트레이터 전용 이미지
+# - 학습/라벨링 GPU 작업은 RunPod Pod에서 수행
+# - 본 이미지는 distill_flows.py 실행/제어 용도
+#
+# 빌드:
+#   docker build -f Dockerfile.distill-orchestrator -t tasteam-distill-orchestrator:latest .
+#
+# 실행 예:
+#   docker run --rm --env-file .env \
+#     -v $(pwd)/distill_pipeline_output:/app/distill_pipeline_output \
+#     tasteam-distill-orchestrator all --out-dir distill_pipeline_output --openai-cap 500
+
+FROM python:3.11-slim-bookworm
+
+ENV PYTHONUNBUFFERED=1
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    curl \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.distill-orchestrator.txt /app/
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.distill-orchestrator.txt
+
+COPY . /app
+
+ENV PYTHONPATH=/app
+
+ENTRYPOINT ["python", "scripts/distill_flows.py"]
+CMD ["--help"]

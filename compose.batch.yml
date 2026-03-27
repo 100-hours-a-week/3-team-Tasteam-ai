@@ -1,0 +1,67 @@
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: tasteam-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+    networks:
+      - tasteam-net
+
+  spark-service:
+    build:
+      context: .
+      dockerfile: Dockerfile.spark-service
+    container_name: tasteam-spark-service
+    ports:
+      - "8002:8002"
+    env_file:
+      - .env
+    environment:
+      SPARK_SERVICE_PORT: "8002"
+      SPARK_SERVICE_URL: ""
+    restart: unless-stopped
+    networks:
+      - tasteam-net
+
+  batch-worker:
+    build:
+      context: .
+      dockerfile: dockerfile
+    container_name: tasteam-batch-worker
+    command: ["python", "scripts/rq_worker.py"]
+    env_file:
+      - .env
+    environment:
+      BATCH_USE_QUEUE: "true"
+      REDIS_HOST: "redis"
+      REDIS_PORT: "6379"
+      REDIS_DB: "0"
+      SPARK_SERVICE_URL: "http://spark-service:8002"
+      HF_HOME: /app/models
+      EMBEDDING_CACHE_DIR: /app/models
+      QDRANT_URL: /app/qdrant_data
+    volumes:
+      - model-cache:/app/models
+      - qdrant-data:/app/qdrant_data
+    depends_on:
+      - redis
+      - spark-service
+    restart: unless-stopped
+    networks:
+      - tasteam-net
+
+volumes:
+  model-cache:
+    name: tasteam_model-cache
+  qdrant-data:
+    name: tasteam_qdrant-data
+  redis-data:
+    name: tasteam_redis-data
+
+networks:
+  tasteam-net:
+    name: tasteam_tasteam-net
