@@ -23,19 +23,96 @@ def _normalize_base_prefix(base_prefix: str) -> str:
     return base_prefix.strip("/")
 
 
-def read_table(path: Path) -> pd.DataFrame:
+# Raw/메타 CSV·JSON에 camelCase가 섞일 때 snake_case로 통일 (snake가 이미 있으면 camel 열은 제거)
+_COLUMN_RENAME_CAMEL_TO_SNAKE: dict[str, str] = {
+    "memberId": "member_id",
+    "userId": "user_id",
+    "anonymousId": "anonymous_id",
+    "restaurantId": "restaurant_id",
+    "eventName": "event_name",
+    "occurredAt": "occurred_at",
+    "eventId": "event_id",
+    "sessionId": "session_id",
+    "recommendationId": "recommendation_id",
+    "distanceBucket": "distance_bucket",
+    "weatherBucket": "weather_bucket",
+    "diningType": "dining_type",
+    "createdAt": "created_at",
+    "eventVersion": "event_version",
+    "contextSnapshot": "context_snapshot",
+    "foodCategoryName": "food_category_name",
+    "foodCategoryId": "food_category_id",
+    "restaurantName": "restaurant_name",
+    "menuCount": "menu_count",
+    "priceMin": "price_min",
+    "priceMax": "price_max",
+    "priceMean": "price_mean",
+    "priceMedian": "price_median",
+    "representativeMenuName": "representative_menu_name",
+    "topMenus": "top_menus",
+    "priceTier": "price_tier",
+}
+
+_ID_STRING_COLUMNS: frozenset[str] = frozenset(
+    {
+        "user_id",
+        "member_id",
+        "anonymous_id",
+        "restaurant_id",
+        "anonymous_cohort_id",
+    }
+)
+
+
+def normalize_dataframe_column_names(df: pd.DataFrame) -> pd.DataFrame:
+    """camelCase 컬럼을 snake_case로 바꾼다. 대상 snake 컬럼이 이미 있으면 camel 쪽 열은 삭제한다."""
+    if df.empty or len(df.columns) == 0:
+        return df
+    drop_camel: list[str] = []
+    rename_map: dict[str, str] = {}
+    for old, new in _COLUMN_RENAME_CAMEL_TO_SNAKE.items():
+        if old not in df.columns:
+            continue
+        if new in df.columns:
+            drop_camel.append(old)
+        else:
+            rename_map[old] = new
+    out = df.drop(columns=drop_camel, errors="ignore")
+    if rename_map:
+        out = out.rename(columns=rename_map)
+    return out
+
+
+def _apply_id_string_dtypes(df: pd.DataFrame) -> pd.DataFrame:
+    """식별자 컬럼은 float/NaN 혼입을 줄이기 위해 pandas string dtype으로 통일."""
+    df = df.copy()
+    for c in _ID_STRING_COLUMNS:
+        if c in df.columns:
+            df[c] = df[c].astype("string")
+    return df
+
+
+def read_table(
+    path: Path,
+    *,
+    normalize_column_names: bool = False,
+    string_id_columns: bool = True,
+) -> pd.DataFrame:
     """
     CSV 또는 .json.gz 파일을 DataFrame으로 로드.
-    - .csv: pd.read_csv
+    - .csv: pd.read_csv(low_memory=False)
     - .json.gz: JSON 배열 또는 JSON Lines(NDJSON). gzip 해제 후 파싱.
+
+    normalize_column_names: True면 camelCase → snake_case 통일.
+    string_id_columns: True면 user_id/member_id/anonymous_id/restaurant_id 등을 StringDtype으로 읽음.
     """
     path = Path(path)
     if not path.exists():
         raise FileNotFoundError(path)
     suf = path.suffix.lower()
     if suf == ".csv":
-        return pd.read_csv(path)
-    if suf == ".gz" and path.name.endswith(".json.gz"):
+        df = pd.read_csv(path, low_memory=False)
+    elif suf == ".gz" and path.name.endswith(".json.gz"):
         with gzip.open(path, "rt", encoding="utf-8") as f:
             content = f.read()
         if not content.strip():
@@ -43,10 +120,20 @@ def read_table(path: Path) -> pd.DataFrame:
         stripped = content.strip()
         if stripped.startswith("["):
             data = json.loads(content)
-            return pd.DataFrame(data) if data else pd.DataFrame()
-        rows = [json.loads(line) for line in content.splitlines() if line.strip()]
-        return pd.DataFrame(rows) if rows else pd.DataFrame()
-    raise ValueError(f"Unsupported format: {path}. Use .csv or .json.gz")
+            df = pd.DataFrame(data) if data else pd.DataFrame()
+        else:
+            rows = [json.loads(line) for line in content.splitlines() if line.strip()]
+            df = pd.DataFrame(rows) if rows else pd.DataFrame()
+    else:
+        raise ValueError(f"Unsupported format: {path}. Use .csv or .json.gz")
+
+    if df.empty or len(df.columns) == 0:
+        return df
+    if normalize_column_names:
+        df = normalize_dataframe_column_names(df)
+    if string_id_columns:
+        df = _apply_id_string_dtypes(df)
+    return df
 
 # event_name → signal_type (대문자). 라벨 1: REVIEW, CALL, ROUTE, SAVE, SHARE, CLICK / 0: view, impression 등
 EVENT_NAME_TO_SIGNAL = {
@@ -92,7 +179,7 @@ def _load_partition_csvs(base_dir: Path, data_type: str, base_prefix: str = "raw
         for pattern in ("*.csv", "*.json.gz"):
             for f in part_dir.glob(pattern):
                 try:
-                    df = read_table(f)
+                    df = read_table(f, normalize_column_names=True, string_id_columns=True)
                     if not df.empty:
                         frames.append(df)
                 except Exception:
