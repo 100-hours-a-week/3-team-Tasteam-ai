@@ -1,0 +1,9 @@
+# distill_flows 오케스트레이터 전용 의존성
+# 목적: Prefect + RunPod 제어 + 평가 스크립트 실행
+
+-r requirements.txt
+
+prefect>=2.0.0
+wandb>=0.16.0
+rouge-score>=0.1.2
+bert-score>=0.3.13

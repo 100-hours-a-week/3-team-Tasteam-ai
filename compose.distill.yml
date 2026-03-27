@@ -1,0 +1,24 @@
+services:
+  distill-orchestrator:
+    build:
+      context: .
+      dockerfile: Dockerfile.distill-orchestrator
+    container_name: tasteam-distill-orchestrator
+    env_file:
+      - .env
+    environment:
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - distill-output:/app/distill_pipeline_output
+    command: ["--help"]
+    restart: "no"
+    networks:
+      - tasteam-net
+
+volumes:
+  distill-output:
+    name: tasteam_distill-output
+
+networks:
+  tasteam-net:
+    name: tasteam_tasteam-net
