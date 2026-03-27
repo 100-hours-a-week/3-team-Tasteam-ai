@@ -1,0 +1,74 @@
+services:
+  jobmgr:
+    build:
+      context: .
+      dockerfile: Dockerfile.metrics
+    container_name: tasteam-jobmgr
+    ports:
+      - "1041:1041"
+    restart: unless-stopped
+    networks:
+      - tasteam-net
+
+  node-exporter:
+    image: prom/node-exporter:v1.7.0
+    container_name: tasteam-node-exporter
+    ports:
+      - "9100:9100"
+    restart: unless-stopped
+    networks:
+      - tasteam-net
+
+  alertmanager:
+    image: prom/alertmanager:v0.26.0
+    container_name: tasteam-alertmanager
+    ports:
+      - "9093:9093"
+    volumes:
+      - ./configs/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    command:
+      - "--config.file=/etc/alertmanager/alertmanager.yml"
+    restart: unless-stopped
+    networks:
+      - tasteam-net
+
+  prometheus:
+    image: prom/prometheus:v2.42.0
+    container_name: tasteam-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./configs/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./configs/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+    depends_on:
+      - jobmgr
+      - node-exporter
+      - alertmanager
+    restart: unless-stopped
+    networks:
+      - tasteam-net
+
+  grafana:
+    image: grafana/grafana:9.3.6
+    container_name: tasteam-grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./configs/grafana/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./configs/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+    networks:
+      - tasteam-net
+
+volumes:
+  grafana-data:
+    name: tasteam_grafana-data
+
+networks:
+  tasteam-net:
+    name: tasteam_tasteam-net
