@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -104,19 +105,32 @@ TINY_FEWSHOT_ASSISTANT_NO_EVIDENCE = """
 """
 
 
-def load_model_and_tokenizer(adapter_path: str, base_model: str) -> Tuple[Any, Any]:
+def load_model_and_tokenizer(
+    adapter_path: str,
+    base_model: str,
+    *,
+    force_cpu: bool = False,
+) -> Tuple[Any, Any]:
     """모델·토크나이저 로드 (base + PEFT adapter). (model, tokenizer) 반환."""
     from transformers import AutoModelForCausalLM, AutoTokenizer
     from peft import PeftModel
 
     tokenizer = AutoTokenizer.from_pretrained(base_model, trust_remote_code=True)
-    model = AutoModelForCausalLM.from_pretrained(
-        base_model,
-        device_map="auto",
-        torch_dtype="auto",
-        trust_remote_code=True,
-    )
+    model_kwargs = {
+        "trust_remote_code": True,
+    }
+    if force_cpu:
+        import torch
+
+        model_kwargs["device_map"] = None
+        model_kwargs["torch_dtype"] = torch.float32
+    else:
+        model_kwargs["device_map"] = "auto"
+        model_kwargs["torch_dtype"] = "auto"
+    model = AutoModelForCausalLM.from_pretrained(base_model, **model_kwargs)
     model = PeftModel.from_pretrained(model, adapter_path)
+    if force_cpu:
+        model = model.to("cpu")
     model.eval()
     return model, tokenizer
 
@@ -406,6 +420,8 @@ def generate_summary_from_payload(
 # ----- 싱글톤 (API에서 USE_DISTILL_SUMMARY 시 lazy 로드) -----
 _distill_model: Optional[Any] = None
 _distill_tokenizer: Optional[Any] = None
+_distill_device: Optional[str] = None
+_distill_lock = threading.Lock()
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -464,9 +480,9 @@ def ensure_distill_adapter_local(adapter_path_str: str) -> str:
     return str(p)
 
 
-def get_distill_model():
+def get_distill_model(*, force_cpu: bool = False):
     """Config.USE_DISTILL_SUMMARY일 때만 호출. 싱글톤 (model, tokenizer) 반환."""
-    global _distill_model, _distill_tokenizer
+    global _distill_model, _distill_tokenizer, _distill_device
     from .config import Config
     if not getattr(Config, "USE_DISTILL_SUMMARY", False):
         raise RuntimeError("USE_DISTILL_SUMMARY is not enabled")
@@ -474,17 +490,73 @@ def get_distill_model():
     base_model = getattr(Config, "DISTILL_BASE_MODEL", "Qwen/Qwen2.5-0.5B-Instruct")
     if not adapter_path:
         raise ValueError("DISTILL_ADAPTER_PATH is required when USE_DISTILL_SUMMARY=true")
-    if _distill_model is None:
-        resolved = ensure_distill_adapter_local(adapter_path)
-        _distill_model, _distill_tokenizer = load_model_and_tokenizer(resolved, base_model)
-        logger.info("Distill summary model loaded: base=%s adapter=%s", base_model, resolved)
+    with _distill_lock:
+        if _distill_model is None or (force_cpu and _distill_device != "cpu"):
+            resolved = ensure_distill_adapter_local(adapter_path)
+            _distill_model, _distill_tokenizer = load_model_and_tokenizer(
+                resolved,
+                base_model,
+                force_cpu=force_cpu,
+            )
+            _distill_device = "cpu" if force_cpu else "auto"
+            logger.info(
+                "Distill summary model loaded: base=%s adapter=%s mode=%s",
+                base_model,
+                resolved,
+                _distill_device,
+            )
     return _distill_model, _distill_tokenizer
 
 
-def generate_summary_sync(payload: Dict[str, List[str]]) -> Dict[str, Any]:
+def generate_summary_from_payload_remote(
+    payload: Dict[str, List[str]],
+    base_url: str,
+    *,
+    model_name: str,
+    max_new_tokens: int = 1024,
+    timeout_seconds: int = 60,
+    no_evidence_output: bool = False,
+) -> Dict[str, Any]:
+    """OpenAI-compatible vLLM endpoint를 통해 distill summary 생성."""
+    import requests
+
+    instruction = json.dumps(payload, ensure_ascii=False)
+    messages = [
+        {"role": "system", "content": SCHEMA_ENFORCEMENT_SYSTEM_NO_EVIDENCE},
+        {"role": "user", "content": TINY_FEWSHOT_USER},
+        {"role": "assistant", "content": TINY_FEWSHOT_ASSISTANT_NO_EVIDENCE},
+        {"role": "user", "content": instruction},
+    ]
+    url = f"{base_url.rstrip('/')}/chat/completions"
+    resp = requests.post(
+        url,
+        json={
+            "model": model_name,
+            "messages": messages,
+            "temperature": 0.0,
+            "max_tokens": max_new_tokens,
+        },
+        timeout=timeout_seconds,
+    )
+    resp.raise_for_status()
+    data = resp.json() if resp.text.strip() else {}
+    content = (
+        (((data.get("choices") or [{}])[0]).get("message") or {}).get("content")
+        if isinstance(data, dict)
+        else None
+    )
+    if not isinstance(content, str) or not content.strip():
+        raise RuntimeError(f"Invalid remote response from distill pod: {data}")
+    extracted = extract_json_for_rouge(content.strip())
+    if no_evidence_output:
+        extracted = _drop_evidence_fields(extracted)
+    return json.loads(extracted)
+
+
+def generate_summary_sync(payload: Dict[str, List[str]], *, force_cpu: bool = False) -> Dict[str, Any]:
     """동기: payload → summary dict. USE_DISTILL_SUMMARY일 때만 사용."""
     from .config import Config
-    model, tokenizer = get_distill_model()
+    model, tokenizer = get_distill_model(force_cpu=force_cpu)
     return generate_summary_from_payload(
         payload,
         model,

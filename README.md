@@ -215,6 +215,12 @@ make down-dev
 # profile 기반 실행 (예: app)
 make up-app
 
+# split compose + Distill Pod route ON (Pod 우선, 실패 시 CPU fallback)
+make up-app-split-distill-pod
+
+# split compose + Distill Pod route OFF (기존 로컬 distill 경로)
+make up-app-split-distill-cpu
+
 # 전체 실행/중지
 make up-all
 make down-all
@@ -261,6 +267,22 @@ docker build -f Dockerfile.distill-orchestrator -t tasteam-distill-orchestrator:
 | LLM | `VLLM_POD_BASE_URL`, `OPENAI_MODEL` |
 | 기타 | 모델 캐시/경로 관련 변수(`HF_HOME`, `EMBEDDING_CACHE_DIR` 등) |
 
+Distill Pod Route (옵션):
+
+| 구분 | 환경 변수 | 기본값/설명 |
+|---|---|---|
+| 토글 | `DISTILL_POD_ROUTE_ENABLED` | `false` (기본 비활성) |
+| 모드 | `DISTILL_POD_AUTO_CREATE` | `false` (`true`면 Pod 자동 생성/재사용/장애 시 삭제) |
+| 고정 URL | `DISTILL_POD_BASE_URL` | 미설정 시 auto-create 사용 |
+| 모델/이미지 | `DISTILL_POD_MODEL`, `DISTILL_POD_IMAGE_NAME` | `Qwen/Qwen2.5-0.5B-Instruct`, `jinsoo1218/api-llm:latest` |
+| 볼륨 | `DISTILL_POD_NETWORK_VOLUME_ID` | `DISTILL_POD_NETWORK_VOLUME_ID` -> `RUNPOD_NETWORK_VOLUME_ID_LABELING` -> `o3a3ya7flt` |
+| 타임아웃/쿨다운 | `DISTILL_POD_CREATE_TIMEOUT_SECONDS`, `DISTILL_POD_HEALTHCHECK_TIMEOUT_SECONDS`, `DISTILL_POD_INFERENCE_TIMEOUT_SECONDS`, `DISTILL_POD_COOLDOWN_SECONDS` | `600`, `10`, `60`, `180` |
+| 고급값 | `DISTILL_POD_DELETE_ON_FAILURE`, `DISTILL_POD_PROXY_PORT`, `DISTILL_POD_NAME`, `DISTILL_POD_GPU_TYPE_ID` | 기본값 유지 권장 (`true`, `8000`, `distill-vllm-pod`, `NVIDIA GeForce RTX 4090`) |
+
+> 모드별 필수값
+> - 고정 URL 모드: `DISTILL_POD_BASE_URL` 필수 (`DISTILL_POD_AUTO_CREATE=false` 권장)
+> - Auto-create 모드: `RUNPOD_API_KEY` 필수. 이미지/볼륨은 현재 기본값이 설정되어 있으나, 운영 환경에 맞는 값으로 명시 지정 권장.
+
 > 참고: Distill 관련 플로우(`sweep_pod_best_adapter`, `evaluate_on_pod`)는 RunPod/W&B 인증 키가 없으면 실패합니다.
 
 ### 6) 실행 전 검증 체크리스트
@@ -287,10 +309,18 @@ docker compose -f compose.base.yml -f compose.stack.yml ps
 - `docker: command not found` -> Docker Desktop/Engine 설치 및 실행 확인
 - `RUNPOD_API_KEY`/`WANDB_API_KEY` 오류 -> `.env` 키 존재/유효성 확인
 - `adapter path is not a directory` -> `DISTILL_ADAPTER_PATH` 실제 경로 확인
+- `DISTILL_POD_ROUTE_ENABLED=true`인데 Pod 생성 실패 -> `RUNPOD_API_KEY`, `DISTILL_POD_IMAGE_NAME`, `DISTILL_POD_NETWORK_VOLUME_ID` 확인
+- Distill 응답 지연 증가 -> Pod 장애 후 CPU fallback 상태일 수 있음 (`DISTILL_POD_COOLDOWN_SECONDS` 확인)
 - Batch 미처리 -> `make up-batch` 후 `redis/spark-service/batch-worker` 상태 확인
 - Metrics 비노출 -> `/metrics` 및 Prometheus target 상태 확인
 
 상세 트러블슈팅: `docs/ops/troubleshooting.md`
+
+### Distill Pod Route (AWS 적용 시 변경 포인트)
+
+- `DISTILL_POD_IMAGE_NAME`: DockerHub 대신 ECR URI 사용 (예: `123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/api-llm:latest`)
+- `DISTILL_POD_BASE_URL`: AWS GPU LLM 엔드포인트(ALB/NLB) URL로 변경하고 `DISTILL_POD_AUTO_CREATE=false` 권장
+- 시크릿 주입은 `.env` 대신 AWS Secrets Manager/SSM Parameter Store 사용
 
 </details>
 
