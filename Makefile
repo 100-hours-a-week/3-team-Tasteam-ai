@@ -12,6 +12,18 @@ DISTILL_LABELED_PATH ?= distill_pipeline_output/labeled/REPLACE_ME/train_labeled
 DISTILL_ADAPTER_PATH ?= distill_pipeline_output/artifacts/REPLACE_ME/adapter
 DISTILL_VAL_PATH ?= distill_pipeline_output/labeled/REPLACE_ME/val_labeled.json
 DISTILL_TEST_PATH ?= distill_pipeline_output/labeled/REPLACE_ME/test_labeled.json
+DISTILL_POD_MODEL ?= Qwen/Qwen2.5-0.5B-Instruct
+DISTILL_POD_COOLDOWN_SECONDS ?= 180
+DISTILL_POD_CREATE_TIMEOUT_SECONDS ?= 600
+DISTILL_POD_HEALTHCHECK_TIMEOUT_SECONDS ?= 10
+DISTILL_POD_INFERENCE_TIMEOUT_SECONDS ?= 60
+DISTILL_POD_DELETE_ON_FAILURE ?= true
+DISTILL_POD_PROXY_PORT ?= 8000
+DISTILL_POD_NAME ?= distill-vllm-pod
+DISTILL_POD_IMAGE_NAME ?=
+DISTILL_POD_NETWORK_VOLUME_ID ?=
+DISTILL_POD_GPU_TYPE_ID ?= NVIDIA GeForce RTX 4090
+DISTILL_POD_BASE_URL ?=
 
 .PHONY: help \
 	up-dev down-dev logs-dev ps-dev \
@@ -21,6 +33,7 @@ DISTILL_TEST_PATH ?= distill_pipeline_output/labeled/REPLACE_ME/test_labeled.jso
 	up-ml down-ml logs-ml \
 	up-all down-all ps \
 	up-app-split up-batch-split up-obs-split up-ml-split \
+	up-app-split-distill-pod up-app-split-distill-cpu \
 	distill-sweep-best distill-eval-pod distill-two-step
 
 help:
@@ -41,6 +54,8 @@ help:
 	@echo ""
 	@echo "Split compose files:"
 	@echo "  make up-app-split   # compose.app.yml"
+	@echo "  make up-app-split-distill-pod # compose.app.yml + distill pod route on"
+	@echo "  make up-app-split-distill-cpu # compose.app.yml + distill pod route off"
 	@echo "  make up-batch-split # compose.batch.yml"
 	@echo "  make up-obs-split   # compose.obs.yml"
 	@echo "  make up-ml-split    # compose.ml.yml"
@@ -103,6 +118,29 @@ ps:
 	$(COMPOSE_STACK) ps
 
 up-app-split:
+	$(COMPOSE_BASE) -f compose.app.yml up -d --build
+
+up-app-split-distill-pod:
+	DISTILL_POD_ROUTE_ENABLED=true \
+	DISTILL_POD_AUTO_CREATE=true \
+	DISTILL_POD_MODEL='$(DISTILL_POD_MODEL)' \
+	DISTILL_POD_COOLDOWN_SECONDS='$(DISTILL_POD_COOLDOWN_SECONDS)' \
+	DISTILL_POD_CREATE_TIMEOUT_SECONDS='$(DISTILL_POD_CREATE_TIMEOUT_SECONDS)' \
+	DISTILL_POD_HEALTHCHECK_TIMEOUT_SECONDS='$(DISTILL_POD_HEALTHCHECK_TIMEOUT_SECONDS)' \
+	DISTILL_POD_INFERENCE_TIMEOUT_SECONDS='$(DISTILL_POD_INFERENCE_TIMEOUT_SECONDS)' \
+	DISTILL_POD_DELETE_ON_FAILURE='$(DISTILL_POD_DELETE_ON_FAILURE)' \
+	DISTILL_POD_PROXY_PORT='$(DISTILL_POD_PROXY_PORT)' \
+	DISTILL_POD_NAME='$(DISTILL_POD_NAME)' \
+	DISTILL_POD_IMAGE_NAME='$(DISTILL_POD_IMAGE_NAME)' \
+	DISTILL_POD_NETWORK_VOLUME_ID='$(DISTILL_POD_NETWORK_VOLUME_ID)' \
+	DISTILL_POD_GPU_TYPE_ID='$(DISTILL_POD_GPU_TYPE_ID)' \
+	DISTILL_POD_BASE_URL='$(DISTILL_POD_BASE_URL)' \
+	$(COMPOSE_BASE) -f compose.app.yml up -d --build
+
+up-app-split-distill-cpu:
+	DISTILL_POD_ROUTE_ENABLED=false \
+	DISTILL_POD_AUTO_CREATE=false \
+	DISTILL_POD_BASE_URL='' \
 	$(COMPOSE_BASE) -f compose.app.yml up -d --build
 
 up-batch-split:

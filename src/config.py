@@ -135,6 +135,25 @@ class _InferenceConfig:
     DISTILL_BASE_MODEL: str = os.getenv("DISTILL_BASE_MODEL", "Qwen/Qwen2.5-0.5B-Instruct")
     # Distill summary 출력에서 evidence 키를 제거 (평가 no-evidence 트랙 기본값과 정합)
     DISTILL_NO_EVIDENCE_OUTPUT: bool = os.getenv("DISTILL_NO_EVIDENCE_OUTPUT", "true").lower() == "true"
+    # Distill Pod route (기본 비활성): 활성 시 Distill 요청을 RunPod Pod(vLLM)로 우선 전송하고 실패 시 CPU fallback
+    DISTILL_POD_ROUTE_ENABLED: bool = os.getenv("DISTILL_POD_ROUTE_ENABLED", "false").lower() == "true"
+    DISTILL_POD_AUTO_CREATE: bool = os.getenv("DISTILL_POD_AUTO_CREATE", "false").lower() == "true"
+    DISTILL_POD_BASE_URL: Optional[str] = (os.getenv("DISTILL_POD_BASE_URL", "") or "").strip() or None
+    DISTILL_POD_MODEL: str = os.getenv("DISTILL_POD_MODEL", "Qwen/Qwen2.5-0.5B-Instruct")
+    DISTILL_POD_COOLDOWN_SECONDS: int = int(os.getenv("DISTILL_POD_COOLDOWN_SECONDS", "180"))
+    DISTILL_POD_CREATE_TIMEOUT_SECONDS: int = int(os.getenv("DISTILL_POD_CREATE_TIMEOUT_SECONDS", "600"))
+    DISTILL_POD_HEALTHCHECK_TIMEOUT_SECONDS: int = int(os.getenv("DISTILL_POD_HEALTHCHECK_TIMEOUT_SECONDS", "10"))
+    DISTILL_POD_INFERENCE_TIMEOUT_SECONDS: int = int(os.getenv("DISTILL_POD_INFERENCE_TIMEOUT_SECONDS", "60"))
+    DISTILL_POD_DELETE_ON_FAILURE: bool = os.getenv("DISTILL_POD_DELETE_ON_FAILURE", "true").lower() == "true"
+    DISTILL_POD_PROXY_PORT: int = int(os.getenv("DISTILL_POD_PROXY_PORT", "8000"))
+    DISTILL_POD_NAME: str = os.getenv("DISTILL_POD_NAME", "distill-vllm-pod")
+    DISTILL_POD_IMAGE_NAME: Optional[str] = (os.getenv("DISTILL_POD_IMAGE_NAME", "jinsoo1218/api-llm:latest") or "").strip() or None
+    DISTILL_POD_NETWORK_VOLUME_ID: Optional[str] = (
+        os.getenv("DISTILL_POD_NETWORK_VOLUME_ID")
+        or os.getenv("RUNPOD_NETWORK_VOLUME_ID_LABELING")
+        or "o3a3ya7flt"
+    )
+    DISTILL_POD_GPU_TYPE_ID: str = os.getenv("DISTILL_POD_GPU_TYPE_ID", "NVIDIA GeForce RTX 4090")
 
 
 
