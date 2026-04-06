@@ -30,6 +30,42 @@ CATEGORY_EMPTY_DEFAULT = {
 }
 
 
+def _run_distill_with_optional_pod(payload: Dict[str, List[str]]) -> Dict[str, Any]:
+    """Distill summary 실행: (옵션) Pod 경로 우선, 실패 시 로컬 CPU fallback."""
+    from .distill_summary import generate_summary_from_payload_remote, generate_summary_sync
+
+    if not getattr(Config, "DISTILL_POD_ROUTE_ENABLED", False):
+        return generate_summary_sync(payload)
+
+    from .distill_pod_manager import get_distill_pod_manager
+
+    manager = get_distill_pod_manager()
+    base_url = None
+    try:
+        manager.flush_pending_deletes_sync()
+        base_url = manager.get_ready_base_url_sync()
+    except Exception as e:
+        logger.warning("Distill Pod 준비 실패, CPU fallback 사용: %s", e)
+
+    if base_url:
+        try:
+            return generate_summary_from_payload_remote(
+                payload,
+                base_url,
+                model_name=getattr(Config, "DISTILL_POD_MODEL", Config.DISTILL_BASE_MODEL),
+                timeout_seconds=getattr(Config, "DISTILL_POD_INFERENCE_TIMEOUT_SECONDS", 60),
+                no_evidence_output=getattr(Config, "DISTILL_NO_EVIDENCE_OUTPUT", False),
+            )
+        except Exception as e:
+            logger.warning("Distill Pod 추론 실패, Pod 정리 후 CPU fallback: %s", e)
+            try:
+                manager.handle_failure_sync(str(e))
+            except Exception as cleanup_err:
+                logger.warning("Distill Pod cleanup 실패(다음 요청 재시도): %s", cleanup_err)
+
+    return generate_summary_sync(payload, force_cpu=True)
+
+
 def _clip(xs: List[str], n: int = 8) -> List[str]:
     """리스트를 최대 n개로 제한"""
     xs = [x.strip() for x in xs if x and str(x).strip()]
@@ -136,9 +172,7 @@ def summarize_aspects_new(
     # Distill summary (자체 훈련 qwen2.5-0.5b, eval과 동일 프롬프트·후처리)
     if getattr(Config, "USE_DISTILL_SUMMARY", False):
         try:
-            from .distill_summary import get_distill_model, generate_summary_from_payload
-            model, tokenizer = get_distill_model()
-            out = generate_summary_from_payload(payload, model, tokenizer)
+            out = _run_distill_with_optional_pod(payload)
         except Exception as e:
             logger.error(f"Distill summary 실패: {e}")
             return {
@@ -332,9 +366,8 @@ async def summarize_aspects_new_async(
     # Distill summary (LLM 큐 + 세마포 1로 직렬화)
     if getattr(Config, "USE_DISTILL_SUMMARY", False):
         try:
-            from .distill_summary import generate_summary_sync
             from .async_workers import run_via_queue
-            out = await run_via_queue("llm", generate_summary_sync, payload)
+            out = await run_via_queue("llm", _run_distill_with_optional_pod, payload)
         except Exception as e:
             logger.error(f"Distill summary 실패: {e}")
             return {
